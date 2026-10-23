@@ -525,6 +525,8 @@ class SeriesResult:
     # A stand-in decided while estimating (propagation: a failed timepoint returns the
     # seed it started from), with its source; used instead of the input seed.
     stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
+    # A stack's blocks at each estimated t, from its record (see ChainedEstimator).
+    blocks: dict[int, list[dict]] = field(default_factory=dict)
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -1019,7 +1021,9 @@ def build_estimator(
             for block in settings.stack_settings()
         ]
         score_fn = _score_fn(settings)
-        return ChainedEstimator(blocks, score_fn=score_fn), score_fn, _seed(settings)
+        names = [f"{k}:{m}" for k, m in enumerate(settings.method_names, start=1)]
+        chain = ChainedEstimator(blocks, score_fn=score_fn, names=names)
+        return chain, score_fn, _seed(settings)
     score_fn = _score_fn(settings)
     # the bead estimators' own choices score the raw volumes, not the prepared ones
     method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn
@@ -1158,6 +1162,8 @@ def _estimate_timepoint_job(
         "score": _finite_or_none(result.scores.get(t)),
         "error": result.errors.get(t),
         "arm": getattr(estimator, "last_winner", None),
+        # a stack: what each block did (its transform, score, error) and which won
+        "blocks": getattr(estimator, "last_stages", None),
         "metrics": _bead_metrics(settings, result, t, mov, ref),
         "report": _report_metrics(
             settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
@@ -1205,6 +1211,7 @@ def _estimate_propagated_job(
             "stand_in": stand_in[0].to_list() if stand_in else None,
             "stand_in_from": stand_in[1] if stand_in else None,
             "arm": getattr(estimator, "last_winner", None),
+            "blocks": getattr(estimator, "last_stages", None),
             "metrics": _bead_metrics(settings, result, t, mov, ref),
             "report": _report_metrics(
                 settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
@@ -1317,6 +1324,8 @@ def _load_series(
                 record.get("stand_in_from") or "seed",
             )
         result.scores[t] = float("nan") if record["score"] is None else record["score"]
+        if record.get("blocks"):
+            result.blocks[t] = record["blocks"]
         if record["error"]:
             result.errors[t] = record["error"]
     return result
@@ -1642,6 +1651,27 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
         "sweeps": {str(t): _pass_report(r) for t, r in result.sweeps.items()},
         "provenance": {str(t): source for t, source in sorted(result.provenance.items())},
         "stand_ins": {str(t): source for t, source in sorted(result.filled_from.items())},
+        **({"blocks": _blocks_summary(result.blocks)} if result.blocks else {}),
+    }
+
+
+def _blocks_summary(blocks: dict[int, list[dict]]) -> dict:
+    """Return, per block of a stack, how often it won or failed and its median score."""
+    summary = {}
+    for stages in blocks.values():
+        for stage in stages:
+            entry = summary.setdefault(stage["block"], {"won": 0, "failed": 0, "scores": []})
+            entry["won"] += bool(stage["won"])
+            entry["failed"] += stage["matrix"] is None
+            if stage["score"] is not None:
+                entry["scores"].append(stage["score"])
+    return {
+        name: {
+            "won": e["won"],
+            "failed": e["failed"],
+            "median_score": float(np.median(e["scores"])) if e["scores"] else None,
+        }
+        for name, e in summary.items()
     }
 
 

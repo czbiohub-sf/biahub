@@ -190,3 +190,80 @@ def test_a_stack_plans_for_its_heaviest_and_interactive_blocks(beads_plate, tmp_
         tmp_path / "c",
     )
     assert manual["interactive"]
+
+
+# --- what each block did ------------------------------------------------------------------
+
+
+class _Fixed:
+    """A stage that returns a fixed transform, or fails."""
+
+    def __init__(self, transform=None, error=None):
+        self.transform, self.error = transform, error
+
+    def estimate(self, mov, ref, seed=None):
+        from biahub.registration.estimators import EstimationError
+
+        if self.error:
+            raise EstimationError(self.error)
+        return self.transform
+
+
+def test_a_stack_remembers_each_blocks_transform_score_and_the_winner():
+    import numpy as np
+
+    from biahub.core.transform import Transform
+    from biahub.registration.estimators import ChainedEstimator
+
+    coarse = Transform.from_translation([0.0, 2.0, 0.0])
+    fine = Transform.from_translation([0.0, 2.5, 0.0])
+    scores = {id(coarse): 0.6, id(fine): 0.9}
+    chain = ChainedEstimator(
+        [_Fixed(coarse), _Fixed(fine), _Fixed(error="too few matches")],
+        score_fn=lambda t, m, r: scores[id(t)],
+        names=["1:pcc", "2:ants", "3:beads"],
+    )
+    vol = np.zeros((4, 8, 8), np.float32)
+    assert chain.estimate(vol, vol) is fine
+    first, second, third = chain.last_stages
+    assert [s["block"] for s in chain.last_stages] == ["1:pcc", "2:ants", "3:beads"]
+    assert first["matrix"] == coarse.to_list() and first["score"] == 0.6
+    assert (second["score"], second["won"], first["won"]) == (0.9, True, False)
+    assert third["matrix"] is None and third["error"] == "too few matches"
+
+    # a block that fails after a result keeps the result; later blocks did not run
+    chain = ChainedEstimator(
+        [_Fixed(coarse), _Fixed(error="no overlap"), _Fixed(fine)],
+        score_fn=lambda t, m, r: scores[id(t)],
+        names=["1:a", "2:b", "3:c"],
+    )
+    assert chain.estimate(vol, vol) is coarse
+    assert chain.last_stages[2]["error"] == "not run: an earlier block failed"
+
+    # the method's own internal chains (no names) record nothing
+    internal = ChainedEstimator([_Fixed(coarse)], score_fn=lambda t, m, r: 0.5)
+    internal.estimate(vol, vol)
+    assert internal.last_stages is None
+
+
+def test_every_timepoint_records_its_blocks_and_the_report_sums_them(beads_plate, tmp_path):
+    import json
+
+    from tests.test_estimate_transform import _run
+
+    config = tmp_path / "stack.yml"
+    model_to_yaml(_settings([{"phase-cross-corr": {}}, BEADS_BLOCK]), config)
+    output = tmp_path / "out" / "transforms.yml"
+    _run(beads_plate, config, output)
+
+    run = output.with_suffix("")
+    record = json.loads((run / "timepoints" / "0.json").read_text())
+    blocks = record["blocks"]
+    assert [b["block"] for b in blocks] == ["1:phase-cross-corr", "2:beads"]
+    assert all(len(b["matrix"]) == 4 for b in blocks)
+    assert sum(b["won"] for b in blocks) == 1
+
+    summary = json.loads((run / "estimate_transform_report.json").read_text())["blocks"]
+    assert set(summary) == {"1:phase-cross-corr", "2:beads"}
+    assert sum(s["won"] for s in summary.values()) == 2  # two timepoints, one winner each
+    assert all("median_score" in s and "failed" in s for s in summary.values())

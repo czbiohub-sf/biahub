@@ -63,13 +63,25 @@ class ChainedEstimator:
     poor seed, followed by the Hungarian matcher that is more precise once close. With a
     `score_fn`, the best-scoring stage output is returned (a refinement that makes things
     worse is dropped); without one, the last stage's output.
+
+    With `names` (the blocks of a stack), each estimate leaves what every stage did in
+    `last_stages`: its transform, score, error and whether it won.
     """
 
-    def __init__(self, stages: list[TransformEstimator], score_fn: ScoreFn | None = None):
+    def __init__(
+        self,
+        stages: list[TransformEstimator],
+        score_fn: ScoreFn | None = None,
+        names: list[str] | None = None,
+    ):
         if not stages:
             raise ValueError("ChainedEstimator needs at least one stage")
+        if names is not None and len(names) != len(stages):
+            raise ValueError(f"{len(names)} names for {len(stages)} stages")
         self.stages = list(stages)
         self.score_fn = score_fn
+        self.names = names
+        self.last_stages: list[dict] | None = None
 
     @property
     def uses_seed(self) -> bool:
@@ -84,22 +96,42 @@ class ChainedEstimator:
         current = seed
         best: Transform | None = None
         best_score = -np.inf
-        for stage in self.stages:
+        stages = [
+            {"block": name, "matrix": None, "score": None, "error": None, "won": False}
+            for name in (self.names or [""] * len(self.stages))
+        ]
+        winner = None
+        for k, stage in enumerate(self.stages):
             try:
                 current = stage.estimate(mov, ref, seed=current)
-            except EstimationError:
+            except EstimationError as error:
+                stages[k]["error"] = str(error)
                 if best is not None:
+                    for later in stages[k + 1 :]:
+                        later["error"] = "not run: an earlier block failed"
                     break
+                self._keep(stages, winner)
                 raise
+            stages[k]["matrix"] = current.to_list()
             if self.score_fn is None:
-                best = current
+                best, winner = current, k
                 continue
             score = self.score_fn(current, mov, ref)
-            if np.isfinite(score) and score > best_score:
-                best, best_score = current, score
+            if np.isfinite(score):
+                stages[k]["score"] = float(score)
+                if score > best_score:
+                    best, best_score, winner = current, score, k
+        self._keep(stages, winner)
         if best is None:
             raise EstimationError("no stage of the chain produced a finite score")
         return best
+
+    def _keep(self, stages: list[dict], winner: int | None) -> None:
+        if self.names is None:
+            return
+        if winner is not None:
+            stages[winner]["won"] = True
+        self.last_stages = stages
 
 
 class CompetingEstimator:
