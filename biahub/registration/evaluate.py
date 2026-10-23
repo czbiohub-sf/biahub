@@ -10,6 +10,7 @@ stores' voxel sizes (z, y, x); voxel values are reported alongside where useful.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 
 import numpy as np
 
@@ -736,3 +737,64 @@ def transform_spread(
         "n_positions": len(positions),
         "n_timepoints": len(times),
     }
+
+
+# --- survey before registering ------------------------------------------------------------
+
+
+def survey_positions(
+    position_dirpaths: list,
+    channels: list[str],
+    t: int = 0,
+    nuclei: bool = False,
+    cells: int = 4,
+) -> list[dict]:
+    """Return one row per position: whether it is usable, and how its structure lies.
+
+    `empty`: never written (no stored chunks, metadata only). From the first channel at
+    `t`: `nan_fraction`; `foreground`, the share of the max projection above Otsu; and
+    `spread`, the share of a `cells` x `cells` grid holding foreground (structure all over
+    the field constrains scale and rotation; a corner does not). `peak_z` per channel:
+    the slice of highest mean signal. `n_nuclei` when `nuclei` (detect_nuclei).
+    """
+    from iohub import open_ome_zarr
+    from skimage import filters
+
+    rows = []
+    for path in position_dirpaths:
+        row = {"position": "/".join(Path(path).parts[-3:]), "empty": False}
+        with open_ome_zarr(path, mode="r") as position:
+            if position.data.native.nchunks_initialized == 0:
+                rows.append({**row, "empty": True})
+                continue
+            index = [position.channel_names.index(c) for c in channels]
+            volumes = [np.asarray(position.data[t, i], dtype=np.float32) for i in index]
+            voxel_um = tuple(position.scale[-3:])
+        first = volumes[0]
+        row["nan_fraction"] = float(np.isnan(first).mean())
+        row["peak_z"] = {
+            c: int(np.nanargmax(np.nanmean(v, axis=(1, 2)))) if np.isfinite(v).any() else None
+            for c, v in zip(channels, volumes, strict=True)
+        }
+        mip = np.nanmax(first, axis=0) if np.isfinite(first).any() else None
+        if mip is None or np.nanstd(mip) == 0:
+            rows.append({**row, "foreground": 0.0, "spread": 0.0})
+            continue
+        mip = np.nan_to_num(mip, nan=float(np.nanmin(mip)))
+        mask = mip > filters.threshold_otsu(mip)
+        ny, nx = mask.shape
+        filled = [
+            mask[
+                i * ny // cells : (i + 1) * ny // cells,
+                j * nx // cells : (j + 1) * nx // cells,
+            ].mean()
+            > 0.05
+            for i in range(cells)
+            for j in range(cells)
+        ]
+        row["foreground"] = float(mask.mean())
+        row["spread"] = float(np.mean(filled))
+        if nuclei:
+            row["n_nuclei"] = int(len(detect_nuclei(first, voxel_um).points_vox))
+        rows.append(row)
+    return rows
