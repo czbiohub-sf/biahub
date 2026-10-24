@@ -53,7 +53,10 @@ segment = ["cellpose>=4.0.1"]
 
 # Deliberately CPU-only. ultrack has an optional GPU path when cupy and cucim
 # are installed, but it offers no speedup in tracking in our use cases.
-track = ["ultrack>=0.8"]
+# geff-spec>=1.3 records related_objects[].node_prop, which links tracks.geff to
+# the label image; geff-spec 1.1 silently drops it, and geff 1.3 itself only caps
+# geff-spec (<1.4), so the floor has to be stated here.
+track = ["ultrack>=0.8", "geff>=1.3", "geff-spec>=1.3"]
 
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
@@ -99,7 +102,7 @@ index-strategy = "unsafe-best-match"
 # (d1f9e89, which adds #479). uv refuses two git URLs for one package, so
 # force the whole graph onto biahub's rev. Drop together with the iohub pin.
 override-dependencies = [
-  "iohub @ git+https://github.com/czbiohub-sf/iohub@d1f9e89294529d365719cf87a9b29622ca77a992",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub@0cb3e35b860b6f774e7125e41d457192911a178e",
 ]
 
 [tool.uv.sources]
@@ -117,30 +120,40 @@ override-dependencies = [
 #
 # Pinned at v0.6.0: metric `granularity:` is `split_by:` and gate
 # `granularity: channel` is `per_channel: true`; the old spellings exit 2.
+# v0.6.0 includes #243 (instance_count reads a label image inside the intensity
+# store, `label:`, which counts the labels track writes into the projected plate)
+# and #235, which removed the `upstream_qc_dir` config key.
 imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", tag = "v0.6.0" }
 
-# Pin iohub to main at the czbiohub-sf/iohub#476 merge, which syncs a write
-# unit's shards before recording it as done. Without it a preemption or a
-# write-back error between the write and the marker leaves a `.done` record
-# beside a shard whose bytes never landed, and every later `--resume` skips it:
-# the resume probe reads one element per shard, so corruption away from the
-# origin reads back clean. That silently cost several pipeline runs on
-# 2026_08_14_dynatrack. Also carries czbiohub-sf/iohub#472
-# (`create_empty_plate(extra_metadata=...)`) and czbiohub-sf/iohub#479, which
-# creates a plate's positions in one batch instead of rewriting the well's
-# metadata per position (quadratic in FOVs per well: hours for a ~40k-FOV
-# plate's init). Drop this back to a PyPI floor once iohub cuts a release
-# containing all three.
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "d1f9e89294529d365719cf87a9b29622ca77a992" }
+# Pin ultrack to royerlab/ultrack main at the #289 merge. #288 gives
+# Tracker.to_geff track_id/lineage_id/seg_id node props, related_objects pointing
+# at the label image, axes with units and scale (no z in 2D),
+# include_masks/include_overlaps and zarr_format=3, so track can write
+# tracks.geff inside the OME-NGFF 0.5 plate it reads (#361); #289 stops
+# create_zarr from leaking its temporary stores. Neither is in a PyPI release
+# yet (0.8.0 predates both, and main's __version__ still reads 0.7.3, which this
+# git pin overrides).
+#
+# Pinned to the ieivanov fork at royerlab/ultrack#290 (on top of that main):
+# `to_geff(tracks_df=...)` exports the GEFF from the same tracks table the labels
+# are painted from, so tracks.geff, the labels and the CSV agree after
+# `filter_short_sibling_tracks` (track's min_sibling_length). Repoint at
+# royerlab/ultrack main once #290 merges, and at a release once one contains them.
+ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5f84ccda3bdf072f5289f939c" }
 
-# Pin ultrack to main at the royerlab/ultrack#289 merge, which stops create_zarr
-# from deleting and then leaking its temporary store (the default store behind
-# Tracker.to_zarr and array_apply). Without it every tracking job leaves orphan
-# chunk directories in the worker's $TMPDIR, which on Bruno is node-local scratch
-# that outlives the job. Not in a PyPI release yet (0.8.0 predates it, and main's
-# __version__ still reads 0.7.3, which this git pin overrides). Repoint at a
-# release once one contains it.
-ultrack = { git = "https://github.com/royerlab/ultrack", rev = "afbe2d6064aafa6dc25210353bb84239aace5102" }
+# Pin iohub to main at the czbiohub-sf/iohub#496 merge (0cb3e35): label images are
+# (T, 1, Z, Y, X), the image's axes with one channel (the DCA array standard wants
+# every array 5D), and a label with more than one channel is refused. Main also
+# carries #489 (process_single_position(output_label=...), with which `biahub
+# segment` writes its labels into the plate's label images with --resume, and
+# create_empty_labels, with which segment --init and track --init scaffold those
+# label images), #486 (create_empty_plate(label_names=...), #360), #485 (the labels
+# list on <fov>/labels/zarr.json, so ome-zarr-models and dca-validate can open a
+# field that has labels) and #488/#461/#491 (label pyramids, shard size targets,
+# resumable pyramids) for the pyramid step. Drop to a PyPI release once one
+# contains them.
+#
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "0cb3e35b860b6f774e7125e41d457192911a178e" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top

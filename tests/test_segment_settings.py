@@ -178,3 +178,25 @@ def test_a_config_needs_at_least_one_model():
 def test_eval_args_cannot_set_the_image_or_self(key):
     with pytest.raises(ValueError, match=key):
         _settings(eval_args={key: 0})
+
+
+def test_nextflow_a549_segment_config_carries_the_validated_cellpose_settings():
+    """The A549 segment config took over track.yml's validated cellpose values."""
+    import yaml
+
+    from biahub.settings import SegmentationSettings
+
+    with open("nextflow/configs/a549/segment.yml") as f:
+        settings = SegmentationSettings(**yaml.safe_load(f))
+    (name,) = settings.models
+    model = settings.models[name]
+    assert name == "nuclei"  # track.yml's `labels: nuclei`; QC counts labels/tracks_nuclei
+    assert model.pretrained_model == "cpsam_v2"
+    assert model.channels == ["nuclei_prediction"]
+    assert model.eval_args == {
+        "diameter": 80,
+        "cellprob_threshold": 0.0,
+        "flow_threshold": 0.4,
+        "min_size": 2500,
+    }
+    assert not settings.is_3d

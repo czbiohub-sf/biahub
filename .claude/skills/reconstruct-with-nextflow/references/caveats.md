@@ -143,27 +143,51 @@ model silently stalls. Top level may contain **only** `model`, `data`,
 per-position — leave it out. `target_channel` carries the `_prediction` suffix
 deliberately (§2).
 
+**`segment.yml` — schema.** `SegmentationSettings`: `models.<name>` with
+`pretrained_model`, `channels` (projected-plate channel names, at most 3) and
+`eval_args` (cellpose `CellposeModel.eval` arguments: `diameter`,
+`cellprob_threshold`, `flow_threshold`, `min_size`, ...). Segment reads the
+**projected** (Z=1) plate and writes one label image per model INTO it,
+`labels/<name>`; it does not project (a model without `eval_args.do_3D` needs a
+Z=1 input). The A549 template carries the cellpose values tracking was validated
+with (cpsam_v2, diameter 80, min_size 2500) — they used to live in `track.yml`'s
+`cellpose_config`.
+
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
-fields: `output_mode`, `target_channel`, `fov`, `input_images`,
-`segmentation_method`, `min_sibling_length`, `cellpose_config`,
-`tracking_config`. Track no longer selects or projects Z-planes: it reads the
-**projected** (Z=1) plate that `biahub project` writes from `project.yml`, and a
-3D input with `output_mode: 2D` is an error. Old configs under
+fields: `output_mode`, `fov`, `blank_frames_path`, `segmentation_method`
+(`labels`, the default, or the legacy `foreground_contour`), `labels`,
+`labels_sigma`, `output_label` (optional; another name for the tracked label
+image, which also renames the GEFF and CSV to `tracks_<output_label>.*`),
+`min_sibling_length`, `tracking_config` (plus `target_channel` and
+`input_images` on the legacy path). Track neither segments nor selects or
+projects Z-planes: it reads the label image `biahub segment` wrote into the
+**projected** plate (`labels: <segment.yml model name>`), writes the tracked
+labels beside it as `labels/tracks_<labels>` with `tracks.geff` and a tracks
+CSV, and a 3D input with `output_mode: 2D` is an error. Old configs under
 `/hpc/projects/tlg2_mantis/` still carry rejected fields — migrate:
 
 ```
 mode                                  -> output_mode
 z_slicing / z_range / focus_config    -> project.yml: channels.<name>.z {center: focus, below, above}, focus.channel
 input_images np.mean step             -> project.yml: channels.<name>.method: mean
+cellpose_config (model, diameter, thresholds, min_size, input_channel)
+                                      -> segment.yml: models.<name>
+cellpose_config.labels_sigma          -> labels_sigma
+target_channel                        -> labels: <segment.yml model name>
+output_ome_zarr_version               -> (delete: labels take the projected plate's version)
 ```
 
 (`focus_config`'s `NA_det`/`lambda_ill` are `project.yml`'s `focus.na_det` /
-`focus.lambda_ill`; the pixel size comes from the store.) `target_channel` and
-`cellpose_config.input_channel` must match channels `project.yml` writes, which
-carry the **pre-rename** names of the **assembled** plate (§2, §5).
-`qc_track.yaml`'s `channels:` must then match `<target_channel>_labels`, which
-is what the tracking store actually holds — SKILL.md §5a checks both couplings
-before launch.
+`focus.lambda_ill`; the pixel size comes from the store.) `segment.yml`'s model
+`channels` must match channels `project.yml` writes, which carry the
+**pre-rename** names of the **assembled** plate (§2, §5). `qc_project.yaml`'s
+`instance_count.label` must be `tracks_<track.yml labels>` and its anchor
+`channels:` entry the segment model's channel — SKILL.md §5a checks these
+couplings before launch.
+
+**QC configs reject `upstream_qc_dir`.** The imaging-qc pin (f5ae656) dropped
+the key; a `qc.yaml` copied from an older run that still carries
+`upstream_qc_dir: null` fails at `plan-stage`. Delete the line.
 
 **`project.yml` — every channel name must be in the assembled plate, and every
 assembled channel should be in `project.yml`.** `biahub project --init`
@@ -201,7 +225,8 @@ assembled store, and track's parameters (cellpose `diameter`, `min_area`/
 transfer. So simply do not run it:
 
 - Omit `--track_config` — delete that line, and `--project_config` and
-  `--qc_track_config` with it, from the `nextflow run` call in the run script. A step runs only if its config
+  `--qc_project_config` with it, from the `nextflow run` call in the run
+  script. A step runs only if its config
   is passed ([biahub#306](https://github.com/czbiohub-sf/biahub/issues/306),
   fixed). Delete rather than comment: `#` inside a backslash-continued command
   drops every flag below it, `-resume` included.
@@ -211,13 +236,27 @@ transfer. So simply do not run it:
 - Do not report tracking results or tune the track config for these datasets
   unless the user asks for neuromast tracking explicitly.
 - QC still runs: a neuromast run does image QC of the assembled store
-  (`--qc_config`). Only the tracking tab is absent.
+  (`--qc_config`). `zebrafish/qc.yaml` has no `instance_count` block, since
+  there are no labels to count; do not copy A549's `qc.yaml` over it — its
+  `instance_count` names a label image that only tracking creates, and
+  `plan-stage` refuses it.
 
 ## 5. Track reads the assembled plate, not the intermediates
 
-`track_wf` takes the assembled `<DATASET>.zarr` for *both* inputs. So any Z/Y/X
-crop or `time_indices` subset in `concatenate.yml` is what tracking sees, and
-tracking starts only after the whole plate assembles.
+`track_wf` takes the assembled `<DATASET>.zarr` for *both* inputs, and writes
+its output back INTO it: per position, `labels/<target_channel>` (uint32, (T, 1, Z, Y, X)
+at the image's full Z; 2D-tracking masks sit in the middle plane of the tracked
+z-window), `tracks.geff`, and `tracks_<row>_<col>_<fov>.csv`. Nothing else is
+kept: the pipeline passes no `-o`, so each worker builds its Ultrack database in
+the node's `$TMPDIR` and deletes it after export, and track has no step
+directory (pass `-o` to `biahub track` by hand to keep the databases, e.g. to
+re-solve with other weights). The full Ultrack config is recorded under
+`biahub-track.ultrack_config` on each label image. So any Z/Y/X crop or `time_indices` subset in
+`concatenate.yml` is what tracking sees, and tracking starts only after the
+whole plate assembles. `track --init` creates the empty label image in every
+position during the init phase, and with tracking on, QC is planned after that
+init and computes after tracking finishes — not concurrently with it, so QC
+now sits on the critical path behind tracking.
 
 ## 6. Assemble is a single job on one reserved node
 

@@ -1,5 +1,6 @@
 # Pixel-value QC for the assembled intensity store — the plate assemble writes,
-# holding the acquired channels plus the derived ones.
+# holding the acquired channels plus the derived ones. The cell counts of the
+# labels tracking writes live in qc_project.yaml, on the projected plate.
 #
 # SELF-CONTAINED, with no Hydra `defaults:`. It used to inherit a base.yaml, which
 # existed to be shared and was shared by this one file; and the directory layout

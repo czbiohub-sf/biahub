@@ -1,24 +1,32 @@
 # Tracking config for the mantis-v2 pipeline (`biahub track`). A549.
 #
-# Track reads the PROJECTED plate (<N>-assemble/<dataset>_proj.zarr, Z=1), so target_channel
-# and cellpose_config.input_channel must name channels that `biahub project` wrote
-# (project.yml's `channels`). If you rename channels before tracking, update these.
+# Track reads the PROJECTED plate (<N>-assemble/<dataset>_proj.zarr, Z=1) and the label
+# image `biahub segment` (segment.yml) wrote into it, `labels/<labels>`; it writes the
+# tracked labels next to it as `labels/tracks_<labels>`, plus tracks.geff and a tracks
+# CSV, into every position. Track neither segments nor projects.
 #
 # CURRENT SCHEMA. TrackingSettings forbids extra keys; the old fields `mode`,
-# `z_range`, `focus_config` and `z_slicing` are rejected. Z-plane selection and
-# projection moved to `biahub project` (project.yml): the 60-plane focus window and
-# the mean projection that used to be here live there now. Mapping from the old schema:
+# `z_range`, `focus_config`, `z_slicing` and `cellpose_config` are rejected. Mapping
+# from the old schema:
 #   mode                              -> output_mode
 #   z_slicing / z_range / focus_config -> project.yml: channels.<name>.z, focus
 #   input_images np.mean step          -> project.yml: channels.<name>.method: mean
+#   cellpose_config (model, diameter, thresholds, min_size, input_channel)
+#                                      -> segment.yml: models.<name>
+#   cellpose_config.labels_sigma       -> labels_sigma
+#   target_channel                     -> labels (the segment.yml model name); the
+#                                         output is named tracks_<labels>
 
-# 2D tracks the Z=1 projected plate and writes a Z=1 label plate. Track does not
+# 2D tracks the Z=1 projected plate and writes a Z=1 label image. Track does not
 # project; a 3D input with output_mode 2D is an error.
 output_mode: "2D"
 fov: "*/*/*"
-target_channel: nuclei_prediction
 
-segmentation_method: cellpose
+# The label image to track: segment.yml's model name. Tracks go to labels/tracks_nuclei.
+labels: nuclei
+# Smoothing (px) of the labels' contours before ultrack builds its own segmentation
+# hypotheses from them.
+labels_sigma: 5.0
 
 # Sibling filter (ultrack filter_short_sibling_tracks, same meaning): at a division
 # where exactly one daughter lives 3 frames or fewer and does not divide again, drop
@@ -29,21 +37,6 @@ segmentation_method: cellpose
 # and from 0.58 to 0.63-0.64 with this config on the annotated 2026_04_28 FOVs.
 # Remove the line to keep every division.
 min_sibling_length: 3
-cellpose_config:
-  pretrained_model: cpsam_v2
-  diameter: 80
-  cellprob_threshold: 0.0
-  flow_threshold: 0.4
-  gpu: true
-  min_size: 2500
-  input_channel: nuclei_prediction
-  labels_sigma: 5.0
-
-# The projected plate holds the nuclei already reduced to one plane; nothing to process.
-input_images:
-  - path: null
-    channels:
-      nuclei_prediction: []
 
 tracking_config:
   segmentation_config:

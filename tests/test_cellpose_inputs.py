@@ -5,8 +5,6 @@ whatever it is given, so these tests record the model and the image cellpose rec
 The test extra does not install cellpose, so a recording stand-in replaces it.
 """
 
-import warnings
-
 import numpy as np
 import pytest
 
@@ -50,29 +48,6 @@ def test_segment_passes_only_the_configured_channel(fake_cellpose):
     (seen,) = fake_cellpose.evaluated
     assert seen.shape[0] == 1
     assert np.all(seen == 30)
-
-
-def test_track_cellpose_uses_the_requested_model(fake_cellpose):
-    from biahub.track import run_cellpose_per_frame
-
-    labels = run_cellpose_per_frame(
-        np.zeros((2, 8, 8), dtype=np.float32), pretrained_model="cpdino", gpu=False
-    )
-
-    assert fake_cellpose.built == ["cpdino"]
-    assert labels.shape == (2, 8, 8)
-
-
-def test_model_type_in_a_track_config_warns():
-    from biahub.settings import CellposeConfig
-
-    with pytest.warns(UserWarning, match="model_type"):
-        config = CellposeConfig(model_type="nuclei")
-    assert config.pretrained_model == "cpsam_v2"
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        CellposeConfig()
 
 
 def test_segment_2d_passes_the_single_plane_without_a_z_axis(fake_cellpose):
@@ -137,8 +112,6 @@ def test_segment_cli_rejects_a_stack_for_a_2d_model(fake_cellpose, example_plate
             "segment",
             "-i",
             str(plate_path / "A" / "1" / "0"),
-            "-o",
-            str(tmp_path / "out.zarr"),
             "-c",
             str(config),
             "--init",
