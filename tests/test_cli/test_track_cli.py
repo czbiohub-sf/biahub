@@ -15,7 +15,7 @@ from iohub.ngff.utils import create_empty_labels
 from biahub.cli.main import cli
 from biahub.settings import TrackingSettings
 from biahub.track import _init_labels, track, write_tracking_labels
-from biahub.utils.ngff import label_chunks_and_shards
+from biahub.utils.ngff import LABEL_SHARDS, label_chunks, label_layout
 
 # The label image `biahub segment` would write (its model name) and the one track writes.
 INPUT_LABEL = "nuclei"
@@ -595,14 +595,31 @@ def test_init_labels_leaves_existing_labels(tmp_path, example_tracking_plate):
         assert np.array_equal(pos["0"][:], image)
 
 
-def test_label_chunks_and_shards():
-    # 1 MB uint32 chunks (DCA SHOULD); shards cover YX up to 16 chunks.
-    chunks, shards = label_chunks_and_shards((67, 1, 86, 1664, 1193))
-    assert chunks == (16, 1, 1, 128, 128)
-    assert shards == (1, 1, 1, 13, 10)
-    assert label_chunks_and_shards((67, 1, 86, 4096, 300))[1] == (1, 1, 1, 16, 3)
-    # Clamped to small arrays.
-    assert label_chunks_and_shards((5, 1, 1, 64, 64))[0] == (5, 1, 1, 64, 64)
+def test_label_layout(tmp_path, example_tracking_plate):
+    """1 MB uint32 chunks (DCA SHOULD) and a 200 MB shard target, as iohub's sizer takes it."""
+    assert label_chunks((67, 1, 86, 1664, 1193)) == (16, 1, 1, 128, 128)
+    assert label_chunks((5, 1, 1, 64, 64)) == (5, 1, 1, 64, 64)  # clamped to small arrays
+
+    plate_path, _ = example_tracking_plate
+    shape, layout = label_layout(plate_path / "A" / "1" / "0")
+    assert shape == (5, 2, 1, 64, 64)
+    assert layout == {
+        "label_dtype": np.uint32,
+        "label_chunks": (5, 1, 1, 64, 64),
+        "label_shards": LABEL_SHARDS,
+    }
+    # What the sizer makes of it on the A549 projected plate: the 16-timepoint chunk by
+    # the full frame, rounded up to whole 128 px chunks (136 MB); a 32-timepoint shard
+    # would exceed 200 MB.
+    from iohub.core.sharding import resolve_shards
+
+    assert resolve_shards(
+        LABEL_SHARDS,
+        shape=(67, 1, 1, 1664, 1193),
+        chunks=label_chunks((67, 1, 1, 1664, 1193)),
+        dtype=np.uint32,
+        dimension_names=["t", "c", "z", "y", "x"],
+    ) == (16, 1, 1, 1664, 1280)
 
 
 def test_write_tracking_labels_2d_fills_the_single_plane():
