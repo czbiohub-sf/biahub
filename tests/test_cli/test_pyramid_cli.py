@@ -61,7 +61,11 @@ def test_pyramid_writes_image_and_label_levels(plate):
             "1": (3, 3, 2, 8, 6),
             "2": (3, 3, 1, 4, 3),
         }
-        assert label_levels == {"0": (3, 1, 4, 16, 12), "1": (3, 1, 2, 8, 6), "2": (3, 1, 1, 4, 3)}
+        assert label_levels == {
+            "0": (3, 1, 4, 16, 12),
+            "1": (3, 1, 2, 8, 6),
+            "2": (3, 1, 1, 4, 3),
+        }
         assert record == {
             "levels": 3,
             "method": "mean",
