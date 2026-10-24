@@ -639,9 +639,18 @@ def write_tracking_labels(label_array, labels: ArrayLike, output_mode: str) -> N
 
     The label image has the image's axes with one channel and the plate's Z: one
     plane for a projected plate, where 2D tracking writes its (T, Y, X) labels; the
-    full stack for 3D tracking, whose (T, Z, Y, X) labels fill it.
+    full stack for 3D tracking, whose (T, Z, Y, X) labels fill it. The labels are
+    stored in the label image's dtype (the source label's, see ``label_layout``);
+    track ids beyond it are refused rather than wrapped.
     """
-    labels = np.asarray(labels, dtype=np.uint32)
+    labels = np.asarray(labels)
+    dtype = np.dtype(label_array.dtype)
+    if labels.size and labels.max() > np.iinfo(dtype).max:
+        raise ValueError(
+            f"Track ids reach {int(labels.max())}, more than the label image's {dtype} holds "
+            f"({np.iinfo(dtype).max}); segment with a wider label dtype."
+        )
+    labels = labels.astype(dtype, copy=False)
     if output_mode == "2D":
         # A single-plane series that kept its Z axis.
         if labels.ndim == 4 and labels.shape[1] == 1:
@@ -837,8 +846,9 @@ def _init_labels(
     The input's dimensionality must match ``settings.output_mode`` (see
     :func:`check_input_dimensionality`), and with ``settings.labels`` every position
     must already have that label image (``biahub segment --init`` creates it, so a
-    pipeline missing its segment step fails here). The tracked labels are (T, Z, Y, X)
-    with the plate's Z: one plane for a projected plate, the stack for 3D tracking.
+    pipeline missing its segment step fails here); the tracked labels then take its
+    dtype, chunks and shards. The tracked label image is (T, 1, Z, Y, X) with the
+    plate's Z: one plane for a projected plate, the stack for 3D tracking.
     Positions that already have the output label are left untouched, and the track
     settings are recorded on each label image.
 
@@ -859,7 +869,9 @@ def _init_labels(
                 "`biahub segment` on the plate first (its model name is the label name)."
             )
 
-    shape, layout = label_layout(input_position_dirpaths[0])
+    # The tracked labels take the chunks and shards of the label image they are
+    # linked from (segment's), so the two read alike; without one, the defaults.
+    shape, layout = label_layout(input_position_dirpaths[0], source_label=settings.labels)
     create_empty_labels(
         Path(input_position_dirpaths[0]).parents[2],
         [Path(p).parts[-3:] for p in input_position_dirpaths],

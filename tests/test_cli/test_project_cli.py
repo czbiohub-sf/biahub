@@ -255,7 +255,7 @@ def test_project_writes_the_configured_chunks_and_shards(plate, tmp_path):
         {"GFP": {"method": "max"}, "Phase3D": {"method": "slice", "z": {"center": 1}}},
         output_ome_zarr_version="0.5",
         chunks_czyx=[1, 1, 4, 4],
-        shards_ratio=[2, 1, 1, 2, 2],  # (2, 1, 1, 8, 8): two timepoints per shard
+        shards=[2, 1, 1, 8, 8],  # two timepoints per shard
     )
     position = plate_path / "A" / "1" / "0"
 

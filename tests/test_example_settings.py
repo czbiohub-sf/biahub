@@ -245,9 +245,9 @@ def test_nextflow_a549_project_config_validates():
         "membrane_prediction",
     ]
     assert settings.channels["Phase3D"].method == "slice"
-    # One-frame 256 x 256 chunks (the assembled/track grid), 16-timepoint full-frame shards.
+    # One-frame 256 x 256 chunks (the assembled/track grid), ~200 MB full-frame shards.
     assert settings.chunks_czyx == [1, 1, 256, 256]
-    assert settings.shards_ratio == [16, 1, 1, 7, 5]
+    assert settings.shards == "200MB"
     assert settings.channels["GFP EX488 EM525-45"].method == "max"
     assert settings.focus.channel == "Phase3D" and settings.focus.per == "timepoint"
 

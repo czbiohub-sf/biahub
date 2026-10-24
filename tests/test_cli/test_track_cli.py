@@ -622,6 +622,34 @@ def test_label_layout(tmp_path, example_tracking_plate):
     ) == (16, 1, 1, 1664, 1280)
 
 
+def test_label_layout_copies_the_source_label(tmp_path, create_custom_plate):
+    """A derived label (track's from segment's) takes the source's dtype, chunks and shards."""
+    plate_path, _ = create_custom_plate(tmp_path, position_list=(("A", "1", "0"),), z_size=1)
+    position = plate_path / "A" / "1" / "0"
+    with open_ome_zarr(str(position), mode="r+") as dataset:
+        dataset.create_label_zeros(
+            "cells",
+            shape=(3, 1, 1, 5, 6),
+            dtype=np.uint16,
+            chunks=(1, 1, 1, 5, 3),
+            shards=(3, 1, 1, 5, 6),
+        )
+    _, layout = label_layout(position, source_label="cells")
+    assert layout == {
+        "label_dtype": np.uint16,
+        "label_chunks": (1, 1, 1, 5, 3),
+        "label_shards": (3, 1, 1, 5, 6),
+    }
+
+
+def test_write_tracking_labels_keeps_the_label_dtype_and_refuses_overflow():
+    label_array = np.zeros((2, 1, 1, 4, 4), dtype=np.uint16)
+    write_tracking_labels(label_array, np.full((2, 4, 4), 65535, dtype=np.int64), "2D")
+    assert label_array.dtype == np.uint16 and label_array.max() == 65535
+    with pytest.raises(ValueError, match="more than the label image's uint16"):
+        write_tracking_labels(label_array, np.full((2, 4, 4), 65536, dtype=np.int64), "2D")
+
+
 def test_write_tracking_labels_2d_fills_the_single_plane():
     label_array = np.zeros((2, 1, 1, 4, 4), dtype=np.uint32)
 

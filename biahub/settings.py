@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import yaml
 
+from iohub.core.sharding import parse_shard_size
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -25,6 +26,44 @@ from pydantic import (
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+# Shard geometry as iohub's `shards=` takes it: a size target such as "5GB" (the largest
+# chunk-aligned shard under it, filled X, Y, Z then T; C is never grown), "XY"/"XYZ" (one
+# shard per plane / per volume), or an explicit TCZYX shape in array elements.
+ShardsSpec = str | list[int] | None
+
+
+def _validate_shards(v: ShardsSpec) -> ShardsSpec:
+    if v is None:
+        return v
+    if isinstance(v, str):
+        if v.strip().upper() in ("XY", "XYZ"):
+            return v
+        try:
+            parse_shard_size(v)
+        except ValueError as err:
+            raise ValueError(
+                f"shards: {err}. Use a size such as '5GB', 'XY' / 'XYZ', or a TCZYX shape."
+            ) from err
+        return v
+    if len(v) != 5 or any(i < 1 for i in v):
+        raise ValueError(
+            "shards must be 5 positive integers (T, C, Z, Y, X), in array elements"
+        )
+    if v[1] != 1:
+        raise ValueError("shards: iohub does not shard along C; the C entry must be 1")
+    return v
+
+
+def _reject_shards_ratio(data):
+    if isinstance(data, dict) and "shards_ratio" in data:
+        raise ValueError(
+            "shards_ratio (a multiplier over the chunk shape) was replaced by shards, which "
+            "needs no chunk arithmetic: a size such as '5GB', 'XY' / 'XYZ', or a TCZYX shape "
+            "in array elements."
+        )
+    return data
 
 
 class DetectPeaksSettings(MyBaseModel):
@@ -488,11 +527,11 @@ class ProjectionSettings(MyBaseModel):
 
     channels: dict[str, ChannelProjection] = Field(min_length=1)
     focus: ProjectionFocusSettings | None = None
-    # Output chunk shape (C, Z, Y, X) and shards ratio (T, C, Z, Y, X), as in concatenate:
-    # a shard is chunks * ratio, elementwise. None takes iohub's defaults (one-frame
-    # 256 x 256 chunks, one (t, c) frame per shard). Sharding needs OME-Zarr 0.5.
+    # Output chunk shape (C, Z, Y, X) and shard geometry (see ShardsSpec), as in
+    # concatenate. None takes iohub's defaults (one-frame 256 x 256 chunks, one (t, c)
+    # frame per shard). Sharding needs OME-Zarr 0.5.
     chunks_czyx: list[int] | None = None
-    shards_ratio: list[int] | None = None
+    shards: ShardsSpec = None
     # When None, preserve the OME-Zarr version of the input store.
     output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
 
@@ -503,16 +542,15 @@ class ProjectionSettings(MyBaseModel):
             raise ValueError("chunks_czyx must be 4 positive integers (C, Z, Y, X)")
         return v
 
-    @field_validator("shards_ratio")
+    @field_validator("shards")
     @classmethod
-    def check_shards_ratio(cls, v):
-        if v is not None and (len(v) != 5 or any(i < 1 for i in v)):
-            raise ValueError("shards_ratio must be 5 positive integers (T, C, Z, Y, X)")
-        if v is not None and v[1] != 1:
-            raise ValueError(
-                "shards_ratio: iohub does not shard along C; the C entry must be 1"
-            )
-        return v
+    def check_shards(cls, v):
+        return _validate_shards(v)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_shards_ratio(cls, data):
+        return _reject_shards_ratio(data)
 
     @model_validator(mode="after")
     def check_focus(self):
@@ -532,6 +570,27 @@ class ProjectionSettings(MyBaseModel):
     @property
     def uses_focus(self) -> bool:
         return any(c.uses_focus for c in self.channels.values())
+
+
+PYRAMID_METHODS = ("mean", "median", "mode", "min", "max", "stride")
+# Methods that only ever pick a value present in the window, so no level of a
+# label pyramid holds an id that level 0 does not (DCA v0.2: "maximum filter or
+# decimation filter for label arrays").
+LABEL_PYRAMID_METHODS = ("max", "stride", "mode")
+
+
+class PyramidSettings(MyBaseModel):
+    """`biahub pyramid`: the pyramid every image and label image of a position gets.
+
+    ``levels`` counts level 0, so ``3`` adds two downsampled levels, each 2x coarser
+    than the previous along the spatial axes longer than one voxel (Z is left alone
+    on a Z=1 plate). ``method`` pools the images and ``label_method`` the label
+    images under ``labels/``.
+    """
+
+    levels: Annotated[int, Field(ge=2)] = 3
+    method: Literal[PYRAMID_METHODS] = "mean"
+    label_method: Literal[LABEL_PYRAMID_METHODS] = "max"
 
 
 class AffineTransformSettings(MyBaseModel):
@@ -725,7 +784,9 @@ class ConcatenateSettings(MyBaseModel):
     Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     chunks_czyx: Literal[None] | list[int] = None
-    shards_ratio: list[int] | None = None
+    # Shard geometry of the output (see ShardsSpec); None takes iohub's default, one
+    # shard per (t, c) volume on OME-Zarr 0.5.
+    shards: ShardsSpec = None
     ensure_unique_positions: bool | None = False
     # Concatenate is the migration path into v0.5 stores, so it defaults to
     # "0.5". Set to None to preserve the input store's OME-Zarr version, or
@@ -848,6 +909,16 @@ class ConcatenateSettings(MyBaseModel):
         ):
             raise ValueError("chunks_czyx must be a list of 4 integers (C, Z, Y, X)")
         return v
+
+    @field_validator("shards")
+    @classmethod
+    def check_shards(cls, v):
+        return _validate_shards(v)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_shards_ratio(cls, data):
+        return _reject_shards_ratio(data)
 
     @model_validator(mode="after")
     def validate_slice_lengths(self):

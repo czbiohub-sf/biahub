@@ -99,7 +99,7 @@ Some steps include an `estimate-*` command that writes a YAML of parameters you 
 | | |
 | `flat-field` | Apply flat-field correction to selected channels |
 | `flip` | Flip images in a dataset |
-| `pyramid` | Create multiscale pyramid levels |
+| `pyramid` | Compute multiscale pyramids of images and label images, in place |
 | `process-with-config` | Apply arbitrary YAML-defined functions to a dataset |
 | | |
 | `estimate-deskew` | Estimate deskewing parameters |

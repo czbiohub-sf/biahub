@@ -204,6 +204,11 @@ unset CLAUDECODE
 # --qc_track_config was removed: qc_project.yaml counts the labels tracking writes
 # into the projected plate, so passing the old flag errors at launch.
 #
+# Pyramids are not a flag here: the assembled and projected plates get 3
+# resolution levels (images mean-pooled, labels max-pooled; DCA v0.2, biahub#359)
+# after tracking by default, and QC runs last, after them. Add
+# `--pyramid_levels 1` to skip them.
+#
 # TO SKIP A STEP, DELETE ITS LINE. Do not comment it out: `#` inside a
 # backslash-continued command does not start a comment line — the continuation
 # swallows it, every flag below it is dropped including `-resume`, and bash then

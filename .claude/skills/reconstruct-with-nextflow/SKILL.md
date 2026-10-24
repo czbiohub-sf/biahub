@@ -3,10 +3,10 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → project → segment → track → QC) on the Bruno HPC
-  cluster. Assemble, project, segment, track and QC are optional and selected per
+  virtual-stain → assemble → project → segment → track → pyramid → QC) on the Bruno
+  HPC cluster. Assemble, project, segment, track and QC are optional and selected per
   dataset family: A549 runs all of them, neuromast runs assemble + QC and no
-  segmentation or tracking. Locates the raw
+  segmentation or tracking; pyramids are on whenever assemble runs. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
   foreground so it can be watched, monitors it unattended every 30 minutes
@@ -358,8 +358,14 @@ Do not run anything yet. Show the user:
 
    | family | steps |
    |---|---|
-   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → segment → track → QC** |
-   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no projection, segmentation or tracking) |
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → segment → track → pyramid → QC** |
+   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → pyramid → QC** (no projection, segmentation or tracking) |
+
+   Pyramid is on by default whenever assemble runs: it adds two coarser levels
+   (3 in total, DCA v0.2) to every image and label image of the assembled and
+   projected plates, in place, once segmentation and tracking have finished
+   writing into them. QC is the very last step and waits for the pyramids.
+   `--pyramid_levels 1` skips them.
 
    Write the list out in the plan rather than naming the family, and say which
    optional steps are being skipped and why. If the user asks to skip anything

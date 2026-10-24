@@ -265,22 +265,22 @@ Assemble is one large SLURM job — the single longest step.
 `biahub concatenate --resume` (passed by the Nextflow task) makes a late kill
 recoverable per (t, c) unit.
 
-## 7. Shard geometry and `shards_ratio`
+## 7. Shard geometry and `shards`
 
-`shards_ratio` is a ratio over the **chunk** shape
-(`shards = chunks * shards_ratio`, elementwise TCZYX), not an absolute shard
-shape — changing T without recomputing ZYX silently changes the spatial extent.
-Larger T shards mean a larger RAM request and a worse blast radius when one
-tears; leave the T ratio alone without a measured reason. Channels cannot be
-sharded — keep C at 1. The same two keys exist in `project.yml`: the A549
-template uses one-frame `256 x 256` chunks (the assembled and tracking grid)
-and `shards_ratio: [16, 1, 1, 7, 5]`, 16-timepoint full-frame shards; its YX
-entries are `ceil(Y/256), ceil(X/256)` and must be recomputed for a different
-frame size, exactly as for `concatenate.yml`. Auto-sizing is
-[iohub#458](https://github.com/czbiohub-sf/iohub/issues/458); most of this
-section goes away when it lands.
+`shards` in `concatenate.yml` and `project.yml` is a **size target**
+(`shards: 5GB`, `shards: 200MB`): iohub builds the largest chunk-aligned shard
+under it, filling X, Y and Z first and then timepoints, and never spans
+channels ([iohub#461](https://github.com/czbiohub-sf/iohub/pull/461)). Nothing
+is recomputed per dataset: the same `5GB` gives 5 timepoints by the full volume
+on the A549 plate and 9 on the dynatrack one. `"XY"` / `"XYZ"` (one shard per
+plane / volume) and an explicit TCZYX shape in array elements are also accepted.
+The old `shards_ratio` (a multiplier over the chunk shape) is refused with a
+message naming the new key. A larger target means more timepoints per shard,
+hence a larger RAM request (concatenate reads the T extent back from the plate it
+initialised to size its workers) and a worse blast radius when one tears; leave
+the templates' values alone without a measured reason.
 
-**A T ratio above 1 needs [iohub#460](https://github.com/czbiohub-sf/iohub/pull/460),
+**Shards spanning several timepoints need [iohub#460](https://github.com/czbiohub-sf/iohub/pull/460),
 which shipped in iohub 0.3.11** — the floor `pyproject.toml` already requires, so a
 synced checkout has it.
 
@@ -288,7 +288,7 @@ Before that fix, `concatenate` aborted with a message that points nowhere near t
 cause — `numpy ... Unable to allocate 651. TiB for an array with shape
 (1048576, 86, 1664, 1193)`, whose first axis is not T, not a shard, not
 anything. It is **not** evidence that the shard buffer is too large, and
-unsetting `shards_ratio` "fixes" it for the wrong reason. What happens: a
+unsetting `shards` "fixes" it for the wrong reason. What happens: a
 shard-aligned batch writes a whole shard's worth of timepoints in one call,
 iohub drops the blank ones (`Skipping t=1, c=0 due to all zeros or nans` in the
 step's `.command.out`), and the surviving indices are left with a *gap* — which
@@ -440,3 +440,17 @@ Consequences worth knowing:
   differ" means nothing here; `corr` and max abs diff are the measures that do. A
   real virtual-stain regression moves the distribution, not the last bit. Deskew,
   reconstruct and assemble are fully deterministic.
+
+## 15. Pyramids follow tracking and precede QC, and are not a resume unit
+
+`biahub pyramid` rewrites each position's `zarr.json` (the multiscales list and
+its `biahub-pyramid` record), as do tracking and imaging-qc, so the pipeline
+runs it after tracking and holds QC, the very last step, until it has finished. A run that fails after the pyramid step
+left the plates with 3 levels; a relaunch with `-resume` reuses the cached
+pyramid tasks, and a relaunch that recomputes earlier steps rewrites level 0
+only — rerun `biahub pyramid -i <plate>/*/*/* --levels 3` by hand in that
+case, since the coarser levels are not recomputed by anything else. A plate
+that already carries a pyramid of another depth is refused at init
+(`already has a pyramid of a different depth`); the fix is iohub's
+`delete_pyramid` on each position or matching `--pyramid_levels`.
+

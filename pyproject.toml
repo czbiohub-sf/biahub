@@ -98,9 +98,9 @@ biahub = "biahub.cli.main:cli"
 # uv-dynamic-versioning chain, which pulls in packaging>=24.2.
 index-strategy = "unsafe-best-match"
 # waveorder's own [tool.uv.sources] pins iohub to an older main commit
-# (b7bc648, the czbiohub-sf/iohub#476 merge) than the one biahub needs below
-# (d1f9e89, which adds #479). uv refuses two git URLs for one package, so
-# force the whole graph onto biahub's rev. Drop together with the iohub pin.
+# (b7bc648, the czbiohub-sf/iohub#476 merge) than the one biahub needs below.
+# uv refuses two git URLs for one package, so force the whole graph onto
+# biahub's rev. Drop together with the iohub pin.
 override-dependencies = [
   "iohub @ git+https://github.com/czbiohub-sf/iohub@0cb3e35b860b6f774e7125e41d457192911a178e",
 ]

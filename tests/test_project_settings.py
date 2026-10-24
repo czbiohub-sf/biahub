@@ -129,15 +129,23 @@ def test_chunks_and_shards_are_validated():
     s = ProjectionSettings(
         channels={"a": {"method": "max"}},
         chunks_czyx=[1, 1, 256, 256],
-        shards_ratio=[16, 1, 1, 7, 5],
+        shards=[16, 1, 1, 1664, 1193],
     )
-    assert s.chunks_czyx == [1, 1, 256, 256] and s.shards_ratio == [16, 1, 1, 7, 5]
+    assert s.chunks_czyx == [1, 1, 256, 256] and s.shards == [16, 1, 1, 1664, 1193]
+    for form in ("200MB", "1.5GiB", "XY", "xyz"):
+        assert (
+            ProjectionSettings(channels={"a": {"method": "max"}}, shards=form).shards == form
+        )
     with pytest.raises(ValueError, match="4 positive integers"):
         ProjectionSettings(channels={"a": {"method": "max"}}, chunks_czyx=[1, 256, 256])
     with pytest.raises(ValueError, match="5 positive integers"):
-        ProjectionSettings(channels={"a": {"method": "max"}}, shards_ratio=[16, 1, 7, 5])
+        ProjectionSettings(channels={"a": {"method": "max"}}, shards=[16, 1, 7, 5])
     with pytest.raises(ValueError, match="C entry must be 1"):
-        ProjectionSettings(channels={"a": {"method": "max"}}, shards_ratio=[16, 2, 1, 7, 5])
+        ProjectionSettings(channels={"a": {"method": "max"}}, shards=[16, 2, 1, 7, 5])
+    with pytest.raises(ValueError, match="Use a size such as"):
+        ProjectionSettings(channels={"a": {"method": "max"}}, shards="big")
+    with pytest.raises(ValueError, match="replaced by shards"):
+        ProjectionSettings(channels={"a": {"method": "max"}}, shards_ratio=[16, 1, 1, 7, 5])
 
 
 def test_unknown_keys_are_refused():
