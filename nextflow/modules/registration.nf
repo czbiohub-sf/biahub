@@ -460,3 +460,70 @@ workflow apply_transform_run_wf {
     emit:
     done = applied
 }
+
+
+// --- benchmark: many pipelines on many cases ------------------------------------------
+//
+// One task estimates a whole run in-process (`--cluster debug`): benchmark cases use one
+// or a few timepoints, so the per-timepoint fan-out above is not needed. Then
+// evaluate-transform scores the run's transform and each block of its stack on held-out
+// positions; registration_benchmark_wf.nf joins every table.
+
+// `"<store>/<pos>" "<store>/<pos>" ...`, quoted for the task's shell.
+def position_args(store, positions) {
+    return positions.collect { pos -> "\"${store}/${pos}\"" }.join(' ')
+}
+
+process benchmark_estimate {
+    tag "${case_name} / ${pipeline}"
+    label 'cpu'
+    clusterOptions { slurm_logs('benchmark_estimate') }
+    cpus { params.benchmark_cpus as int }
+    memory { retry_memory(params.benchmark_mem_gb as int, task) }
+    time { retry_time(params.benchmark_time_minutes as int, task) }
+
+    input:
+    tuple val(case_name), val(pipeline), val(moving), val(reference), val(estimate_positions),
+        val(config), path(config_file), val(transforms)
+
+    output:
+    tuple val(case_name), val(pipeline), val(transforms)
+
+    script:
+    def ref = reference ? "-r ${position_args(reference, estimate_positions)}" : ''
+    """
+    mkdir -p "${slurm_log_dir('benchmark_estimate')}"
+    biahub estimate-transform --cluster debug --resume \\
+        -m ${position_args(moving, estimate_positions)} ${ref} \\
+        -c "${config}" -o "${transforms}"
+    """
+}
+
+process benchmark_evaluate {
+    tag "${case_name} / ${pipeline}"
+    label 'cpu'
+    clusterOptions { slurm_logs('benchmark_evaluate') }
+    cpus { params.benchmark_cpus as int }
+    memory { retry_memory(params.benchmark_mem_gb as int, task) }
+    time { retry_time(params.benchmark_time_minutes as int, task) }
+
+    input:
+    tuple val(case_name), val(pipeline), val(transforms), val(moving), val(reference),
+        val(evaluate_positions), val(options)
+
+    output:
+    path 'evaluation.csv'
+
+    script:
+    def ref_store = reference ?: moving
+    def table = new File(transforms.toString()).parent + '/evaluation.csv'
+    """
+    mkdir -p "${slurm_log_dir('benchmark_evaluate')}"
+    biahub evaluate-transform \\
+        -m ${position_args(moving, evaluate_positions)} \\
+        -r ${position_args(ref_store, evaluate_positions)} \\
+        -c "${transforms}" -o "${table}" --figures ${options} \\
+        --tag 'case=${case_name}' --tag 'pipeline=${pipeline}'
+    cp "${table}" evaluation.csv
+    """
+}
