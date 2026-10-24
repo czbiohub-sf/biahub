@@ -62,3 +62,26 @@ def test_evaluate_transform_writes_one_row_per_candidate_and_position(tmp_path):
 def test_evaluate_transform_is_listed_with_its_siblings():
     result = CliRunner().invoke(cli, ["--help"])
     assert "evaluate-transform" in result.output
+
+
+def test_tags_add_columns_so_tables_can_be_joined(tmp_path):
+    positions = _plate(tmp_path)[:1]
+    transforms = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["DAPI"],
+            reference_channel="VS",
+            transforms=[TransformEntry(matrix=np.eye(4).tolist())],
+        ),
+        transforms,
+    )
+    output = tmp_path / "evaluation.csv"
+    args = ["evaluate-transform", "-m", str(positions[0]), "-r", str(positions[0])]
+    args += ["-c", str(transforms), "-o", str(output), "--tile-px", "64"]
+    args += ["--tag", "case=dragonfly", "--tag", "pipeline=tiles > nuclei"]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    rows = _rows(output)
+    assert list(rows[0])[:2] == ["case", "pipeline"]  # first, for reading
+    assert {(r["case"], r["pipeline"]) for r in rows} == {("dragonfly", "tiles > nuclei")}

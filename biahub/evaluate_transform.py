@@ -41,9 +41,14 @@ def evaluate_transform(
     t: int = 0,
     blocks: bool = True,
     figures: bool = False,
+    tags: dict | None = None,
     **image_kwargs,
 ) -> list[dict]:
-    """Evaluate a transforms file (and its stack's blocks) on positions; write the table."""
+    """Evaluate a transforms file (and its stack's blocks) on positions; write the table.
+
+    `tags` become constant columns, first (e.g. the case and pipeline of a benchmark), so
+    tables from several runs can be joined.
+    """
     transforms = load_transform_settings(transforms_filepath)
     keys = ["/".join(Path(p).parts[-3:]) for p in moving_position_dirpaths]
     candidates = {"transforms": _file_candidate(transforms, keys, t)}
@@ -61,12 +66,23 @@ def evaluate_transform(
         figures_dir=output_filepath.with_suffix("") if figures else None,
         **image_kwargs,
     )
+    rows = [{**(tags or {}), **row} for row in rows]
     output_filepath.parent.mkdir(parents=True, exist_ok=True)
     with open(output_filepath, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
     return rows
+
+
+def _parse_tags(tags) -> dict:
+    parsed = {}
+    for tag in tags:
+        name, sep, value = tag.partition("=")
+        if not sep or not name:
+            raise click.BadParameter(f"a tag is name=value; got {tag!r}", param_hint="--tag")
+        parsed[name] = value
+    return parsed
 
 
 @click.command("evaluate-transform")
@@ -101,6 +117,12 @@ def evaluate_transform(
     is_flag=True,
     help="Save a figure per candidate and position next to the table.",
 )
+@click.option(
+    "--tag",
+    "tags",
+    multiple=True,
+    help="name=value, a constant column (e.g. --tag case=dragonfly); repeat for several.",
+)
 def evaluate_transform_cli(
     moving_position_dirpaths,
     reference_position_dirpaths,
@@ -113,6 +135,7 @@ def evaluate_transform_cli(
     tile_px,
     no_blocks,
     figures,
+    tags,
 ) -> None:
     """Evaluate a transforms file on positions: residuals in µm, against unregistered.
 
@@ -133,6 +156,7 @@ def evaluate_transform_cli(
         t=t,
         blocks=not no_blocks,
         figures=figures,
+        tags=_parse_tags(tags),
         tile_px=tile_px,
     )
     for row in rows:
