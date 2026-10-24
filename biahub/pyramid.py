@@ -24,6 +24,7 @@ from biahub.cli.parsing import (
     init_only,
     input_position_dirpaths,
     monitor,
+    resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
@@ -35,6 +36,7 @@ from biahub.utils.cluster import (
     get_submitit_cluster,
     local_executor_parameters,
 )
+from biahub.utils.config import settings_fingerprint
 
 PROVENANCE_KEY = "biahub-pyramid"
 
@@ -69,16 +71,34 @@ def _check_levels(position_dirpath: Path, levels: int) -> None:
         )
 
 
-def _pyramid_position(position_dirpath: Path, settings: PyramidSettings) -> None:
-    """Compute the pyramid of one position's image and of each of its label images."""
+def _pyramid_position(
+    position_dirpath: Path, settings: PyramidSettings, resume: bool = False
+) -> None:
+    """Compute the pyramid of one position's image and of each of its label images.
+
+    Every level is written one shard-aligned region at a time, each a resumable unit
+    recorded beside the store under the settings' fingerprint; with ``resume`` the
+    regions an earlier attempt finished are skipped (see iohub's ``compute_pyramid``).
+    """
     click.echo(f"Computing pyramid for {position_dirpath}")
+    token = settings_fingerprint(settings)
     with open_ome_zarr(position_dirpath, mode="r+") as position:
         dims = pyramid_dims(position.data.shape[-3:])
-        position.compute_pyramid(levels=settings.levels, method=settings.method, dims=dims)
+        position.compute_pyramid(
+            levels=settings.levels,
+            method=settings.method,
+            dims=dims,
+            resume=resume,
+            resume_token=token,
+        )
         for name, label in position.labels():
             click.echo(f"Computing pyramid for labels/{name} of {position_dirpath}")
             label.compute_pyramid(
-                levels=settings.levels, method=settings.label_method, dims=dims
+                levels=settings.levels,
+                method=settings.label_method,
+                dims=dims,
+                resume=resume,
+                resume_token=token,
             )
         position.zattrs[PROVENANCE_KEY] = {**settings.model_dump(), "dims": sorted(dims)}
 
@@ -92,6 +112,7 @@ def pyramid(
     cluster: str = "slurm",
     monitor: bool = True,
     init_only: bool = False,
+    resume: bool = False,
 ) -> None:
     """Compute multiscale pyramids of the given positions, images and labels alike.
 
@@ -115,6 +136,10 @@ def pyramid(
     init_only : bool, optional
         Only validate the request against the first position and report the resources
         a position needs; skip per-position processing.
+    resume : bool, optional
+        Skip the pyramid regions (one shard of one level each) a previous attempt
+        already finished, rather than recomputing every level; see
+        ``iohub.ngff.nodes.MultiscaleNode.compute_pyramid``.
     """
     slurm_out_path = input_position_dirpaths[0].parents[3] / "slurm_output"
 
@@ -183,7 +208,11 @@ def pyramid(
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
         for input_position_path in input_position_dirpaths:
-            jobs.append(executor.submit(_pyramid_position, input_position_path, settings))
+            jobs.append(
+                executor.submit(
+                    _pyramid_position, input_position_path, settings, resume=resume
+                )
+            )
 
     job_ids = [job.job_id for job in jobs]
     slurm_out_path.mkdir(exist_ok=True)
@@ -210,6 +239,10 @@ def pyramid(
 @cluster()
 @monitor()
 @init_only()
+@resume(
+    help="Skip the pyramid regions (one shard of one level each) an earlier attempt finished, "
+    "keyed by the levels and methods; for retrying an interrupted run."
+)
 @click.option(
     "--levels",
     type=int,
@@ -237,6 +270,7 @@ def pyramid_cli(
     cluster: str = "slurm",
     monitor: bool = False,
     init_only: bool = False,
+    resume: bool = False,
     levels: int = 3,
     method: str = "mean",
     label_method: str = "max",
@@ -245,7 +279,8 @@ def pyramid_cli(
 
     Each level is 2x coarser than the previous along the spatial axes longer than one
     voxel, so a Z=1 plate is downsampled in Y and X only. Images use --method, the label
-    images under labels/ use --label-method. Rerunning recomputes the same levels.
+    images under labels/ use --label-method. Rerunning recomputes the same levels;
+    --resume recomputes only the shards an interrupted attempt did not finish.
 
     \b
     SLURM fan-out of positions across a whole plate:
@@ -257,7 +292,7 @@ def pyramid_cli(
 
     \b
     In-process run of a single position (e.g. from a Nextflow worker):
-    >>> biahub pyramid --cluster debug -i ./plate.zarr/A/1/0 --levels 3
+    >>> biahub pyramid --cluster debug --resume -i ./plate.zarr/A/1/0 --levels 3
     """  # noqa: D301
     pyramid(
         input_position_dirpaths=input_position_dirpaths,
@@ -268,6 +303,7 @@ def pyramid_cli(
         cluster=cluster,
         monitor=monitor,
         init_only=init_only,
+        resume=resume,
     )
 
 
