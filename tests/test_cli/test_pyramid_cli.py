@@ -22,9 +22,9 @@ def plate(create_custom_plate, tmp_path):
     )
     for key in POSITIONS:
         with open_ome_zarr(plate_path.joinpath(*key), mode="r+") as position:
-            labels = np.zeros((3, 4, 16, 12), dtype=np.uint32)
-            labels[:, :, 2:10, 1:7] = 5
-            labels[:, :, 12:16, 8:12] = 9
+            labels = np.zeros((3, 1, 4, 16, 12), dtype=np.uint32)  # (T, 1, Z, Y, X)
+            labels[..., 2:10, 1:7] = 5
+            labels[..., 12:16, 8:12] = 9
             position.create_label("nuclei", labels)
     return plate_path
 
@@ -61,7 +61,7 @@ def test_pyramid_writes_image_and_label_levels(plate):
             "1": (3, 3, 2, 8, 6),
             "2": (3, 3, 1, 4, 3),
         }
-        assert label_levels == {"0": (3, 4, 16, 12), "1": (3, 2, 8, 6), "2": (3, 1, 4, 3)}
+        assert label_levels == {"0": (3, 1, 4, 16, 12), "1": (3, 1, 2, 8, 6), "2": (3, 1, 1, 4, 3)}
         assert record == {
             "levels": 3,
             "method": "mean",
@@ -74,7 +74,7 @@ def test_pyramid_writes_image_and_label_levels(plate):
                 # Max pooling keeps only ids that exist at level 0, and keeps both blobs.
                 assert set(np.unique(label[level][:])) == {0, 5, 9}
                 assert position.get_effective_scale(level)[2:] == [2.0 ** int(level)] * 3
-                assert label.get_effective_scale(level)[1:] == [2.0 ** int(level)] * 3
+                assert label.get_effective_scale(level)[2:] == [2.0 ** int(level)] * 3
             assert position[1][:].mean() > 0
 
 
@@ -84,20 +84,20 @@ def test_pyramid_z1_plate_is_downsampled_in_yx_only(create_custom_plate, tmp_pat
     )
     position_path = plate_path.joinpath(*POSITIONS[0])
     with open_ome_zarr(position_path, mode="r+") as position:
-        position.create_label("nuclei", np.ones((3, 1, 16, 12), dtype=np.uint32))
+        position.create_label("nuclei", np.ones((3, 1, 1, 16, 12), dtype=np.uint32))
 
     result = _run("--cluster", "debug", "-i", position_path, "--label-method", "stride")
 
     assert result.exit_code == 0, result.output
     image_levels, label_levels, record = _levels(position_path)
     assert image_levels["2"] == (3, 3, 1, 4, 3)
-    assert label_levels["2"] == (3, 1, 4, 3)
+    assert label_levels["2"] == (3, 1, 1, 4, 3)
     assert record["dims"] == ["x", "y"]
     assert record["label_method"] == "stride"
     with open_ome_zarr(position_path, mode="r") as position:
         # Z keeps its size and its scale at every level.
         assert position.get_effective_scale("2")[2] == 1.0
-        assert position.get_label("nuclei").get_effective_scale("2")[1] == 1.0
+        assert position.get_label("nuclei").get_effective_scale("2")[2] == 1.0
 
 
 def test_pyramid_rerun_recomputes_and_different_depth_is_refused(plate):

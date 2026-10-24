@@ -87,7 +87,7 @@ def test_segment_init_creates_label_images_and_prints_resources(
         with open_ome_zarr(position, mode="r") as pos:
             assert pos.label_names() == ["nuc"]
             label = pos.get_label("nuc")["0"]
-            assert label.shape == (3, 1, 5, 6)  # the image's (T, Z, Y, X)
+            assert label.shape == (3, 1, 1, 5, 6)  # the image's (T, 1, Z, Y, X)
             assert label.dtype == np.uint32
             assert not label[:].any()
             assert pos.channel_names == ["GFP", "RFP", "Phase3D"]  # the image is untouched
@@ -249,7 +249,7 @@ def test_segment_refuses_a_label_image_of_another_shape(
     stack = example_plate[0] / "B" / "1" / "0"  # Z=4
     assert _run("--init", "-i", stack, "-c", three_d).exit_code == 0
     with open_ome_zarr(stack, mode="r+") as pos:
-        pos.get_label("nuc")["0"].resize((3, 2, 5, 6))  # pretend the image changed
+        pos.get_label("nuc")["0"].resize((3, 1, 2, 5, 6))  # pretend the image changed
 
     result = _run("--init", "-i", stack, "-c", three_d)
 

@@ -179,7 +179,7 @@ def _segment_czyx(
 
 
 def _check_existing_label(
-    position, name: str, model_settings: dict, shape_tzyx: tuple
+    position, name: str, model_settings: dict, shape_tczyx: tuple
 ) -> None:
     """Refuse to write model ``name`` into a label image made with other settings.
 
@@ -192,10 +192,10 @@ def _check_existing_label(
         return
     label = position.get_label(name)
     existing_shape = tuple(label["0"].shape)
-    if existing_shape != shape_tzyx:
+    if existing_shape != shape_tczyx:
         raise ValueError(
             f"{position.zgroup.path} already has a label image {name!r} of shape "
-            f"{existing_shape}, but the image is {shape_tzyx} (T, Z, Y, X). Rename the "
+            f"{existing_shape}, but a label of this image is {shape_tczyx} (T, 1, Z, Y, X). Rename the "
             "model or remove the old label image."
         )
     recorded = dict(label.zattrs).get(PROVENANCE_KEY, {}).get("models", {}).get(name)
@@ -235,7 +235,9 @@ def _init_label_images(
     for position_dirpath in input_position_dirpaths:
         with open_ome_zarr(str(position_dirpath), mode="r") as position:
             for name in label_names:
-                _check_existing_label(position, name, recorded["models"][name], (T, Z, Y, X))
+                _check_existing_label(
+                    position, name, recorded["models"][name], (T, 1, Z, Y, X)
+                )
 
     _, layout = label_layout(input_position_dirpaths[0])
     create_empty_labels(
