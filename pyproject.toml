@@ -102,7 +102,7 @@ index-strategy = "unsafe-best-match"
 # (d1f9e89, which adds #479). uv refuses two git URLs for one package, so
 # force the whole graph onto biahub's rev. Drop together with the iohub pin.
 override-dependencies = [
-  "iohub @ git+https://github.com/czbiohub-sf/iohub@80b20a693d7dd11d5a14d667001bcf1972a2be23",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub@0cb3e35b860b6f774e7125e41d457192911a178e",
 ]
 
 [tool.uv.sources]
