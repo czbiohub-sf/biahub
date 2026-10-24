@@ -70,6 +70,11 @@ COMMANDS = [
         "help": "Estimate a transform series (registration or stabilization)",
     },
     {
+        "name": "evaluate-transform",
+        "import_path": "biahub.evaluate_transform.evaluate_transform_cli",
+        "help": "Evaluate a transforms file on positions: residuals in µm",
+    },
+    {
         "name": "substitute-transforms",
         "import_path": "biahub.substitute_transforms.substitute_transforms_cli",
         "help": "Replace chosen timepoints of a transforms file with another run's",

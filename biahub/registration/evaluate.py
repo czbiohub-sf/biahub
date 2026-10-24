@@ -842,6 +842,7 @@ def evaluate_candidates(
     images: bool = True,
     compare: str = "edges",
     detect_kwargs: dict | None = None,
+    figures_dir=None,
     **image_kwargs,
 ) -> list[dict]:
     """Evaluate every candidate on every position at `t`: one row each (`_row`).
@@ -850,7 +851,8 @@ def evaluate_candidates(
     keyed by `t` or by (position, t) (e.g. `block_candidates`); a candidate with no
     transform for a position is left out there. `position_pairs` are (moving, reference)
     position paths. Each position also gets an "unregistered" row (identity), measured
-    once; landmarks are detected once per position.
+    once; landmarks are detected once per position. With `figures_dir`, each candidate's
+    figure (`plot_evaluation`, against that unregistered pair) is saved there.
     """
     from iohub import open_ome_zarr
 
@@ -884,6 +886,22 @@ def evaluate_candidates(
                 **image_kwargs,
             )
             rows.append(_row(record, name, key, t))
+            if name == "unregistered":
+                unregistered = {
+                    k: getattr(record, k)
+                    for k in ("points", "tiles", "z_crops", "z_um", "z_from")
+                }
+            elif figures_dir is not None:
+                from biahub.registration.evaluate_view import plot_evaluation
+
+                record.baseline = unregistered  # measured once for the position
+                Path(figures_dir).mkdir(parents=True, exist_ok=True)
+                name_safe = f"{name}_{key}_t{t}".replace("/", "_").replace(":", "-")
+                plot_evaluation(
+                    record,
+                    path=Path(figures_dir) / f"{name_safe}.png",
+                    title=f"{name} {key} t={t}",
+                )
     return rows
 
 
