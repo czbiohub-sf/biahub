@@ -141,19 +141,19 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # royerlab/ultrack main once #290 merges, and at a release once one contains them.
 ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5f84ccda3bdf072f5289f939c" }
 
-# Pin iohub to the czbiohub-sf/iohub#496 branch (on main at the #491 merge, 80b20a6):
-# label images are (T, 1, Z, Y, X), the image's axes with one channel (the DCA array
-# standard wants every array 5D), and a label with more than one channel is refused.
-# Main carries #489 (process_single_position(output_label=...), with which `biahub
+# Pin iohub to main at the czbiohub-sf/iohub#496 merge (0cb3e35): label images are
+# (T, 1, Z, Y, X), the image's axes with one channel (the DCA array standard wants
+# every array 5D), and a label with more than one channel is refused. Main also
+# carries #489 (process_single_position(output_label=...), with which `biahub
 # segment` writes its labels into the plate's label images with --resume, and
 # create_empty_labels, with which segment --init and track --init scaffold those
 # label images), #486 (create_empty_plate(label_names=...), #360), #485 (the labels
 # list on <fov>/labels/zarr.json, so ome-zarr-models and dca-validate can open a
 # field that has labels) and #488/#461/#491 (label pyramids, shard size targets,
-# resumable pyramids) for the pyramid step. Repoint at main once #496 merges, and at
-# a PyPI release once one contains them.
+# resumable pyramids) for the pyramid step. Drop to a PyPI release once one
+# contains them.
 #
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "eee7567" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "0cb3e35b860b6f774e7125e41d457192911a178e" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top
