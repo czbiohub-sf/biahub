@@ -153,7 +153,7 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5
 # resumable pyramids) for the pyramid step. Repoint at main once #496 merges, and at
 # a PyPI release once one contains them.
 #
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "9f21979" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "eee7567" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top
