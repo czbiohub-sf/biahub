@@ -39,6 +39,10 @@ from biahub.utils.cluster import (
 from biahub.utils.config import settings_fingerprint
 
 PROVENANCE_KEY = "biahub-pyramid"
+# Downsampling threads per CPU of the job. A thread spends most of a (t, c) volume
+# waiting on the read (about 8 s of a 9 s cold Lustre read is I/O), so two per CPU
+# keep the CPUs busy while the other half waits.
+THREADS_PER_CPU = 2
 
 
 def pyramid_dims(shape_zyx: tuple[int, int, int]) -> set[str]:
@@ -159,28 +163,28 @@ def pyramid(
         shards = position.data.shards or position.data.chunks
 
     # iohub writes a level one target shard at a time, and downsamples each shard in
-    # (t, c) sub-blocks, one per thread (one per CPU). RAM is the shard twice (the
+    # (t, c) sub-blocks, THREADS_PER_CPU threads per CPU. RAM is the shard twice (the
     # buffer the sub-blocks fill, and its encoded copy on write) plus about two
     # source volumes per thread (the read, and np.pad's copy along an odd axis).
-    # Measured on a 12-timepoint copy of one A549 v10 position (12 x 6 x 86 x 1664 x
-    # 1193 float32) on 8 CPUs, bit-identical levels in every case: iohub main (whole
-    # region at once) 3.22 s/volume and 17.4 GB; sub-blocks with 1 thread 3.00 s and
-    # 4.7 GB; with 8 threads 1.00 s and 9.8 GB. The full v10 plate, serially, took
-    # 54 min (0.13 min/volume) median and 46.5 GB on every position, and 2 of 54
-    # positions ran past 130 min on slow gpu-sm nodes. With 8 threads: 32 GB, and
-    # 0.15 min/volume, ~3.5x the expected median, which also covers a node 2.5x
-    # slower. The benchmark read from page cache, so recalibrate both from a real run.
+    # Measured on full, uncached A549 v10 assembled positions (67 x 6 x 86 x 1664 x
+    # 1193 float32, 4.5 GiB shards) on 8 CPUs: the v10 run itself (iohub main,
+    # serial, 4 CPUs) 54 min median and 46.5 GB, with 2 of 54 positions past 130 min
+    # on slow gpu-sm nodes; 16 threads 14.6 min and 21 GB; 16 threads with
+    # RAYON_NUM_THREADS=64 (set by modules/pyramid.nf) 7.3 min and 23 GB, i.e.
+    # 0.018 min/volume. Requested: 40 GB, and 0.08 min/volume (40 min), ~5x the
+    # measured position, for slower nodes and 60 jobs reading Lustre at once.
     itemsize = np.dtype(dtype).itemsize
     shard_gb = math.prod(shards) * itemsize / 2**30
     volume_gb = Z * Y * X * itemsize / 2**30
     max_num_cpus = 8
-    threads = min(T * C, max_num_cpus)
+    cpus = min(T * C, max_num_cpus)
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, C, Z, Y, X),
         dtype=dtype,
-        # Per CPU, with a 30% margin: two volumes, plus this CPU's share of two shards.
-        ram_multiplier=1.3 * (2 + 2 * shard_gb / volume_gb / threads),
-        time_multiplier=0.15,
+        # Per CPU, with a 30% margin: two volumes per thread, plus this CPU's share of
+        # two shards.
+        ram_multiplier=1.3 * (2 * THREADS_PER_CPU + 2 * shard_gb / volume_gb / cpus),
+        time_multiplier=0.08,
         max_num_cpus=max_num_cpus,
         min_ram_per_cpu=2,
     )
@@ -225,8 +229,8 @@ def pyramid(
                     input_position_path,
                     settings,
                     resume=resume,
-                    # One thread per CPU the job holds, including an sbatch override.
-                    num_workers=slurm_args["slurm_cpus_per_task"],
+                    # Per CPU the job holds, including an sbatch override.
+                    num_workers=THREADS_PER_CPU * slurm_args["slurm_cpus_per_task"],
                 )
             )
 

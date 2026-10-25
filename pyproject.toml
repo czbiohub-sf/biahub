@@ -102,7 +102,7 @@ index-strategy = "unsafe-best-match"
 # uv refuses two git URLs for one package, so force the whole graph onto
 # biahub's rev. Drop together with the iohub pin.
 override-dependencies = [
-  "iohub @ git+https://github.com/czbiohub-sf/iohub@3bbc4d437e1be205208cc9d40d7ab36550723a00",
+  "iohub @ git+https://github.com/czbiohub-sf/iohub@827cfc527fafc7ca080aeb4698f066363c4bc2a5",
 ]
 
 [tool.uv.sources]
@@ -141,7 +141,7 @@ imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipelin
 # royerlab/ultrack main once #290 merges, and at a release once one contains them.
 ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5f84ccda3bdf072f5289f939c" }
 
-# Pin iohub to feat/pyramid-num-workers (czbiohub-sf/iohub#497, 3bbc4d4, one commit
+# Pin iohub to feat/pyramid-num-workers (czbiohub-sf/iohub#497, 827cfc5, two commits
 # on main 0cb3e35): compute_pyramid(num_workers=), which `biahub pyramid` uses to
 # downsample each shard in (t, c) sub-blocks on every CPU of its job. Repoint at main
 # when #497 merges. From main at the czbiohub-sf/iohub#496 merge (0cb3e35): label images are
@@ -156,7 +156,7 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5
 # resumable pyramids) for the pyramid step. Drop to a PyPI release once one
 # contains them.
 #
-iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "3bbc4d437e1be205208cc9d40d7ab36550723a00" }
+iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "827cfc527fafc7ca080aeb4698f066363c4bc2a5" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top
