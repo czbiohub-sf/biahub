@@ -39,6 +39,10 @@ from biahub.utils.cluster import (
 from biahub.utils.config import settings_fingerprint
 
 PROVENANCE_KEY = "biahub-pyramid"
+# Downsampling threads per CPU of the job. A thread spends most of a (t, c) volume
+# waiting on the read (about 8 s of a 9 s cold Lustre read is I/O), so two per CPU
+# keep the CPUs busy while the other half waits.
+THREADS_PER_CPU = 2
 
 
 def pyramid_dims(shape_zyx: tuple[int, int, int]) -> set[str]:
@@ -72,13 +76,18 @@ def _check_levels(position_dirpath: Path, levels: int) -> None:
 
 
 def _pyramid_position(
-    position_dirpath: Path, settings: PyramidSettings, resume: bool = False
+    position_dirpath: Path,
+    settings: PyramidSettings,
+    resume: bool = False,
+    num_workers: int = 1,
 ) -> None:
     """Compute the pyramid of one position's image and of each of its label images.
 
     Every level is written one shard-aligned region at a time, each a resumable unit
     recorded beside the store under the settings' fingerprint; with ``resume`` the
     regions an earlier attempt finished are skipped (see iohub's ``compute_pyramid``).
+    ``num_workers`` threads downsample each region, one (t, c) volume each; it does
+    not change the result, so it is not part of the fingerprint.
     """
     click.echo(f"Computing pyramid for {position_dirpath}")
     token = settings_fingerprint(settings)
@@ -90,6 +99,7 @@ def _pyramid_position(
             dims=dims,
             resume=resume,
             resume_token=token,
+            num_workers=num_workers,
         )
         for name, label in position.labels():
             click.echo(f"Computing pyramid for labels/{name} of {position_dirpath}")
@@ -99,6 +109,7 @@ def _pyramid_position(
                 dims=dims,
                 resume=resume,
                 resume_token=token,
+                num_workers=num_workers,
             )
         position.zattrs[PROVENANCE_KEY] = {**settings.model_dump(), "dims": sorted(dims)}
 
@@ -151,27 +162,31 @@ def pyramid(
         dtype = position.data.dtype
         shards = position.data.shards or position.data.chunks
 
-    # RAM follows the SHARD, not the volume: iohub writes a pyramid level one target
-    # shard at a time and reads the source region feeding it, 8x the target in 3D.
-    # Measured on one A549 position (67 x 6 x 86 x 1664 x 1193 float32, level-0
-    # shards 5 x 1 x 96 x 1792 x 1280 = 4.1 GiB, levels sized to the same bytes):
-    # 44 GB peak RSS and 41.5 min single-threaded, i.e. ~10x the shard and ~0.1 min
-    # per (t, c) volume; the projected plate's 0.14 GiB shards peaked at 1.7 GB in 27 s.
-    # All 54 positions of that plate in the v9 debug run (shards 6 x 1 x 88 x 1792 x
-    # 1280 = 4.51 GiB): 46.5 GB peak RSS on every position (10.3x the shard), and
-    # 45.6 / 54.5 / 67.3 min min / median / max, i.e. up to 0.17 min per volume, the
-    # slowest on the 120 GB cpu-c nodes. The old 12x / 0.15 asked 56 GB / 70 min,
-    # 4% above the slowest position. 14x the shard (~36% over the peak) and
-    # 0.3 min/volume (~1.8x the slowest) leave room for slower nodes.
+    # iohub writes a level one target shard at a time, and downsamples each shard in
+    # (t, c) sub-blocks, THREADS_PER_CPU threads per CPU. RAM is the shard twice (the
+    # buffer the sub-blocks fill, and its encoded copy on write) plus about two
+    # source volumes per thread (the read, and np.pad's copy along an odd axis).
+    # Measured on full, uncached A549 v10 assembled positions (67 x 6 x 86 x 1664 x
+    # 1193 float32, 4.5 GiB shards) on 8 CPUs: the v10 run itself (iohub main,
+    # serial, 4 CPUs) 54 min median and 46.5 GB, with 2 of 54 positions past 130 min
+    # on slow gpu-sm nodes; 16 threads 14.6 min and 21 GB; 16 threads with
+    # RAYON_NUM_THREADS=64 (set by modules/pyramid.nf) 7.3 min and 23 GB, i.e.
+    # 0.018 min/volume. Requested: 40 GB, and 0.08 min/volume (40 min), ~5x the
+    # measured position, for slower nodes and 60 jobs reading Lustre at once.
     itemsize = np.dtype(dtype).itemsize
     shard_gb = math.prod(shards) * itemsize / 2**30
     volume_gb = Z * Y * X * itemsize / 2**30
+    max_num_cpus = 8
+    cpus = min(T * C, max_num_cpus)
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, C, Z, Y, X),
         dtype=dtype,
-        ram_multiplier=max(4.0, 14 * shard_gb / volume_gb / 4),  # per CPU, 4 CPUs share it
-        time_multiplier=0.3,
-        max_num_cpus=4,
+        # Per CPU, with a 30% margin: two volumes per thread, plus this CPU's share of
+        # two shards.
+        ram_multiplier=1.3 * (2 * THREADS_PER_CPU + 2 * shard_gb / volume_gb / cpus),
+        time_multiplier=0.08,
+        max_num_cpus=max_num_cpus,
+        min_ram_per_cpu=2,
     )
     mem_gb = num_cpus * gb_ram_per_cpu
     echo_resources(num_cpus, mem_gb, time_minutes)
@@ -210,7 +225,12 @@ def pyramid(
         for input_position_path in input_position_dirpaths:
             jobs.append(
                 executor.submit(
-                    _pyramid_position, input_position_path, settings, resume=resume
+                    _pyramid_position,
+                    input_position_path,
+                    settings,
+                    resume=resume,
+                    # Per CPU the job holds, including an sbatch override.
+                    num_workers=THREADS_PER_CPU * slurm_args["slurm_cpus_per_task"],
                 )
             )
 

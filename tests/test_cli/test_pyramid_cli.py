@@ -173,3 +173,29 @@ def test_pyramid_refuses_mean_for_labels_and_one_level(plate):
     one_level = _run("--init", "-i", position_path, "--levels", "1")
     assert one_level.exit_code != 0
     assert "levels" in str(one_level.exception)
+
+
+def test_pyramid_threads_follow_the_job_cpus(plate, tmp_path, monkeypatch):
+    """Each position downsamples with THREADS_PER_CPU threads per CPU of its job, overrides included."""
+    import biahub.pyramid
+
+    from biahub.pyramid import THREADS_PER_CPU
+
+    seen = []
+    original = biahub.pyramid._pyramid_position
+
+    def recording(*args, num_workers=1, **kwargs):
+        seen.append(num_workers)
+        return original(*args, num_workers=num_workers, **kwargs)
+
+    monkeypatch.setattr(biahub.pyramid, "_pyramid_position", recording)
+    sbatch = tmp_path / "override.sbatch"
+    sbatch.write_text("#SBATCH --cpus-per-task=3\n")
+    position_path = plate.joinpath(*POSITIONS[0])
+
+    result = _run("--cluster", "debug", "-i", position_path, "--sbatch-filepath", sbatch)
+
+    assert result.exit_code == 0, result.output
+    assert seen == [3 * THREADS_PER_CPU]
+    image_levels, label_levels, _ = _levels(position_path)
+    assert list(image_levels) == ["0", "1", "2"] and list(label_levels) == ["0", "1", "2"]

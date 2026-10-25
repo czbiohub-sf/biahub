@@ -70,8 +70,14 @@ process run_pyramid {
     output:
     val position
 
+    // RAYON_NUM_THREADS sizes zarrs' Rust thread pool, which does the reads as well
+    // as the decoding. Its default, one thread per CPU, caps the reads in flight, and
+    // a cold Lustre read is mostly waiting: 64 took one full A549 assembled position
+    // from 14.6 to 7.3 min on 8 CPUs. zarrs reads the variable when it starts, so it
+    // has to be in the task's environment; a value set for the whole run wins.
     script:
     """
+    export RAYON_NUM_THREADS=\${RAYON_NUM_THREADS:-64}
     biahub pyramid --cluster debug --resume \
         -i "${input_zarr}/${position}" \
         --levels ${levels}
