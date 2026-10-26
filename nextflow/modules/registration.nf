@@ -474,9 +474,21 @@ def position_args(store, positions) {
     return positions.collect { pos -> "\"${store}/${pos}\"" }.join(' ')
 }
 
+// A failed run is retried when that may help (a signal; exit 3, a crashed job), then left
+// out: the other runs finish, and its absence from benchmark.csv shows it.
+def benchmark_error_strategy(task) {
+    if (task.exitStatus in (130..145) + [Integer.MAX_VALUE]) {
+        return 'retry'
+    }
+    return task.exitStatus == 3 && task.attempt <= 2 ? 'retry' : 'ignore'
+}
+
+// No --resume: Nextflow's task cache decides what reruns (an edited config re-estimates),
+// and the transforms file's content hash keys the evaluation (as `transforms_hash` above).
 process benchmark_estimate {
     tag "${case_name} / ${pipeline}"
     label 'cpu'
+    errorStrategy { benchmark_error_strategy(task) }
     clusterOptions { slurm_logs('benchmark_estimate') }
     cpus { params.benchmark_cpus as int }
     memory { retry_memory(params.benchmark_mem_gb as int, task) }
@@ -487,29 +499,31 @@ process benchmark_estimate {
         val(config), path(config_file), val(transforms)
 
     output:
-    tuple val(case_name), val(pipeline), val(transforms)
+    tuple val(case_name), val(pipeline), val(transforms), env('TRANSFORMS_HASH')
 
     script:
     def ref = reference ? "-r ${position_args(reference, estimate_positions)}" : ''
     """
     mkdir -p "${slurm_log_dir('benchmark_estimate')}"
-    biahub estimate-transform --cluster debug --resume \\
+    biahub estimate-transform --cluster debug \\
         -m ${position_args(moving, estimate_positions)} ${ref} \\
         -c "${config}" -o "${transforms}"
+    TRANSFORMS_HASH=\$(md5sum "${transforms}" | cut -d' ' -f1)
     """
 }
 
 process benchmark_evaluate {
     tag "${case_name} / ${pipeline}"
     label 'cpu'
+    errorStrategy { benchmark_error_strategy(task) }
     clusterOptions { slurm_logs('benchmark_evaluate') }
     cpus { params.benchmark_cpus as int }
     memory { retry_memory(params.benchmark_mem_gb as int, task) }
     time { retry_time(params.benchmark_time_minutes as int, task) }
 
     input:
-    tuple val(case_name), val(pipeline), val(transforms), val(moving), val(reference),
-        val(evaluate_positions), val(options)
+    tuple val(case_name), val(pipeline), val(transforms), val(transforms_hash), val(moving),
+        val(reference), val(evaluate_positions), val(options)
 
     output:
     path 'evaluation.csv'

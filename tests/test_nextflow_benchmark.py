@@ -47,6 +47,32 @@ def _config(path, method):
     return path.name
 
 
+def _workflow(tmp_path, output, *extra):
+    result = subprocess.run(
+        [
+            "nextflow",
+            "run",
+            str(NEXTFLOW_DIR / "registration_benchmark_wf.nf"),
+            "-ansi-log",
+            "false",
+        ]
+        + ["-c", str(NEXTFLOW_DIR / "nextflow.config"), "-work-dir", str(tmp_path / "work")]
+        + ["--benchmark", str(tmp_path / "benchmark.yml"), "--output", str(output)]
+        + list(extra),
+        cwd=tmp_path,
+        env=_env(),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
+    return result.stdout
+
+
+def _rows(output):
+    with open(output / "benchmark.csv") as f:
+        return list(csv.DictReader(f))
+
+
 def test_the_benchmark_runs_every_pipeline_on_every_case_into_one_table(tmp_path):
     plate = _plate(tmp_path)
     spec = {
@@ -103,3 +129,104 @@ def test_the_benchmark_runs_every_pipeline_on_every_case_into_one_table(tmp_path
         == "GFP"
     )  # the case's channel, not the pipeline's placeholder
     assert PEAKS  # (the bead block's detection settings come from the stacked-methods tests)
+
+
+def _one_case_spec(tmp_path, plate, pipelines):
+    spec = {
+        "cases": [
+            {
+                "name": "beads",
+                "moving": str(plate),
+                "reference": str(plate),
+                "moving_channel": "GFP",
+                "reference_channel": "Phase3D",
+                "estimate_positions": "A/1/0",
+                "evaluate_positions": ["A/1/1"],
+                "tile_px": 32,
+            }
+        ],
+        "pipelines": pipelines,
+    }
+    (tmp_path / "benchmark.yml").write_text(yaml.safe_dump(spec))
+
+
+def test_resume_reuses_unchanged_runs_and_an_edited_config_reestimates(tmp_path):
+    # A plain -resume reran every estimate (its config was rewritten at launch) yet kept
+    # the old evaluation (keyed on the path); an edited config failed the whole run.
+    plate = _plate(tmp_path)
+    beads = _config(tmp_path / "beads.yml", "beads")
+    _one_case_spec(tmp_path, plate, [{"name": "beads", "config": beads}])
+    output = tmp_path / "out"
+    _workflow(tmp_path, output)
+    again = _workflow(tmp_path, output, "-resume")
+    assert again.count("Cached process") == 2  # estimate and evaluate both reused
+
+    config = yaml.safe_load((tmp_path / "beads.yml").read_text())
+    config["transform"]["type"] = (
+        "euclidean" if config["transform"]["type"] != "euclidean" else "affine"
+    )
+    (tmp_path / "beads.yml").write_text(yaml.safe_dump(config))
+    edited = _workflow(tmp_path, output, "-resume")
+    assert "Cached process" not in edited  # re-estimated, and so re-evaluated
+    assert {r["pipeline"] for r in _rows(output)} == {"beads"}
+
+
+def test_one_failing_pipeline_does_not_stop_the_others(tmp_path):
+    plate = _plate(tmp_path)
+    beads = _config(tmp_path / "beads.yml", "beads")
+    broken = tmp_path / "broken.yml"
+    broken.write_text(yaml.safe_dump({"moving": {"channel": "x"}, "method": "no-such-method"}))
+    _one_case_spec(
+        tmp_path,
+        plate,
+        [{"name": "beads", "config": beads}, {"name": "broken", "config": broken.name}],
+    )
+    output = tmp_path / "out"
+    _workflow(tmp_path, output)
+    assert {r["pipeline"] for r in _rows(output)} == {"beads"}
+
+
+def test_a_stabilization_case_needs_no_reference(tmp_path):
+    from tests.test_nextflow_registration import _drifting_plate
+
+    plate = _drifting_plate(tmp_path)
+    with open_ome_zarr(plate, mode="r") as position:
+        channel = position.channel_names[0]
+        n_t = position.data.shape[0]
+    pcc = tmp_path / "pcc.yml"
+    pcc.write_text(
+        yaml.safe_dump(
+            {
+                "moving": {"channel": "placeholder"},
+                "reference": {"frame": "cross", "channel": "placeholder"},
+                "method": "phase-cross-corr",
+                "transform": {"type": "euclidean"},
+                "fallback": {"repair": None},
+            }
+        )
+    )
+    store, position_key = str(plate.parents[2]), "/".join(plate.parts[-3:])
+    spec = {
+        "cases": [
+            {
+                "name": "drift",
+                "moving": store,
+                "moving_channel": channel,
+                "estimate_positions": position_key,
+                "evaluate_positions": [position_key],
+                "evaluate_t": n_t - 1,
+                "tile_px": 32,
+            }
+        ],
+        "pipelines": [{"name": "pcc", "config": pcc.name}],
+    }
+    (tmp_path / "benchmark.yml").write_text(yaml.safe_dump(spec))
+    output = tmp_path / "out"
+    _workflow(tmp_path, output)
+    rows = {r["candidate"]: r for r in _rows(output)}
+    assert yaml.safe_load((output / "drift" / "pcc" / "estimate.yml").read_text())[
+        "reference"
+    ] == {"frame": "first"}
+    assert float(rows["transforms"]["tiles_median_um"]) < float(
+        rows["unregistered"]["tiles_median_um"]
+    )

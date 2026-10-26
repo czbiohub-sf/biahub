@@ -15,7 +15,9 @@
 //       moving: /path/0-convert/Cells_2.zarr
 //       reference: /path/2-VS/VS_Cells2.zarr      # omit to stabilize
 //       moving_channel: 2-Prime_DAPI
-//       reference_channel: nuclei_prediction
+//       reference_channel: nuclei_prediction      # omit with the reference
+//       reference_frame: first                      # a stabilization: first (default) or previous
+//       evaluate_t: 10                              # a stabilization: the timepoint evaluated against frame 0
 //       estimate_positions: 0/12/001001             # one, or a list
 //       evaluate_positions: [0/9/001001, 0/19/001001]
 //       landmarks: nuclei                           # optional: nuclei, beads
@@ -47,19 +49,26 @@ def resolve(path, base) {
     return (f.isAbsolute() ? f : new File(base, path.toString())).getCanonicalPath()
 }
 
-// The pipeline's config with the case's channels: written once per case x pipeline.
+// The pipeline's config with the case's channels (a case without a reference store is a
+// stabilization: frame first, or its reference_frame). Written only when its content
+// changes, so -resume reuses an unchanged run.
 def case_config(pipeline_config, the_case, target) {
     def yaml = new org.yaml.snakeyaml.Yaml()
     def config = yaml.load(new File(pipeline_config).text) as Map
     config.moving = (config.moving ?: [:]) + [channel: the_case.moving_channel]
     if (the_case.reference) {
-        config.reference = (config.reference ?: [frame: 'cross']) + [channel: the_case.reference_channel]
+        config.reference = (config.reference ?: [frame: 'cross']) + [frame: 'cross', channel: the_case.reference_channel]
+    } else {
+        config.reference = [frame: the_case.reference_frame ?: 'first']
     }
     def out = new File(target)
     out.parentFile.mkdirs()
     def options = new org.yaml.snakeyaml.DumperOptions()
     options.setDefaultFlowStyle(org.yaml.snakeyaml.DumperOptions.FlowStyle.BLOCK)
-    out.text = new org.yaml.snakeyaml.Yaml(options).dump(config)
+    def text = new org.yaml.snakeyaml.Yaml(options).dump(config)
+    if (!out.exists() || out.text != text) {
+        out.text = text
+    }
     return out.getCanonicalPath()
 }
 
@@ -82,6 +91,7 @@ workflow {
     spec.cases.each { c ->
         def missing = required.findAll { k -> !c[k] }
         if (c.reference && !c.reference_channel) missing << 'reference_channel'
+        if (!c.reference && c.evaluate_t == null) missing << 'evaluate_t (a stabilization)'
         if (missing) error "case ${c.name ?: '?'}: missing ${missing}"
     }
 
@@ -101,15 +111,16 @@ workflow {
         def options = []
         if (c.landmarks) options << "--landmarks ${c.landmarks}"
         if (c.tile_px) options << "--tile-px ${c.tile_px}"
+        if (!c.reference) options << "--t ${c.evaluate_t} --reference-t 0"
         [(c.name): [as_list(c.evaluate_positions), options.join(' ')]]
     }
 
     estimated = benchmark_estimate(channel.fromList(runs))
     evaluated = benchmark_evaluate(
-        estimated.map { case_name, pipeline, transforms ->
+        estimated.map { case_name, pipeline, transforms, transforms_hash ->
             def r = runs.find { it[0] == case_name && it[1] == pipeline }
             def (positions, options) = evaluation[case_name]
-            [case_name, pipeline, transforms, r[2], r[3], positions, options]
+            [case_name, pipeline, transforms, transforms_hash, r[2], r[3], positions, options]
         }
     )
     evaluated.collectFile(
