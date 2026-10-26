@@ -366,6 +366,7 @@ class Transform:
         mode: str = "constant",
         cval: float = 0.0,
         backend: Backend = "ants",
+        interpolation: str = "linear",
     ) -> NDArray:
         """
         Apply transform to align moving image with reference space.
@@ -382,6 +383,8 @@ class Transform:
             How to handle boundaries ('constant', 'edge', 'reflect', 'wrap'). scipy only.
         cval : float, default=0.0
             Fill value for constant mode. scipy backend only.
+        interpolation : {'linear', 'nearest'}, default='linear'
+            Resampling interpolation ('nearest' sets order 0 on the scipy backend).
         backend : {'scipy', 'ants'}, default='ants'
             Resampler. ANTs (linear interpolation) is the default because it is what the
             registration pipeline has always warped with, so re-detected bead positions
@@ -414,9 +417,11 @@ class Transform:
         ):
             backend = "scipy"
         if backend == "scipy":
+            if interpolation in ("nearest", "nearestneighbor"):
+                order = 0
             return self._apply_scipy(moving, output_shape, order, mode, cval)
         elif backend == "ants":
-            return self._apply_ants(moving, reference)
+            return self._apply_ants(moving, reference, interpolation)
         else:
             raise ValueError(f"Unknown backend: {backend}")
 
@@ -444,7 +449,16 @@ class Transform:
             cval=cval,
         )
 
-    def _apply_ants(self, moving: NDArray, reference: NDArray | None) -> NDArray:
+    # Interpolation names, as ANTs calls them.
+    _ANTS_INTERPOLATION = {
+        "linear": "linear",
+        "nearest": "nearestneighbor",
+        "nearestneighbor": "nearestneighbor",  # ANTs' own spelling
+    }
+
+    def _apply_ants(
+        self, moving: NDArray, reference: NDArray | None, interpolation: str = "linear"
+    ) -> NDArray:
         """Apply transform using ANTs."""
         try:
             import ants
@@ -473,7 +487,16 @@ class Transform:
         transform_ants = self.invert().to_ants()
 
         # Apply
-        result_ants = transform_ants.apply_to_image(moving_ants, reference=reference_ants)
+        if interpolation not in self._ANTS_INTERPOLATION:
+            raise ValueError(
+                f"interpolation must be one of {sorted(self._ANTS_INTERPOLATION)}, got "
+                f"{interpolation!r}"
+            )
+        result_ants = transform_ants.apply_to_image(
+            moving_ants,
+            reference=reference_ants,
+            interpolation=self._ANTS_INTERPOLATION[interpolation],
+        )
 
         return result_ants.numpy()
 

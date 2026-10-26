@@ -1024,3 +1024,31 @@ def test_a_wrong_output_is_caught(structured_plate, tmp_path):
         position.data[0, gfp] = np.roll(np.asarray(position.data[0, gfp]), 5, axis=-1)
     check = check_applied(out, moving, config, reference)
     assert check["transformed"]["GFP"]["relative_error"] > 0.1
+
+
+def test_nearest_interpolation_writes_only_input_values(structured_plate, tmp_path):
+    # --interpolation nearest passed 'nearest' to ANTs, which only knows
+    # 'nearestneighbor', and every apply raised.
+    position, data = structured_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(matrix=_translation(0, 1.4, -2.3))],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+    apply_transform(
+        [position],
+        config,
+        output,
+        keep_overhang=True,
+        cluster="debug",
+        interpolation="nearest",
+    )
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        written = np.asarray(out.data)[0, out.channel_names.index("GFP")]
+    inside = written[2:-2, 4:-4, 4:-4]
+    assert np.isin(inside, data[0, 0]).all()  # no blend of neighbours: input values only
