@@ -14,7 +14,7 @@ from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimationError
-from biahub.registration.evaluate import _mutual_nearest, detect_nuclei
+from biahub.registration.evaluate import detect_nuclei, mutual_nearest
 from biahub.registration.methods.vote_icp import fit_model
 from biahub.settings import NucleiSettings
 
@@ -69,7 +69,7 @@ class NucleiEstimator:
         mov_um, ref_um = mov_pts * self.mov_um, ref_pts * self.ref_um
         for radius in self.settings.match_radii_um:
             mapped_um = current.apply_points(mov_pts) * self.ref_um
-            i, j = _mutual_nearest(mapped_um[:, 1:], ref_um[:, 1:], radius)
+            i, j = mutual_nearest(mapped_um[:, 1:], ref_um[:, 1:], radius)
             if len(i) < need:
                 raise EstimationError(
                     f"nuclei: {len(i)} pairs within {radius} µm (need {need}); if the "

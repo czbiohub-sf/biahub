@@ -17,6 +17,7 @@ from biahub.cli.parsing import (
     config_filepath,
     moving_position_dirpaths,
     output_filepath,
+    position_key,
     reference_position_dirpaths,
 )
 from biahub.registration.evaluate import block_candidates, evaluate_candidates
@@ -81,7 +82,7 @@ def evaluate_transform(
     tables from several runs can be joined.
     """
     transforms = load_transform_settings(transforms_filepath)
-    keys = ["/".join(Path(p).parts[-3:]) for p in moving_position_dirpaths]
+    keys = [position_key(p) for p in moving_position_dirpaths]
     # positions the file has no list for (held out from a per-position estimate): each
     # estimated position's transform is a candidate there, named after it
     held_out = transforms.per_position and not set(keys) <= set(transforms.positions)

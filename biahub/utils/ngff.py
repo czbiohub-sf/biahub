@@ -129,3 +129,8 @@ def append_channels(input_data_path: Path, target_data_path: Path) -> None:
                 position["0"][:, num_channels + i + 1] = appending_dataset[str(name)][0][:, i]
         dataset.print_tree()
     appending_dataset.close()
+
+
+def is_unwritten(position) -> bool:
+    """Whether an open position's image array has no stored chunks (never written)."""
+    return position.data.native.nchunks_initialized == 0

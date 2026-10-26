@@ -48,7 +48,7 @@ from biahub.registration.utils import (
 from biahub.settings import TransformSettings, load_transform_settings
 from biahub.utils.array_ops import copy_n_paste_czyx
 from biahub.utils.cluster import echo_resources, estimate_resources, get_submitit_cluster
-from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
+from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, is_unwritten, resolve_ome_zarr_version
 
 Slices = tuple[slice, slice, slice]
 
@@ -315,7 +315,7 @@ def apply_transform(
     empty_inputs = set()
     for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
         with open_ome_zarr(moving_path, mode="r") as moving:
-            if moving.data.native.nchunks_initialized == 0:
+            if is_unwritten(moving):
                 empty_inputs.add(key)
                 click.echo(
                     f"{key}: the moving input is empty (never written): written as zeros"
@@ -642,10 +642,6 @@ def apply_transform_cli(
     )
 
 
-if __name__ == "__main__":
-    apply_transform_cli()
-
-
 def check_applied(
     output_position,
     moving_position,
@@ -666,7 +662,7 @@ def check_applied(
     from biahub.registration.evaluate import coverage
 
     settings = load_transform_settings(transforms_filepath)
-    key = "/".join(Path(moving_position).parts[-3:])
+    key = position_key(moving_position)
     transform = settings.transform_for(t, key if settings.per_position else None)
     with open_ome_zarr(output_position, mode="r") as out:
         record = dict(out.zattrs["biahub-apply-transform"])
@@ -703,3 +699,7 @@ def check_applied(
     first = record["channels_transformed"][0] if record["channels_transformed"] else None
     result["coverage"] = float((written[first] != 0).mean()) if first else None
     return result
+
+
+if __name__ == "__main__":
+    apply_transform_cli()

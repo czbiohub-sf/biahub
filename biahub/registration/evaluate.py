@@ -21,7 +21,9 @@ from skimage import filters
 from skimage.registration import phase_cross_correlation
 
 from biahub.characterize_psf import detect_peaks
+from biahub.cli.parsing import position_key
 from biahub.core.transform import Transform
+from biahub.utils.ngff import is_unwritten
 
 # Fewer matched points than this do not constrain an affine residual (12 parameters,
 # fitted to noisy centres: DragonFly nuclei gave a scale of 0.86 from 8 points).
@@ -163,7 +165,7 @@ class Landmarks:
 MATCHING = {"beads": (1.0, "zyx"), "nuclei": (3.0, "yx")}
 
 
-def _mutual_nearest(
+def mutual_nearest(
     a_um: np.ndarray, b_um: np.ndarray, radius: float
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return indices (i, j) where a[i] and b[j] are each other's nearest, within `radius`."""
@@ -200,7 +202,7 @@ def point_residuals(
         radius = radius if max_distance_um is None else max_distance_um
         cols = slice(1, 3) if axes == "yx" else slice(0, 3)
         um = np.asarray(ref.voxel_um, float)
-        i, j = _mutual_nearest(
+        i, j = mutual_nearest(
             mapped[:, cols] * um[cols], ref.points_vox[:, cols] * um[cols], radius
         )
         matched_by = f"mutual nearest within {radius} um ({axes})"
@@ -781,9 +783,9 @@ def survey_positions(
 
     rows = []
     for path in position_dirpaths:
-        row = {"position": "/".join(Path(path).parts[-3:]), "empty": False}
+        row = {"position": position_key(path), "empty": False}
         with open_ome_zarr(path, mode="r") as position:
-            if position.data.native.nchunks_initialized == 0:
+            if is_unwritten(position):
                 rows.append({**row, "empty": True})
                 continue
             index = [position.channel_names.index(c) for c in channels]
@@ -873,7 +875,7 @@ def evaluate_candidates(
 
     rows = []
     for mov_path, ref_path in position_pairs:
-        key = "/".join(Path(mov_path).parts[-3:])
+        key = position_key(mov_path)
         with open_ome_zarr(mov_path, mode="r") as m, open_ome_zarr(ref_path, mode="r") as r:
             mov = np.asarray(m.data[t, m.channel_names.index(moving_channel)], np.float32)
             t_ref = t if reference_t is None else reference_t
