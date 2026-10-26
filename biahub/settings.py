@@ -159,7 +159,7 @@ class HoctConfig(MyBaseModel):
         if solver.get("solver_preference") is not None:
             raise ValueError(
                 "hoct_config.solver.solver_preference is not supported by the pinned "
-                "tracksdata, which uses Gurobi when licensed and SCIP otherwise."
+                "tracksdata, which picks Gurobi or SCIP itself (see ilpy's Preference.Any)."
             )
         return solver
 
@@ -169,7 +169,7 @@ class TrackastraConfig(MyBaseModel):
 
     ``model`` is a pretrained name (``general_2d``, ``ctc``) or a path to a trained
     model folder. ``mode`` links greedily (``greedy``, or ``greedy_nodiv`` without
-    divisions) or with an ILP (``ilp``, via motile: Gurobi when licensed, else SCIP).
+    divisions) or with an ILP (``ilp``, via motile and ilpy: Gurobi with a full licence, else SCIP).
     The model predicts in pixel space and needs no distance settings.
     """
 

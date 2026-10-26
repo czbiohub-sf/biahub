@@ -71,10 +71,13 @@ precision / recall). 2026_04_21: 5 DENV FOVs, 38 divisions from mitosis labels.
 
 ## Known pitfalls
 
-- **ILP solver**: tracksdata, HOCT and Trackastra's `ilp` mode use Gurobi when a licence is
-  available, otherwise SCIP. Personal Gurobi licences do not work on the GPU nodes; the log
-  shows `Solver failed with Gurobi, trying Scip.` That is expected, not an error; SCIP is
-  slower (tracksdata: ~14 min for 4 A549 FOVs).
+- **ILP solver**: Gurobi is optional; nothing fails without a licence. ultrack uses Gurobi
+  when licensed (Biohub users: `~/gurobi.lic` with `TOKENSERVER=license01.czbiohub.org`),
+  otherwise CBC. tracksdata, HOCT and Trackastra's `ilp` mode solve through ilpy, which uses
+  SCIP even with the Biohub token-server licence: ilpy reads `LicenseID == 0` as gurobipy's
+  size-limited pip licence, and token-server licences also report 0. The log then shows
+  `Solver failed with Gurobi, trying Scip.` That is expected, not an error; SCIP is slower
+  (tracksdata: ~14 min for 4 A549 FOVs). Trackastra's default `greedy` mode needs no solver.
 - **Model weights** download on first use: `--init` fetches them once (HOCT to its pooch
   cache, Trackastra to `~/.local/share/trackastra/models`). A worker without network needs
   them cached first.

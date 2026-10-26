@@ -83,7 +83,7 @@ Show: the plate and positions (with conditions), the trackers and their non-defa
 settings and `output_label`s (the label images that will be added to the plate), whether
 the positions need segmenting first, the run directory, cost (one job per tracker;
 ~10-15 min per A549 FOV when track still ran cellpose, less now; tracksdata and HOCT
-solve with SCIP on the GPU nodes, see `references/trackers.md`), and whether annotations
+solve with SCIP, see `references/trackers.md`), and whether annotations
 exist for scoring. Wait for a go.
 
 ## 6. Scaffold and launch
