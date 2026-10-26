@@ -122,3 +122,14 @@ def test_nuclei_is_a_method_and_a_block():
     assert single.effective_score_metric == "correlation"
     stack = settings([{"phase-cross-corr": {}}, {"nuclei": {"match_radii_um": [4.0, 1.5]}}])
     assert stack.stack_settings()[1].nuclei.match_radii_um == [4.0, 1.5]
+
+
+def test_nuclei_on_a_single_slice():
+    # One slice has no depth profile: every nucleus was skipped and the method failed.
+    truth = _forward(shift_vox=(0.0, 15.0, -10.0))
+    mov, ref = _pair(truth)
+    mov, ref = mov[12:13], ref[12:13]
+    found = _estimator().estimate(mov, ref, seed=Transform.identity(3))
+    probe = np.array([[0, 60, 60], [0, 450, 450], [0, 256, 256]])
+    err = (found.apply_points(probe) - truth.apply_points(probe))[:, 1:] * np.asarray(UM[1:])
+    assert np.abs(err).max() < 0.3

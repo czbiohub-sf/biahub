@@ -288,6 +288,9 @@ def detect_nuclei(
         y0, x0, y1, x1 = region.bbox
         if y0 == 0 or x0 == 0 or y1 == mip.shape[0] or x1 == mip.shape[1]:
             continue  # cut by the frame: its centre is not its centre
+        if vol.shape[0] == 1:  # a single slice: no depth to measure, z is that slice
+            points.append((0.0, *region.centroid))
+            continue
         profile = vol[:, y0:y1, x0:x1][:, region.image].mean(axis=1) - background
         profile = profile - profile.min()
         if not np.isfinite(profile).all() or profile.max() <= 0:
