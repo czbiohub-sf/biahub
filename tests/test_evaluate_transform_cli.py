@@ -126,3 +126,38 @@ def test_block_candidates_read_only_the_current_runs_layout(tmp_path):
     )
     (run / "run.json").write_text(json.dumps({"positions": ["A/1/0"]}))
     assert set(block_candidates(run)) == {"1:a"}
+
+
+def test_bead_landmarks_take_the_runs_detection_threshold(tmp_path):
+    # --landmarks beads crashed: bead detection needs a threshold. It comes from the run's
+    # own settings (what the estimate detected beads with), or --bead-threshold.
+    from scipy.ndimage import shift as ndi_shift
+
+    from tests.test_estimate_transform import (
+        APPLIED_SHIFT_ZYX,
+        SHAPE,
+        _run,
+        _synthetic_bead_volume,
+        _write_config,
+        _write_plate,
+    )
+
+    ref = _synthetic_bead_volume(np.random.default_rng(11), SHAPE)
+    mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
+    plate = _write_plate(tmp_path / "beads.zarr", [(ref, mov)])
+    output = tmp_path / "out" / "transforms.yml"
+    _run(plate, _write_config(tmp_path), output)
+
+    table = tmp_path / "evaluation.csv"
+    args = ["evaluate-transform", "-m", str(plate), "-r", str(plate), "-c", str(output)]
+    args += ["-o", str(table), "--tile-px", "32", "--landmarks", "beads"]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    final = [r for r in _rows(table) if r["candidate"] == "transforms"][0]
+    assert int(final["points_n"]) > 5 and float(final["points_median_um"]) < 1.0
+
+    # no run folder and no threshold: say what is missing
+    bare = tmp_path / "bare.yml"
+    bare.write_text(output.read_text())
+    result = CliRunner().invoke(cli, args[:6] + [str(bare)] + args[7:])
+    assert result.exit_code != 0 and "--bead-threshold" in result.output

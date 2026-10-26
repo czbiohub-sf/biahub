@@ -30,6 +30,35 @@ def _file_candidate(transforms, position_keys: list[str], t: int) -> dict:
     return {t: transforms.transform_for(t)}
 
 
+def _bead_detection(run_dir: Path, threshold: float | None) -> dict:
+    """Return bead detection settings: `threshold` for both, else the estimate's own."""
+    if threshold is not None:
+        return {"threshold_abs": threshold}
+    from biahub.settings import load_estimate_transform_settings
+
+    settings_file = run_dir / "estimate_transform_settings.yml"
+    final = None
+    if settings_file.exists():
+        final = load_estimate_transform_settings(settings_file).stack_settings()[-1]
+    if final is None or final.beads is None:
+        raise click.UsageError(
+            "--landmarks beads needs --bead-threshold, or a run folder whose settings "
+            "detected beads"
+        )
+
+    def peaks(p):  # the estimate's detection, so the same beads are found
+        return {
+            "threshold_abs": p.threshold_abs,
+            "nms_distance": p.nms_distance,
+            "block_size": tuple(p.block_size),
+        }
+
+    return {
+        "moving": peaks(final.beads.source_peaks_settings),
+        "reference": peaks(final.beads.target_peaks_settings),
+    }
+
+
 def evaluate_transform(
     moving_position_dirpaths: list[Path],
     reference_position_dirpaths: list[Path],
@@ -42,6 +71,7 @@ def evaluate_transform(
     blocks: bool = True,
     figures: bool = False,
     tags: dict | None = None,
+    bead_threshold: float | None = None,
     **image_kwargs,
 ) -> list[dict]:
     """Evaluate a transforms file (and its stack's blocks) on positions; write the table.
@@ -71,6 +101,7 @@ def evaluate_transform(
             else:
                 candidates[name] = by_key
     output_filepath = Path(output_filepath)
+    detect_kwargs = _bead_detection(run_dir, bead_threshold) if landmarks == "beads" else None
     rows = evaluate_candidates(
         candidates,
         list(zip(moving_position_dirpaths, reference_position_dirpaths, strict=True)),
@@ -78,6 +109,7 @@ def evaluate_transform(
         reference_channel or transforms.reference_channel,
         t=t,
         landmarks=landmarks,
+        detect_kwargs=detect_kwargs,
         figures_dir=output_filepath.with_suffix("") if figures else None,
         **image_kwargs,
     )
@@ -133,6 +165,12 @@ def _parse_tags(tags) -> dict:
     help="Save a figure per candidate and position next to the table.",
 )
 @click.option(
+    "--bead-threshold",
+    type=float,
+    default=None,
+    help="With --landmarks beads: the detection threshold (default: the estimate's).",
+)
+@click.option(
     "--tag",
     "tags",
     multiple=True,
@@ -150,6 +188,7 @@ def evaluate_transform_cli(
     tile_px,
     no_blocks,
     figures,
+    bead_threshold,
     tags,
 ) -> None:
     """Evaluate a transforms file on positions: residuals in µm, against unregistered.
@@ -172,6 +211,7 @@ def evaluate_transform_cli(
         blocks=not no_blocks,
         figures=figures,
         tags=_parse_tags(tags),
+        bead_threshold=bead_threshold,
         tile_px=tile_px,
     )
     for row in rows:

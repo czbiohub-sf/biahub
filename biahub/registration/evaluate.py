@@ -598,7 +598,11 @@ def _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs) -> tuple | No
         )
     detect = LANDMARK_DETECTORS[landmarks]
     kwargs = detect_kwargs or {}
-    return detect(mov, mov_um, **kwargs), detect(ref, ref_um, **kwargs)
+    # one set for both, or {"moving": {...}, "reference": {...}} (e.g. bead thresholds)
+    sides = kwargs if set(kwargs) <= {"moving", "reference"} and kwargs else None
+    mov_kwargs = sides.get("moving", {}) if sides else kwargs
+    ref_kwargs = sides.get("reference", {}) if sides else kwargs
+    return detect(mov, mov_um, **mov_kwargs), detect(ref, ref_um, **ref_kwargs)
 
 
 def _z(points: dict | None, z_crops: dict | None, points_source: str | None) -> tuple:
