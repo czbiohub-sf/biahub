@@ -376,7 +376,7 @@ class LocalPCCEstimator:
             )
             if tiles["n_tiles"] < s.min_tiles:
                 raise EstimationError(
-                    f"local phase-cross-corr: {tiles['n_tiles']} tiles correlated (need {s.min_tiles}): too "
+                    f"local phase_cross_corr: {tiles['n_tiles']} tiles correlated (need {s.min_tiles}): too "
                     "little shared structure, or the seed is further off than a tile reaches"
                 )
             current = self._correct(current, tiles["residuals"])

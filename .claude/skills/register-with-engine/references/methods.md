@@ -7,8 +7,8 @@
 | fluorescence -> label-free registration on a beads well | `beads` | the default; graph matching on detected beads, optional spectral arm for large offsets |
 | registration without usable beads (e.g. fluorescence onto virtual staining) | `ants` | intensity-based; see "ANTs" below; `templates/estimate-transform-ants.yml` |
 | a single hand-picked registration | `manual` | napari point annotation on one timepoint (`time_indices: <t>`), applied to all; `templates/estimate-transform-manual.yml` |
-| stabilization of a channel over time (drift) | `phase-cross-corr` | translation only; crop with `center_crop_xy` |
-| stabilization of phase (focus z + stackreg yx) | `focus-finding` | what the A549 projects used (`label-free/2-stabilize`) |
+| stabilization of a channel over time (drift) | `phase_cross_corr` | translation only; crop with `center_crop_xy` |
+| stabilization of phase (focus z + stackreg yx) | `focus_finding` | what the A549 projects used (`label-free/2-stabilize`) |
 
 `reference.frame`: `cross` (another channel at the same timepoint: registration), `first`
 or `previous` (the channel's own first / previous frame with data: stabilization).
@@ -106,7 +106,7 @@ thread counts.
 After estimating, timepoints below the run's `median - 2*MAD` (and below `floor`), or below
 `hard_fail`, are flagged and re-estimated from other seeds (`fallback.repair`: neighbours,
 consensus, the seed). Repair is skipped for methods that ignore the seed
-(`phase-cross-corr`, `focus-finding`, `manual`).
+(`phase_cross_corr`, `focus_finding`, `manual`).
 
 The absolute values (`floor: 0.8`, `hard_fail: 0.4`) are tuned for the bead-overlap score;
 for correlation scores see "Judging the result" above.

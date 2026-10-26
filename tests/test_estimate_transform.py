@@ -74,7 +74,7 @@ def _write_config(
     source="GFP",
     target="Phase3D",
     reference="cross",
-    method="beads",
+    method="bead_matching",
     transform_type="euclidean",
     seed_from="input",
     **blocks,
@@ -82,9 +82,9 @@ def _write_config(
     peaks = DetectPeaksSettings(
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
-    if method == "beads":
+    if method == "bead_matching":
         blocks.setdefault(
-            "beads",
+            "bead_matching",
             BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
         )
     settings = EstimateTransformSettings(
@@ -424,13 +424,13 @@ def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
         tmp_path,
         source="GFP",
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(t_reference="first", center_crop_xy=[40, 40]),
     )
 
     _run(drifting_plate, config, output)
 
-    assert load_transform_settings(output).method == "phase-cross-corr"
+    assert load_transform_settings(output).method == "phase_cross_corr"
     for row, factor in zip(_inverse_translations(output), [0, 1, 2], strict=True):
         np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
 
@@ -455,7 +455,7 @@ def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_
         tmp_path,
         source="GFP",
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         # full extent: a centre crop lets beads drift out of the window and biases PCC
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
@@ -497,7 +497,7 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
         target_peaks_settings=peaks,
         qc_settings={"iterations": 2, "score_threshold": 0.4, "score_centroid_mask_radius": 1},
     )
-    config = _write_config(tmp_path, seed_from="previous_timepoint", beads=beads)
+    config = _write_config(tmp_path, seed_from="previous_timepoint", bead_matching=beads)
     output = tmp_path / "out" / "transforms.yml"
 
     _run(plate, config, output)
@@ -522,7 +522,7 @@ def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
         tmp_path,
         source="GFP",
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
     output = tmp_path / "out" / "transforms.yml"
@@ -584,8 +584,10 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
-        method="beads",
-        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        method="bead_matching",
+        bead_matching=BeadsMatchSettings(
+            source_peaks_settings=peaks, target_peaks_settings=peaks
+        ),
         score={"metric": "residual"},
     )
     config = tmp_path / "unified.yml"
@@ -595,7 +597,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
     _run(beads_plate, config, output)
 
     written = yaml_to_model(output, TransformSettings)
-    assert written.direction == "forward" and written.method == "beads"
+    assert written.direction == "forward" and written.method == "bead_matching"
     assert written.moving_channels == ["GFP"] and written.reference_channel == "Phase3D"
     assert [e.t for e in written.transforms] == [0, 1]
     for entry in written.transforms:  # forward: content moves by -APPLIED_SHIFT
@@ -618,8 +620,10 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
-        method="beads",
-        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        method="bead_matching",
+        bead_matching=BeadsMatchSettings(
+            source_peaks_settings=peaks, target_peaks_settings=peaks
+        ),
         fallback={
             "flag": {"k_mad": 2.0, "floor": 0.8, "hard_fail": 0.4},
             "repair": {"candidates": ["seed"]},
@@ -687,7 +691,7 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="Phase3D"),
         reference=ReferenceSettings(frame="first"),
-        method="focus-finding",
+        method="focus_finding",
         focus_finding=FocusSettings(axes="xyz", center_crop_xy=[48, 48]),
     )
     config = tmp_path / "unified.yml"
@@ -697,7 +701,7 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
     _run(defocusing_plate, config, output)
 
     written = yaml_to_model(output, TransformSettings)
-    assert written.method == "focus-finding" and written.reference_channel is None
+    assert written.method == "focus_finding" and written.reference_channel is None
     assert written.moving_channels == ["Phase3D"]
     for t, entry in enumerate(written.transforms):  # forward: undo the drift
         assert entry.t == t
@@ -721,12 +725,16 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
-        method="beads",
-        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        method="bead_matching",
+        bead_matching=BeadsMatchSettings(
+            source_peaks_settings=peaks, target_peaks_settings=peaks
+        ),
         fallback={
             "repair": None,
             "sweep": {
-                "grid": [{"beads.hungarian_match_settings.cost_threshold": [0.05, 0.2]}]
+                "grid": [
+                    {"bead_matching.hungarian_match_settings.cost_threshold": [0.05, 0.2]}
+                ]
             },
         },
     )
@@ -744,8 +752,8 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
     # A blank frame: both trials fail, each by name, and nothing is kept.
     assert swept["accepted"] is False
     assert set(swept["candidate_failures"]) == {
-        "beads.hungarian_match_settings.cost_threshold=0.05",
-        "beads.hungarian_match_settings.cost_threshold=0.2",
+        "bead_matching.hungarian_match_settings.cost_threshold=0.05",
+        "bead_matching.hungarian_match_settings.cost_threshold=0.2",
     }
     assert report["provenance"] == {}
     assert (output.with_suffix("") / "sweeps" / "2.json").exists()
@@ -772,7 +780,7 @@ def test_an_ants_estimate_is_sized_for_its_measured_peak_memory():
 
     cpus, gb_ram_per_cpu = _estimate_job_resources("ants", (66, 2048, 2048))
     assert cpus * gb_ram_per_cpu >= 1.25 * 22.6
-    beads_cpus, beads_gb = _estimate_job_resources("beads", (66, 2048, 2048))
+    beads_cpus, beads_gb = _estimate_job_resources("bead_matching", (66, 2048, 2048))
     assert beads_cpus * beads_gb < cpus * gb_ram_per_cpu  # beads keeps its smaller footprint
 
 
@@ -899,7 +907,9 @@ def test_repair_and_sweep_reports_get_the_score_to_compare_with_unregistered(
         tmp_path,
         score={"report": ["correlation"]},
         fallback={
-            "sweep": {"grid": [{"beads.hungarian_match_settings.cost_threshold": [0.05]}]}
+            "sweep": {
+                "grid": [{"bead_matching.hungarian_match_settings.cost_threshold": [0.05]}]
+            }
         },
     )
     run = tmp_path / "run"

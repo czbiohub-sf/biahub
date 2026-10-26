@@ -425,7 +425,7 @@ def estimate_transform_cli(
     \b
     Registration (moving channel onto the reference channel):
     >>> biahub estimate-transform -m moving.zarr/0/0/0 -r reference.zarr/0/0/0 \\
-        -c estimate-transform-beads.yml -o ./transforms.yml
+        -c estimate-transform-bead_matching.yml -o ./transforms.yml
 
     \b
     Stabilization (a channel onto its own first / previous timepoint):

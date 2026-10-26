@@ -1106,18 +1106,32 @@ class NucleiSettings(MyBaseModel):
 
 
 EstimationMethod = Literal[
-    "beads", "ants", "phase-cross-corr", "manual", "focus-finding", "nuclei"
+    "bead_matching", "ants", "phase_cross_corr", "manual", "focus_finding", "nuclei_matching"
 ]
 # The settings block each method reads.
 METHOD_BLOCKS: dict[str, str] = {
-    "beads": "beads",
+    "bead_matching": "bead_matching",
     "ants": "ants",
-    "phase-cross-corr": "phase_cross_corr",
+    "phase_cross_corr": "phase_cross_corr",
     "manual": "manual",
-    "focus-finding": "focus_finding",
-    "nuclei": "nuclei",
+    "focus_finding": "focus_finding",
+    "nuclei_matching": "nuclei_matching",
 }
 TransformType = Literal["euclidean", "similarity", "affine"]
+
+
+# Method names as written before they followed the config's underscore style.
+RENAMED_METHODS = {
+    "beads": "bead_matching",
+    "nuclei": "nuclei_matching",
+    "phase-cross-corr": "phase_cross_corr",
+    "focus-finding": "focus_finding",
+}
+
+
+def _check_method_name(name):
+    if name in RENAMED_METHODS:
+        raise ValueError(f"method {name!r} is now {RENAMED_METHODS[name]!r}")
 
 
 def _named_method_block(item):
@@ -1129,6 +1143,7 @@ def _named_method_block(item):
             f"each block of a stack names one method, `- <method>: {{...}}`; got {item}"
         )
     ((method, body),) = item.items()
+    _check_method_name(method)
     body = dict(body or {})
     transform = body.pop("transform", None) or {}
     if set(transform) - {"type"}:
@@ -1179,11 +1194,11 @@ _METHOD_STACK = TypeAdapter(MethodStack)
 # method can work on a dataset (landmarks, or shared image structure); the estimate says
 # where it goes in a stack (translations make coarse first blocks).
 METHOD_FAMILIES: dict[str, tuple[str, str]] = {
-    "beads": ("landmark-based", "affine"),
-    "nuclei": ("landmark-based", "yx linear and a z shift"),
-    "phase-cross-corr": ("intensity-based", "translation; yx linear when local"),
+    "bead_matching": ("landmark-based", "affine"),
+    "nuclei_matching": ("landmark-based", "yx linear and a z shift"),
+    "phase_cross_corr": ("intensity-based", "translation; yx linear when local"),
     "ants": ("intensity-based", "linear (the transform type)"),
-    "focus-finding": ("intensity-based", "translation (z by focus, yx by stackreg)"),
+    "focus_finding": ("intensity-based", "translation (z by focus, yx by stackreg)"),
     "manual": ("interactive", "linear (clicked pairs)"),
 }
 
@@ -1221,12 +1236,12 @@ class ScoreSettings(MyBaseModel):
 
 
 DEFAULT_SCORE_METRIC: dict[str, str] = {
-    "beads": "overlap",
+    "bead_matching": "overlap",
     "ants": "correlation",
-    "phase-cross-corr": "correlation",
+    "phase_cross_corr": "correlation",
     "manual": "gradient_correlation",
-    "focus-finding": "correlation",
-    "nuclei": "correlation",
+    "focus_finding": "correlation",
+    "nuclei_matching": "correlation",
 }
 
 
@@ -1273,12 +1288,12 @@ class EstimateTransformSettings(MyBaseModel):
     # One method by name, or a stack of blocks run coarse to fine (each seeded by the one
     # before; the run's score judges every block's result).
     method: EstimationMethod | MethodStack
-    beads: BeadsMatchSettings | None = None
+    bead_matching: BeadsMatchSettings | None = None
     ants: AntsRegistrationSettings | None = None
     phase_cross_corr: PhaseCrossCorrSettings | None = None
     manual: ManualSettings | None = None
     focus_finding: FocusSettings | None = None
-    nuclei: NucleiSettings | None = None
+    nuclei_matching: NucleiSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     score: ScoreSettings = ScoreSettings()
@@ -1291,6 +1306,8 @@ class EstimateTransformSettings(MyBaseModel):
         # a name or a stack: check only the form given, so its errors are the only ones
         if isinstance(value, list) and not value:
             raise ValueError("a stack needs at least one block under method:")
+        if isinstance(value, str):
+            _check_method_name(value)
         adapter = _METHOD_STACK if isinstance(value, list) else _METHOD_NAME
         try:
             return adapter.validate_python(value)
@@ -1321,13 +1338,15 @@ class EstimateTransformSettings(MyBaseModel):
     def check_bead_report_metrics_have_beads(self) -> "EstimateTransformSettings":
         bead_metrics = [m for m in self.score.report if m not in INTENSITY_METRICS]
         where = "a final block" if self.is_stack else "method"
-        if bead_metrics and self.final_method != "beads":
+        if bead_metrics and self.final_method != "bead_matching":
             raise ValueError(
-                f"report metrics {bead_metrics} detect beads: they need {where} beads"
+                f"report metrics {bead_metrics} detect beads: they need {where} bead_matching"
             )
         metric = self.effective_score_metric
-        if metric not in INTENSITY_METRICS and self.final_method != "beads":
-            raise ValueError(f"score metric {metric!r} detects beads: it needs {where} beads")
+        if metric not in INTENSITY_METRICS and self.final_method != "bead_matching":
+            raise ValueError(
+                f"score metric {metric!r} detects beads: it needs {where} bead_matching"
+            )
         return self
 
     @model_validator(mode="after")
@@ -1343,12 +1362,12 @@ class EstimateTransformSettings(MyBaseModel):
     @model_validator(mode="after")
     def fill_method_block(self) -> "EstimateTransformSettings":
         defaults = {
-            "beads": ("beads", BeadsMatchSettings),
+            "bead_matching": ("bead_matching", BeadsMatchSettings),
             "ants": ("ants", AntsRegistrationSettings),
-            "phase-cross-corr": ("phase_cross_corr", PhaseCrossCorrSettings),
+            "phase_cross_corr": ("phase_cross_corr", PhaseCrossCorrSettings),
             "manual": ("manual", ManualSettings),
-            "focus-finding": ("focus_finding", FocusSettings),
-            "nuclei": ("nuclei", NucleiSettings),
+            "focus_finding": ("focus_finding", FocusSettings),
+            "nuclei_matching": ("nuclei_matching", NucleiSettings),
         }
         if self.is_stack:  # each block brings its own settings
             return self
@@ -1612,7 +1631,7 @@ class TransformSettings(MyBaseModel):
     direction: TransformDirection
     moving_channels: list[str]
     reference_channel: str | None = None  # None: stabilization onto the moving store's grid
-    method: str = "beads"
+    method: str = "bead_matching"
     # What the matrices are relative to: 'previous' means each was chained onto the first
     # frame (cumulative). None: not recorded (files written before this field).
     reference_frame: Literal["cross", "first", "previous"] | None = None

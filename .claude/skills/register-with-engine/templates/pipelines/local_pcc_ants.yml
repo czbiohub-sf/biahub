@@ -5,7 +5,7 @@
 moving: {channel: placeholder}
 reference: {frame: cross, channel: placeholder}
 method:
-  - phase-cross-corr: {local: {}}
+  - phase_cross_corr: {local: {}}
   - ants: {preprocess: [{clip_percentiles: {}}]}
 transform: {type: similarity}
 time_indices: 0

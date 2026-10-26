@@ -41,7 +41,11 @@ def _config(path, method):
         moving={"channel": "placeholder"},
         reference={"frame": "cross", "channel": "placeholder"},
         method=method,
-        **({"beads": BEADS_BLOCK["beads"]} if method == "beads" else {}),
+        **(
+            {"bead_matching": BEADS_BLOCK["bead_matching"]}
+            if method == "bead_matching"
+            else {}
+        ),
     )
     model_to_yaml(settings, path)
     return path.name
@@ -89,11 +93,11 @@ def test_the_benchmark_runs_every_pipeline_on_every_case_into_one_table(tmp_path
             }
         ],
         "pipelines": [
-            {"name": "beads", "config": _config(tmp_path / "beads.yml", "beads")},
+            {"name": "beads", "config": _config(tmp_path / "beads.yml", "bead_matching")},
             {
                 "name": "pcc_beads",
                 "config": _config(
-                    tmp_path / "stack.yml", [{"phase-cross-corr": {}}, BEADS_BLOCK]
+                    tmp_path / "stack.yml", [{"phase_cross_corr": {}}, BEADS_BLOCK]
                 ),
             },
         ],
@@ -117,7 +121,7 @@ def test_the_benchmark_runs_every_pipeline_on_every_case_into_one_table(tmp_path
     assert {r["position"] for r in rows} == {"A/1/1"}  # the held-out position
     assert {k for k in by if k[0] == "pcc_beads"} == {
         ("pcc_beads", c)
-        for c in ("unregistered", "transforms", "1:phase-cross-corr", "2:beads")
+        for c in ("unregistered", "transforms", "1:phase_cross_corr", "2:bead_matching")
     }
     assert ("beads", "transforms") in by and ("beads", "unregistered") in by
     tile = {k: float(r["tiles_median_um"]) for k, r in by.items() if r["tiles_median_um"]}
@@ -154,7 +158,7 @@ def test_resume_reuses_unchanged_runs_and_an_edited_config_reestimates(tmp_path)
     # A plain -resume reran every estimate (its config was rewritten at launch) yet kept
     # the old evaluation (keyed on the path); an edited config failed the whole run.
     plate = _plate(tmp_path)
-    beads = _config(tmp_path / "beads.yml", "beads")
+    beads = _config(tmp_path / "beads.yml", "bead_matching")
     _one_case_spec(tmp_path, plate, [{"name": "beads", "config": beads}])
     output = tmp_path / "out"
     _workflow(tmp_path, output)
@@ -173,7 +177,7 @@ def test_resume_reuses_unchanged_runs_and_an_edited_config_reestimates(tmp_path)
 
 def test_one_failing_pipeline_does_not_stop_the_others(tmp_path):
     plate = _plate(tmp_path)
-    beads = _config(tmp_path / "beads.yml", "beads")
+    beads = _config(tmp_path / "beads.yml", "bead_matching")
     broken = tmp_path / "broken.yml"
     broken.write_text(yaml.safe_dump({"moving": {"channel": "x"}, "method": "no-such-method"}))
     _one_case_spec(
@@ -199,7 +203,7 @@ def test_a_stabilization_case_needs_no_reference(tmp_path):
             {
                 "moving": {"channel": "placeholder"},
                 "reference": {"frame": "cross", "channel": "placeholder"},
-                "method": "phase-cross-corr",
+                "method": "phase_cross_corr",
                 "transform": {"type": "euclidean"},
                 "fallback": {"repair": None},
             }

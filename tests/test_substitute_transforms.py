@@ -21,7 +21,7 @@ def _beads(n_t=4, **kw):
         direction="forward",
         moving_channels=["GFP"],
         reference_channel="Phase3D",
-        method="beads",
+        method="bead_matching",
         transforms=[TransformEntry(t=t, matrix=_shift(t), score=0.8) for t in range(n_t)],
         **kw,
     )
@@ -46,7 +46,9 @@ def test_a_single_timepoint_run_replaces_only_its_timepoint():
     entry = combined.transforms[2]
     assert entry.t == 2 and entry.method == "manual" and entry.score is None
     assert combined.transforms[1].method is None  # still the file's method (beads)
-    assert log == ["transforms t=2: beads (score 0.8) -> manual (score n/a) from manual.yml"]
+    assert log == [
+        "transforms t=2: bead_matching (score 0.8) -> manual (score n/a) from manual.yml"
+    ]
 
 
 def test_a_substituted_entry_keeps_its_status():
@@ -101,7 +103,7 @@ def test_substitution_refuses_what_it_cannot_place():
     no_timepoint.transforms[0].estimated_at = None
     with pytest.raises(Exception, match="which timepoint it replaces"):
         substitute_transforms(_beads(), [("x.yml", no_timepoint)])
-    series_wide = _single(0, 1.0, method="beads")
+    series_wide = _single(0, 1.0, method="bead_matching")
     with pytest.raises(Exception, match="no per-timepoint entry"):
         substitute_transforms(series_wide, [("x.yml", _single(0, 2.0))])
 
@@ -111,7 +113,7 @@ def test_a_per_position_base_takes_a_shared_substitute_on_the_named_positions():
         direction="forward",
         moving_channels=["GFP"],
         reference_channel="Phase3D",
-        method="beads",
+        method="bead_matching",
         positions={
             key: [TransformEntry(t=t, matrix=_shift(t)) for t in range(3)]
             for key in ("0/2/000", "0/2/001")
@@ -151,7 +153,7 @@ def test_substitute_transforms_cli_writes_the_combined_file(tmp_path):
     assert result.exit_code == 0, result.output
     final = load_transform_settings(output)
     assert [e.method for e in final.transforms] == [None, None, "manual", "ants"]
-    assert "t=3: beads (score 0.8) -> ants" in result.output
+    assert "t=3: bead_matching (score 0.8) -> ants" in result.output
     assert load_transform_settings(tmp_path / "beads.yml").transforms[2].matrix == _shift(2)
 
 
@@ -190,7 +192,7 @@ def test_a_selected_position_missing_from_a_substitute_is_named():
         direction="forward",
         moving_channels=["GFP"],
         reference_channel="Phase3D",
-        method="beads",
+        method="bead_matching",
         positions={k: [TransformEntry(t=0, matrix=_shift(0))] for k in ("A/1/0", "A/1/1")},
     )
     sub = TransformSettings(

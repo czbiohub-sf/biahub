@@ -37,13 +37,13 @@ def test_estimate_registration_converts_to_a_cross_reference_estimate():
     unified, notes = convert_settings(legacy)
     assert isinstance(unified, EstimateTransformSettings)
     assert unified.reference.frame == "cross" and unified.reference.channel == "Phase3D"
-    assert unified.moving.channel == "GFP" and unified.method == "beads"
+    assert unified.moving.channel == "GFP" and unified.method == "bead_matching"
     assert (
         unified.transform.seed == INVERSE.tolist()
         and unified.transform.seed_direction == "inverse"
     )
     assert unified.transform.type == "affine" and unified.time_indices == [0, 5]
-    assert unified.beads is not None
+    assert unified.bead_matching is not None
     # legacy use_prev_t_transform (default true) is propagation, no longer dropped
     assert unified.transform.seed_from == "previous_timepoint"
     assert not any("use_prev_t_transform" in n for n in notes)
@@ -61,7 +61,7 @@ def test_same_channel_estimate_registration_stays_a_cross_registration():
     # Legacy estimate-registration read GFP from the source store and GFP from the target
     # store: a cross-store registration, not stabilization against itself.
     assert unified.reference.frame == "cross" and unified.reference.channel == "GFP"
-    assert unified.method == "phase-cross-corr"
+    assert unified.method == "phase_cross_corr"
     assert any("kept as a cross-store registration" in n for n in notes)
 
 
@@ -77,7 +77,7 @@ def test_focus_finding_stabilization_converts_type_to_axes(stabilization_type):
         affine_transform_settings={"use_prev_t_transform": False},
     )
     unified, notes = convert_settings(legacy)
-    assert unified.method == "focus-finding" and unified.reference.frame == "previous"
+    assert unified.method == "focus_finding" and unified.reference.frame == "previous"
     assert unified.focus_finding.axes == stabilization_type
     assert unified.focus_finding.center_crop_xy == [600, 500]
     assert notes == []
@@ -114,7 +114,7 @@ def test_stabilize_config_converts_to_a_self_grid_series():
     unified, _ = convert_settings(legacy)
     assert unified.direction == "inverse" and unified.timepoints() == [0, 1, 2]
     assert unified.moving_channels == ["GFP", "Phase3D"] and unified.reference_channel is None
-    assert unified.method == "phase-cross-corr" and unified.voxel_size == [1, 1, 2, 0.5, 0.5]
+    assert unified.method == "phase_cross_corr" and unified.voxel_size == [1, 1, 2, 0.5, 0.5]
 
 
 def test_convert_settings_cli_writes_a_config_the_strict_loaders_accept(tmp_path):

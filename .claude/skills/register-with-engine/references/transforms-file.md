@@ -19,7 +19,7 @@ the old name `pull` load as `inverse`.
 
 ```yaml
 direction: forward
-method: beads
+method: bead_matching
 moving_channels: [mCherry EX561 EM600-37]   # the estimation channel
 reference_channel: Phase3D                   # null for stabilization
 reference_frame: cross                       # cross | first | previous (previous: chained

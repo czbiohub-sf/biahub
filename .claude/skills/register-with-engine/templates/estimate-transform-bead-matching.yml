@@ -10,8 +10,8 @@ moving:
 reference:
   frame: cross
   channel: Phase3D
-method: beads
-beads:
+method: bead_matching
+bead_matching:
   algorithm: hungarian
   source_peaks_settings:
     threshold_abs: 110.0

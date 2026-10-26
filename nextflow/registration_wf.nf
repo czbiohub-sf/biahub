@@ -12,7 +12,7 @@
 //   # registration: estimate on the beads well, apply to every position
 //   nextflow run registration_wf.nf -profile slurm \
 //       --moving <deskewed.zarr> --reference <reconstructed.zarr> \
-//       --estimate_config estimate-transform-beads.yml --estimate_positions 'C/1/000000' \
+//       --estimate_config estimate-transform-bead_matching.yml --estimate_positions 'C/1/000000' \
 //       --apply --output <dir> -resume
 //
 //   # stabilization: one transform list per position, applied to the same positions

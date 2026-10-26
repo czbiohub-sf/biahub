@@ -66,11 +66,13 @@ def test_each_block_of_a_stack_run_is_a_candidate(tmp_path):
     mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
     plate = _write_plate(tmp_path / "beads.zarr", [(ref, mov), (ref, mov)])
     config = tmp_path / "stack.yml"
-    model_to_yaml(_settings([{"phase-cross-corr": {}}, BEADS_BLOCK]), config)
+    model_to_yaml(_settings([{"phase_cross_corr": {}}, BEADS_BLOCK]), config)
     output = tmp_path / "out" / "transforms.yml"
     _run(plate, config, output)
 
     candidates = block_candidates(output.with_suffix(""))
-    assert set(candidates) == {"1:phase-cross-corr", "2:beads"}
+    assert set(candidates) == {"1:phase_cross_corr", "2:bead_matching"}
     record = json.loads((output.with_suffix("") / "timepoints" / "1.json").read_text())
-    np.testing.assert_allclose(candidates["2:beads"][1].matrix, record["blocks"][1]["matrix"])
+    np.testing.assert_allclose(
+        candidates["2:bead_matching"][1].matrix, record["blocks"][1]["matrix"]
+    )

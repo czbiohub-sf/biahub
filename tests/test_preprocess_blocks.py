@@ -175,7 +175,9 @@ def test_the_method_gets_prepared_volumes_and_masks_and_keeps_its_interface():
     assert (wrapped.uses_seed, wrapped.last_winner) == (True, "hungarian")
 
 
-@pytest.mark.parametrize("method", ["beads", "phase-cross-corr", "focus-finding", "manual"])
+@pytest.mark.parametrize(
+    "method", ["bead_matching", "phase_cross_corr", "focus_finding", "manual"]
+)
 def test_mask_blocks_are_refused_for_methods_that_cannot_use_them(method, tmp_path):
     from biahub.settings import EstimateTransformSettings
 
@@ -236,8 +238,10 @@ def test_a_methods_own_score_judges_the_raw_volumes(monkeypatch):
     settings = EstimateTransformSettings(
         moving={"channel": "GFP"},
         reference={"frame": "cross", "channel": "Phase3D"},
-        method="beads",
-        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        method="bead_matching",
+        bead_matching=BeadsMatchSettings(
+            source_peaks_settings=peaks, target_peaks_settings=peaks
+        ),
         preprocess=[{"clip_percentiles": {"low": 0, "high": 99.9}}],
     )
     estimator, _score, _seed = engine.build_estimator(settings, (32, 48, 48))

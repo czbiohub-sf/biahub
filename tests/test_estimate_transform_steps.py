@@ -31,7 +31,7 @@ def beads_plate_with_a_blank_timepoint(tmp_path):
     return _write_plate(tmp_path / "beads_blank.zarr", [(ref, mov), (ref, mov), (ref, blank)])
 
 
-SWEEP = {"grid": [{"beads.hungarian_match_settings.cost_threshold": [0.05, 0.2]}]}
+SWEEP = {"grid": [{"bead_matching.hungarian_match_settings.cost_threshold": [0.05, 0.2]}]}
 
 
 def _cli(*args):
@@ -160,7 +160,7 @@ def test_the_steps_estimate_several_positions_each_on_its_own(tmp_path):
     config = _write_config(
         tmp_path,
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
     movings = [path / "A" / "1" / "0", path / "A" / "1" / "1"]

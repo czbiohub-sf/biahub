@@ -17,7 +17,7 @@ set -euo pipefail
 BIAHUB=/path/to/biahub            # checkout on main
 MOVING=/path/to/deskew.zarr/R/C/FOV                # light-sheet, beads well
 REFERENCE=/path/to/reconstruct.zarr/R/C/FOV        # phase, same well; leave empty to stabilize
-CONFIG=./estimate-transform-beads.yml
+CONFIG=./estimate-transform-bead_matching.yml
 OUTPUT=./transforms.yml
 SBATCH=""                         # optional sbatch file: `#SBATCH --time=...` for large volumes,
                                   # `#SBATCH --partition=...` (default: preempted)

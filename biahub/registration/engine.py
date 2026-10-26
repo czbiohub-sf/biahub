@@ -938,7 +938,7 @@ def _final(settings: EstimateTransformSettings) -> EstimateTransformSettings:
 
 def _metric_fn(settings: EstimateTransformSettings, metric: str, prepare=None) -> ScoreFn:
     """Return one metric as a score function; `prepare` runs after the warp (intensity only)."""
-    beads = _final(settings).beads  # a stack's bead settings are its final block's
+    beads = _final(settings).bead_matching  # a stack's bead settings: its final block's
     if metric == "overlap":
         return lambda transform, mov, ref: score_transform(transform, mov, ref, beads)
     if metric == "residual":
@@ -1042,29 +1042,29 @@ def build_estimator(
     method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn
     seed = _seed(settings)
     affine = _affine_settings(settings)
-    if settings.method == "beads":
+    if settings.method == "bead_matching":
         estimator: TransformEstimator = build_beads_estimator(
-            settings.beads, affine, score_fn=method_score
+            settings.bead_matching, affine, score_fn=method_score
         )
     elif settings.method == "ants":
         estimator = AntsEstimator.from_settings(
             settings.ants, affine, verbose=settings.verbose
         )
-    elif settings.method == "phase-cross-corr" and settings.phase_cross_corr.local:
+    elif settings.method == "phase_cross_corr" and settings.phase_cross_corr.local:
         estimator = LocalPCCEstimator(
             settings.phase_cross_corr.local,
             settings.transform.type,
             ref_voxel_size or (1.0, 1.0, 1.0),
         )
-    elif settings.method == "phase-cross-corr":
+    elif settings.method == "phase_cross_corr":
         estimator = PCCEstimator.from_settings(settings.phase_cross_corr, shape_zyx)
-    elif settings.method == "focus-finding":
+    elif settings.method == "focus_finding":
         estimator = FocusEstimator.from_settings(
             settings.focus_finding, pixel_size=(mov_voxel_size or (1.0, 1.0, 1.0))[-1]
         )
-    elif settings.method == "nuclei":
+    elif settings.method == "nuclei_matching":
         estimator = nuclei_estimator(
-            settings.nuclei,
+            settings.nuclei_matching,
             settings.transform.type,
             ref_voxel_size or (1.0, 1.0, 1.0),
             score_fn=method_score,
@@ -1094,11 +1094,11 @@ def _finite_or_none(value: float | None) -> float | None:
 def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
     """Continuous bead residuals next to the score, for the beads method."""
     final = _final(settings)
-    if final.method != "beads" or t not in result.transforms:
+    if final.method != "bead_matching" or t not in result.transforms:
         return None
     ref_t = np.asarray(_reference_policy(settings, ref).reference_for(mov, t))
     metrics = bead_alignment_metrics(
-        result.transforms[t], np.asarray(mov[t]), ref_t, final.beads
+        result.transforms[t], np.asarray(mov[t]), ref_t, final.bead_matching
     )
     return None if metrics is None else metrics.to_dict()
 

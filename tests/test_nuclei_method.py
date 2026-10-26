@@ -121,13 +121,13 @@ def test_nuclei_is_a_method_and_a_block_with_the_matchers_of_beads():
             method=method,
         )
 
-    single = settings("nuclei")
-    assert single.nuclei.algorithm == "hungarian"
+    single = settings("nuclei_matching")
+    assert single.nuclei_matching.algorithm == "hungarian"
     assert single.effective_score_metric == "correlation"
     stack = settings(
-        [{"phase-cross-corr": {"local": {}}}, {"nuclei": {"algorithm": "spectral"}}]
+        [{"phase_cross_corr": {"local": {}}}, {"nuclei_matching": {"algorithm": "spectral"}}]
     )
-    assert stack.stack_settings()[1].nuclei.algorithm == "spectral"
+    assert stack.stack_settings()[1].nuclei_matching.algorithm == "spectral"
 
 
 def test_nuclei_on_a_single_slice():

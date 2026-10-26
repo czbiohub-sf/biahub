@@ -41,7 +41,7 @@ def _bead_detection(run_dir: Path, threshold: float | None) -> dict:
     final = None
     if settings_file.exists():
         final = load_estimate_transform_settings(settings_file).stack_settings()[-1]
-    if final is None or final.beads is None:
+    if final is None or final.bead_matching is None:
         raise click.UsageError(
             "--landmarks beads needs --bead-threshold, or a run folder whose settings "
             "detected beads"
@@ -55,8 +55,8 @@ def _bead_detection(run_dir: Path, threshold: float | None) -> dict:
         }
 
     return {
-        "moving": peaks(final.beads.source_peaks_settings),
-        "reference": peaks(final.beads.target_peaks_settings),
+        "moving": peaks(final.bead_matching.source_peaks_settings),
+        "reference": peaks(final.bead_matching.target_peaks_settings),
     }
 
 

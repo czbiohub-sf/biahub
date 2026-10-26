@@ -4,8 +4,8 @@
 moving: {channel: placeholder}
 reference: {frame: cross, channel: placeholder}
 method:
-  - phase-cross-corr: {local: {}}
-  - nuclei: {}
+  - phase_cross_corr: {local: {}}
+  - nuclei_matching: {}
 transform: {type: similarity}
 time_indices: 0
 fallback: {repair: null}

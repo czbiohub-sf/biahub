@@ -2,7 +2,7 @@ direction: inverse
 moving_channels:
 - GFP
 reference_channel: null
-method: focus-finding
+method: focus_finding
 voxel_size:
 - 1.0
 - 1.0

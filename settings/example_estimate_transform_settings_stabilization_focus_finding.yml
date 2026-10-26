@@ -2,7 +2,7 @@ moving:
   channel: Phase3D
 reference:
   frame: first
-method: focus-finding
+method: focus_finding
 focus_finding:
   axes: xyz
   center_crop_xy:

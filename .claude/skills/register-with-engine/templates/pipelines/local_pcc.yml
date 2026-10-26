@@ -4,7 +4,7 @@
 moving: {channel: placeholder}
 reference: {frame: cross, channel: placeholder}
 method:
-  - phase-cross-corr: {local: {}}
+  - phase_cross_corr: {local: {}}
 transform: {type: similarity}
 time_indices: 0
 fallback: {repair: null}

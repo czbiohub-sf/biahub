@@ -21,7 +21,7 @@ def _settings(method="ants", **kwargs):
 
 def test_the_metric_defaults_to_the_methods_and_can_be_set():
     assert _settings("ants").effective_score_metric == "correlation"
-    assert _settings("beads").effective_score_metric == "overlap"
+    assert _settings("bead_matching").effective_score_metric == "overlap"
     chosen = _settings("ants", score={"metric": "mutual_information"})
     assert chosen.effective_score_metric == "mutual_information"
 
@@ -34,7 +34,11 @@ def test_the_old_score_metric_key_points_to_score_metric():
 @pytest.mark.parametrize(
     "method, score, message",
     [
-        ("beads", {"preprocess": [{"sobel": {}}]}, "intensity"),  # beads' overlap: raw beads
+        (
+            "bead_matching",
+            {"preprocess": [{"sobel": {}}]},
+            "intensity",
+        ),  # beads' overlap: raw beads
         ("ants", {"metric": "overlap", "preprocess": [{"sobel": {}}]}, "intensity"),
         (
             "ants",
@@ -90,7 +94,7 @@ def test_the_methods_blocks_do_not_change_the_score():
 
 def test_report_metrics_default_to_none_and_bead_metrics_need_beads():
     assert _settings("ants").score.report == []
-    _settings("beads", score={"report": ["overlap", "mutual_information"]})
+    _settings("bead_matching", score={"report": ["overlap", "mutual_information"]})
     with pytest.raises(ValidationError, match="bead"):
         _settings("ants", score={"report": ["overlap"]})
 

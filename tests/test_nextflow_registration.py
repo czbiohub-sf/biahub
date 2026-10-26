@@ -94,7 +94,7 @@ def _focus_config(tmp_path):
         EstimateTransformSettings(
             moving=ChannelSettings(channel="Phase3D"),
             reference=ReferenceSettings(frame="first"),
-            method="focus-finding",
+            method="focus_finding",
             focus_finding=FocusSettings(axes="xyz", center_crop_xy=[48, 48]),
         ),
         config,
@@ -134,17 +134,17 @@ CASES = {
         ),
         True,
     ),
-    "phase-cross-corr": (
+    "phase_cross_corr": (
         _drifting_plate,
         lambda tmp: _write_config(
             tmp,
             reference="first",
-            method="phase-cross-corr",
+            method="phase_cross_corr",
             phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
         ),
         False,
     ),
-    "focus-finding": (_write_defocusing_plate, _focus_config, False),
+    "focus_finding": (_write_defocusing_plate, _focus_config, False),
 }
 
 
@@ -216,7 +216,7 @@ def test_registration_nf_stabilizes_each_position_and_refuses_manual(tmp_path):
     config = _write_config(
         tmp_path,
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
     out = tmp_path / "run"

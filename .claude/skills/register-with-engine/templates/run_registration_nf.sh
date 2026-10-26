@@ -26,7 +26,7 @@ set -euo pipefail
 BIAHUB=/path/to/biahub                       # checkout on main
 MOVING=/path/to/deskew.zarr                  # plate with the moving channel (light-sheet)
 REFERENCE=/path/to/reconstruct.zarr          # plate with the reference (phase); empty to stabilize
-CONFIG=./estimate-transform-beads.yml        # estimate config; empty when TRANSFORMS is set
+CONFIG=./estimate-transform-bead_matching.yml        # estimate config; empty when TRANSFORMS is set
 ESTIMATE_POSITIONS='C/1/000000'              # beads well (one shared list) or '*/*/*' (one each)
 TRANSFORMS=""                                # apply this existing file instead of estimating
 APPLY=true                                   # apply after estimating

@@ -85,8 +85,8 @@ def test_local_is_an_option_of_phase_cross_corr():
             method=method,
         )
 
-    whole = settings("phase-cross-corr")
+    whole = settings("phase_cross_corr")
     assert whole.phase_cross_corr.local is None  # one translation, as before
-    stack = settings([{"phase-cross-corr": {"local": {"compare": "intensity"}}}, {"ants": {}}])
+    stack = settings([{"phase_cross_corr": {"local": {"compare": "intensity"}}}, {"ants": {}}])
     assert stack.stack_settings()[0].phase_cross_corr.local.compare == "intensity"
     assert stack.stack_settings()[0].phase_cross_corr.local.rounds == 2

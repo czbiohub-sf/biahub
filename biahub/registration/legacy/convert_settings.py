@@ -243,6 +243,14 @@ def _ants_blocks(legacy, notes: list[str]) -> list[dict]:
     return blocks
 
 
+# Retired method names -> the engine's.
+_UNIFIED_METHOD = {
+    "beads": "bead_matching",
+    "phase-cross-corr": "phase_cross_corr",
+    "focus-finding": "focus_finding",
+}
+
+
 def estimate_settings_from_legacy(
     legacy: EstimateRegistrationSettings | EstimateStabilizationSettings,
 ) -> tuple[EstimateTransformSettings, list[str]]:
@@ -284,8 +292,8 @@ def estimate_settings_from_legacy(
         settings = EstimateTransformSettings(
             moving=ChannelSettings(channel=legacy.source_channel_name),
             reference=ReferenceSettings(frame="cross", channel=legacy.target_channel_name),
-            method=legacy.estimation_method,
-            beads=legacy.beads_match_settings,
+            method=_UNIFIED_METHOD.get(legacy.estimation_method, legacy.estimation_method),
+            bead_matching=legacy.beads_match_settings,
             ants=AntsRegistrationSettings() if legacy.estimation_method == "ants" else None,
             preprocess=_ants_blocks(legacy, notes),
             # the legacy ANTs score compared Sobel edges when sobel_filter was on
@@ -353,8 +361,8 @@ def estimate_settings_from_legacy(
     settings = EstimateTransformSettings(
         moving=ChannelSettings(channel=legacy.stabilization_estimation_channel),
         reference=ReferenceSettings(frame=reference),
-        method=method,
-        beads=legacy.beads_match_settings,
+        method=_UNIFIED_METHOD.get(method, method),
+        bead_matching=legacy.beads_match_settings,
         phase_cross_corr=_unified_pcc(legacy.phase_cross_corr_settings, notes),
         focus_finding=focus_finding,
         transform=fit,
@@ -405,7 +413,7 @@ def transform_settings_from_legacy(
             {*legacy.stabilization_channels, legacy.stabilization_estimation_channel}
         ),
         reference_channel=None,
-        method=legacy.stabilization_method,
+        method=_UNIFIED_METHOD.get(legacy.stabilization_method, legacy.stabilization_method),
         voxel_size=list(legacy.output_voxel_size),
         transforms=[
             TransformEntry(t=t, matrix=matrix)

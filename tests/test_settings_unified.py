@@ -21,11 +21,11 @@ def test_cross_frame_needs_a_channel_and_self_frames_forbid_one():
     stabilization = EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="previous"),
-        method="phase-cross-corr",
+        method="phase_cross_corr",
     )
     assert stabilization.reference_channel == "GFP"
     assert stabilization.phase_cross_corr is not None, "the chosen method's block is filled in"
-    assert stabilization.beads is None
+    assert stabilization.bead_matching is None
     assert stabilization.effective_score_metric == "correlation"
 
 
@@ -33,7 +33,7 @@ def test_loader_reads_unified_configs_and_points_old_ones_at_convert_settings(tm
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
-        method="beads",
+        method="bead_matching",
         score={"metric": "residual"},
     )
     model_to_yaml(unified, tmp_path / "unified.yml")
@@ -70,7 +70,7 @@ def _beads_settings(sweep):
     return EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
-        method="beads",
+        method="bead_matching",
         fallback={"sweep": sweep},
     )
 
@@ -80,15 +80,15 @@ def test_sweep_trials_are_the_union_of_each_sub_grids_product():
         {
             "grid": [
                 {
-                    "beads.hungarian_match_settings.cost_threshold": [0.05, 0.1],
-                    "beads.hungarian_match_settings.cost_matrix_settings.weights.dist": [
+                    "bead_matching.hungarian_match_settings.cost_threshold": [0.05, 0.1],
+                    "bead_matching.hungarian_match_settings.cost_matrix_settings.weights.dist": [
                         0.25,
                         1.0,
                     ],
                 },
                 {
-                    "beads.algorithm": ["spectral"],
-                    "beads.spectral_match_settings.sigma": [1, 5],
+                    "bead_matching.algorithm": ["spectral"],
+                    "bead_matching.spectral_match_settings.sigma": [1, 5],
                 },
             ]
         }
@@ -97,16 +97,21 @@ def test_sweep_trials_are_the_union_of_each_sub_grids_product():
 
     assert len(trials) == 4 + 2
     trial = trials[
-        "beads.hungarian_match_settings.cost_threshold=0.05,"
-        "beads.hungarian_match_settings.cost_matrix_settings.weights.dist=1.0"
+        "bead_matching.hungarian_match_settings.cost_threshold=0.05,"
+        "bead_matching.hungarian_match_settings.cost_matrix_settings.weights.dist=1.0"
     ]
-    assert trial.beads.hungarian_match_settings.cost_threshold == 0.05
-    assert trial.beads.hungarian_match_settings.cost_matrix_settings.weights["dist"] == 1.0
+    assert trial.bead_matching.hungarian_match_settings.cost_threshold == 0.05
+    assert (
+        trial.bead_matching.hungarian_match_settings.cost_matrix_settings.weights["dist"]
+        == 1.0
+    )
     assert trial.fallback.sweep is None, "a trial does not sweep again"
-    spectral = trials["beads.algorithm=spectral,beads.spectral_match_settings.sigma=5"]
-    assert spectral.beads.algorithm == "spectral"
-    assert spectral.beads.spectral_match_settings.sigma == 5
-    assert settings.beads.algorithm == "hungarian", "the base settings are untouched"
+    spectral = trials[
+        "bead_matching.algorithm=spectral,bead_matching.spectral_match_settings.sigma=5"
+    ]
+    assert spectral.bead_matching.algorithm == "spectral"
+    assert spectral.bead_matching.spectral_match_settings.sigma == 5
+    assert settings.bead_matching.algorithm == "hungarian", "the base settings are untouched"
 
 
 def test_sweep_trials_revalidate_so_dependent_defaults_follow():
@@ -114,7 +119,7 @@ def test_sweep_trials_revalidate_so_dependent_defaults_follow():
         {
             "grid": [
                 {
-                    "beads.hungarian_match_settings.edge_graph_settings.method": [
+                    "bead_matching.hungarian_match_settings.edge_graph_settings.method": [
                         "full",
                         "radius",
                     ]
@@ -122,7 +127,9 @@ def test_sweep_trials_revalidate_so_dependent_defaults_follow():
             ]
         }
     ).sweep_trials()
-    graphs = [t.beads.hungarian_match_settings.edge_graph_settings for t in trials.values()]
+    graphs = [
+        t.bead_matching.hungarian_match_settings.edge_graph_settings for t in trials.values()
+    ]
     assert [(g.method, g.k, g.radius) for g in graphs] == [
         ("full", None, None),
         ("radius", None, 30.0),
@@ -133,7 +140,7 @@ def test_sweep_trials_revalidate_so_dependent_defaults_follow():
     "grid, message",
     [
         (
-            [{"beads.hungarian_match_settings.cost_treshold": [0.1]}],
+            [{"bead_matching.hungarian_match_settings.cost_treshold": [0.1]}],
             "no setting 'cost_treshold'",
         ),
         (
@@ -143,7 +150,7 @@ def test_sweep_trials_revalidate_so_dependent_defaults_follow():
         ([{"reference.frame": ["first"]}], "would be ignored"),
         ([{"score.metric": ["correlation"]}], "would be ignored"),
         ([{"transform.seed_from": ["previous_timepoint"]}], "would be ignored"),
-        ([{"beads.algorithm": []}], "each with values"),
+        ([{"bead_matching.algorithm": []}], "each with values"),
         ([], "at least 1 item"),
     ],
 )
@@ -157,7 +164,7 @@ def test_sweep_accepts_the_method_block_and_the_transform_type():
         {
             "grid": [
                 {
-                    "beads.hungarian_match_settings.cost_threshold": [0.05],
+                    "bead_matching.hungarian_match_settings.cost_threshold": [0.05],
                     "transform.type": ["affine"],
                 }
             ]
@@ -190,7 +197,7 @@ def test_time_indices_are_checked_when_the_config_is_read():
             reference=ReferenceSettings(
                 frame=kwargs.pop("frame", "cross"), channel=kwargs.pop("channel", "Phase3D")
             ),
-            method="phase-cross-corr",
+            method="phase_cross_corr",
             **kwargs,
         )
 
@@ -210,7 +217,7 @@ def test_the_unified_pcc_block_refuses_fields_the_engine_does_not_read():
         return EstimateTransformSettings(
             moving=ChannelSettings(channel="GFP"),
             reference=ReferenceSettings(frame="first"),
-            method="phase-cross-corr",
+            method="phase_cross_corr",
             phase_cross_corr=fields,
         )
 

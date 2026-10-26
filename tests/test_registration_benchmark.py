@@ -174,7 +174,13 @@ def test_every_pipeline_template_loads():
         Path(__file__).parents[1] / ".claude/skills/register-with-engine/templates/pipelines"
     )
     names = sorted(p.stem for p in folder.glob("*.yml"))
-    assert names == ["ants", "beads", "local_pcc", "local_pcc_ants", "local_pcc_nuclei"]
+    assert names == [
+        "ants",
+        "bead_matching",
+        "local_pcc",
+        "local_pcc_ants",
+        "local_pcc_nuclei_matching",
+    ]
     for path in folder.glob("*.yml"):
         EstimateTransformSettings(**yaml.safe_load(path.read_text()))
 

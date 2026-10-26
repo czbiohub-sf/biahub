@@ -2,7 +2,7 @@ moving:
   channel: Phase3D
 reference:
   frame: first
-method: phase-cross-corr
+method: phase_cross_corr
 phase_cross_corr:
   normalization: magnitude
   maximum_shift: 1.2

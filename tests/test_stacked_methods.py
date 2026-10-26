@@ -18,14 +18,14 @@ def _settings(method, **kwargs):
 
 
 PCC_THEN_ANTS = [
-    {"phase-cross-corr": {"preprocess": [{"clip_percentiles": {}}], "maximum_shift": 1.5}},
+    {"phase_cross_corr": {"preprocess": [{"clip_percentiles": {}}], "maximum_shift": 1.5}},
     {"ants": {"preprocess": [{"sobel": {}}], "transform": {"type": "similarity"}}},
 ]
 
 
 def test_a_stack_is_read_and_written_in_the_form_it_was_given(tmp_path):
     settings = _settings(PCC_THEN_ANTS)
-    assert settings.is_stack and settings.method_names == ["phase-cross-corr", "ants"]
+    assert settings.is_stack and settings.method_names == ["phase_cross_corr", "ants"]
     assert settings.final_method == "ants"
     first, second = settings.method
     assert [b.kind for b in first.preprocess] == ["clip_percentiles"]
@@ -33,7 +33,7 @@ def test_a_stack_is_read_and_written_in_the_form_it_was_given(tmp_path):
     path = tmp_path / "stack.yml"
     model_to_yaml(settings, path)
     assert yaml_to_model(path, EstimateTransformSettings) == settings
-    assert "phase-cross-corr" in path.read_text()  # still `- <method>: {...}`
+    assert "phase_cross_corr" in path.read_text()  # still `- <method>: {...}`
 
 
 def test_each_block_becomes_an_ordinary_single_method_config():
@@ -41,7 +41,7 @@ def test_each_block_becomes_an_ordinary_single_method_config():
         PCC_THEN_ANTS, transform={"type": "euclidean", "seed_from": "previous_timepoint"}
     )
     pcc, ants = settings.stack_settings()
-    assert (pcc.method, ants.method) == ("phase-cross-corr", "ants")
+    assert (pcc.method, ants.method) == ("phase_cross_corr", "ants")
     assert pcc.phase_cross_corr.maximum_shift == 1.5
     assert [b.kind for b in pcc.preprocess] == ["clip_percentiles"]
     assert [b.kind for b in ants.preprocess] == ["sobel"]
@@ -52,16 +52,16 @@ def test_each_block_becomes_an_ordinary_single_method_config():
 
 
 def test_the_same_method_can_appear_twice_with_its_own_settings():
-    loose = {"beads": {"hungarian_match_settings": {"cost_threshold": 0.2}}}
-    tight = {"beads": {"hungarian_match_settings": {"cost_threshold": 0.05}}}
+    loose = {"bead_matching": {"hungarian_match_settings": {"cost_threshold": 0.2}}}
+    tight = {"bead_matching": {"hungarian_match_settings": {"cost_threshold": 0.05}}}
     coarse, fine = _settings([loose, tight]).stack_settings()
-    assert coarse.beads.hungarian_match_settings.cost_threshold == 0.2
-    assert fine.beads.hungarian_match_settings.cost_threshold == 0.05
+    assert coarse.bead_matching.hungarian_match_settings.cost_threshold == 0.2
+    assert fine.bead_matching.hungarian_match_settings.cost_threshold == 0.05
 
 
 def test_the_default_score_is_the_final_blocks():
     assert _settings(PCC_THEN_ANTS).effective_score_metric == "correlation"
-    assert _settings([{"ants": {}}, {"beads": {}}]).effective_score_metric == "overlap"
+    assert _settings([{"ants": {}}, {"bead_matching": {}}]).effective_score_metric == "overlap"
 
 
 MASK = {"target": ["reference"], "radius": 0.9}
@@ -72,11 +72,11 @@ MASK = {"target": ["reference"], "radius": 0.9}
     [
         ([], {}, "at least one block"),
         ([{"elastix": {}}], {}, "elastix"),
-        ([{"ants": {}, "beads": {}}], {}, "one method"),
-        ([{"beads": {"no_such_setting": 1}}], {}, r"block 1 \(beads\)"),
+        ([{"ants": {}, "bead_matching": {}}], {}, "one method"),
+        ([{"bead_matching": {"no_such_setting": 1}}], {}, r"block 1 \(bead_matching\)"),
         # the existing checks hold per block
         (
-            [{"phase-cross-corr": {"preprocess": [{"mask_circle": MASK}]}}],
+            [{"phase_cross_corr": {"preprocess": [{"mask_circle": MASK}]}}],
             {},
             "mask blocks need",
         ),
@@ -119,7 +119,9 @@ def beads_plate(tmp_path):
 
 
 PEAKS = {"threshold_abs": 100, "nms_distance": 4, "min_distance": 0, "block_size": [8, 8, 8]}
-BEADS_BLOCK = {"beads": {"source_peaks_settings": PEAKS, "target_peaks_settings": PEAKS}}
+BEADS_BLOCK = {
+    "bead_matching": {"source_peaks_settings": PEAKS, "target_peaks_settings": PEAKS}
+}
 
 
 def test_a_stack_runs_its_blocks_in_order_each_from_the_one_before(monkeypatch):
@@ -159,7 +161,7 @@ def test_a_stack_estimates_end_to_end_and_names_its_blocks(beads_plate, tmp_path
 
     from tests.test_estimate_transform import APPLIED_SHIFT_ZYX, _inverse_translations, _run
 
-    settings = _settings([{"phase-cross-corr": {}}, BEADS_BLOCK])
+    settings = _settings([{"phase_cross_corr": {}}, BEADS_BLOCK])
     assert settings.effective_score_metric == "overlap"  # the final block's, beads
     config = tmp_path / "stack.yml"
     model_to_yaml(settings, config)
@@ -170,7 +172,7 @@ def test_a_stack_estimates_end_to_end_and_names_its_blocks(beads_plate, tmp_path
         np.testing.assert_allclose(row, APPLIED_SHIFT_ZYX, atol=0.5)
     from biahub.settings import load_transform_settings
 
-    assert load_transform_settings(output).method == "phase-cross-corr > beads"
+    assert load_transform_settings(output).method == "phase_cross_corr > bead_matching"
 
 
 def test_a_stack_plans_for_its_heaviest_and_interactive_blocks(beads_plate, tmp_path):
@@ -227,12 +229,12 @@ def test_a_stack_remembers_each_blocks_transform_score_and_the_winner():
     chain = ChainedEstimator(
         [_Fixed(coarse), _Fixed(fine), _Fixed(error="too few matches")],
         score_fn=lambda t, m, r: scores[id(t)],
-        names=["1:pcc", "2:ants", "3:beads"],
+        names=["1:pcc", "2:ants", "3:bead_matching"],
     )
     vol = np.zeros((4, 8, 8), np.float32)
     assert chain.estimate(vol, vol) is fine
     first, second, third = chain.last_stages
-    assert [s["block"] for s in chain.last_stages] == ["1:pcc", "2:ants", "3:beads"]
+    assert [s["block"] for s in chain.last_stages] == ["1:pcc", "2:ants", "3:bead_matching"]
     assert first["matrix"] == coarse.to_list() and first["score"] == 0.6
     assert (second["score"], second["won"], first["won"]) == (0.9, True, False)
     assert third["matrix"] is None and third["error"] == "too few matches"
@@ -258,19 +260,19 @@ def test_every_timepoint_records_its_blocks_and_the_report_sums_them(beads_plate
     from tests.test_estimate_transform import _run
 
     config = tmp_path / "stack.yml"
-    model_to_yaml(_settings([{"phase-cross-corr": {}}, BEADS_BLOCK]), config)
+    model_to_yaml(_settings([{"phase_cross_corr": {}}, BEADS_BLOCK]), config)
     output = tmp_path / "out" / "transforms.yml"
     _run(beads_plate, config, output)
 
     run = output.with_suffix("")
     record = json.loads((run / "timepoints" / "0.json").read_text())
     blocks = record["blocks"]
-    assert [b["block"] for b in blocks] == ["1:phase-cross-corr", "2:beads"]
+    assert [b["block"] for b in blocks] == ["1:phase_cross_corr", "2:bead_matching"]
     assert all(len(b["matrix"]) == 4 for b in blocks)
     assert sum(b["won"] for b in blocks) == 1
 
     summary = json.loads((run / "estimate_transform_report.json").read_text())["blocks"]
-    assert set(summary) == {"1:phase-cross-corr", "2:beads"}
+    assert set(summary) == {"1:phase_cross_corr", "2:bead_matching"}
     assert sum(s["won"] for s in summary.values()) == 2  # two timepoints, one winner each
     assert all("median_score" in s and "failed" in s for s in summary.values())
 
@@ -331,9 +333,9 @@ def test_bead_metrics_belong_to_the_run_and_need_a_final_beads_block():
     # The report and the score are the run's, computed by the final block: a stack ending
     # in beads may report bead metrics; one ending elsewhere may not score with them.
     stack = _settings(
-        [{"phase-cross-corr": {"local": {}}}, BEADS_BLOCK], score={"report": ["overlap"]}
+        [{"phase_cross_corr": {"local": {}}}, BEADS_BLOCK], score={"report": ["overlap"]}
     )
-    assert stack.stack_settings()[0].method == "phase-cross-corr"
+    assert stack.stack_settings()[0].method == "phase_cross_corr"
     with pytest.raises(ValidationError, match="final block"):
         _settings([BEADS_BLOCK, {"ants": {}}], score={"metric": "overlap"})
 
@@ -372,4 +374,31 @@ def test_every_method_has_a_family_and_says_what_it_estimates():
         "landmark-based",
         "intensity-based",
         "interactive",
+    }
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ("beads", "bead_matching"),
+        ("nuclei", "nuclei_matching"),
+        ("phase-cross-corr", "phase_cross_corr"),
+        ("focus-finding", "focus_finding"),
+    ],
+)
+def test_an_old_method_name_says_its_new_one(old, new):
+    with pytest.raises(ValidationError, match=f"is now '{new}'"):
+        _settings(old)
+    with pytest.raises(ValidationError, match=f"is now '{new}'"):
+        _settings([{old: {}}])
+
+
+def test_every_method_is_named_like_its_settings_section():
+    # YAML values and keys follow one style: a method's name is its settings section
+    from typing import get_args
+
+    from biahub.settings import METHOD_BLOCKS, EstimationMethod
+
+    assert {m: METHOD_BLOCKS[m] for m in get_args(EstimationMethod)} == {
+        m: m for m in get_args(EstimationMethod) if m in METHOD_BLOCKS
     }
