@@ -497,8 +497,8 @@ class BeadNodeDetector:
 class NodeGraphEstimator:
     """TransformEstimator over matched point correspondences.
 
-    Composes a `NodeDetector` (beads today; segmentation centroids or other node
-    sources later) with graph matching and transform fitting.
+    Composes a `NodeDetector` per channel (beads, nuclei; segmentation centroids later)
+    with graph matching and a fit: the landmark-based methods.
 
     One pass warps `mov` by the current guess (`Transform.apply`), detects nodes in the
     warped frame, matches, fits the residual correction and composes it back
@@ -520,6 +520,7 @@ class NodeGraphEstimator:
         iterations: int = 1,
         score_fn: ScoreFn | None = None,
         matcher: NodeMatcher | None = None,
+        fit=None,
     ):
         if iterations < 1:
             raise ValueError(f"iterations must be >= 1, got {iterations}")
@@ -529,6 +530,9 @@ class NodeGraphEstimator:
         self.affine_transform_settings = affine_transform_settings
         self.iterations = iterations
         self.score_fn = score_fn
+        # (matches, mov_nodes, ref_nodes) -> the correction; default: the transform type's
+        # full fit (transform_from_matches), as beads use
+        self.fit = fit
         self.matcher = matcher or (
             lambda mov_nodes, ref_nodes: matches_from_beads(
                 mov_nodes, ref_nodes, beads_match_settings
@@ -658,13 +662,16 @@ class NodeGraphEstimator:
                 f"too few matches to fit a transform: {len(matches)} from "
                 f"{len(mov_nodes)} x {len(ref_nodes)} nodes (need >= 3)"
             )
-        correction, _inv_correction = transform_from_matches(
-            matches,
-            mov_nodes,
-            ref_nodes,
-            self.affine_transform_settings,
-            ndim=mov.ndim,
-        )
+        if self.fit is not None:
+            correction = self.fit(matches, mov_nodes, ref_nodes)
+        else:
+            correction, _inv_correction = transform_from_matches(
+                matches,
+                mov_nodes,
+                ref_nodes,
+                self.affine_transform_settings,
+                ndim=mov.ndim,
+            )
         if not np.all(np.isfinite(correction.matrix)):
             raise EstimationError(
                 f"degenerate fit from {len(matches)} matches (non-finite matrix)"

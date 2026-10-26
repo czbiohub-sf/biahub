@@ -55,21 +55,33 @@ def _pair(truth, layout="grid"):
 
 
 def _estimator(**settings):
-    from biahub.registration.methods.nuclei import NucleiEstimator
+    from biahub.registration.methods.nuclei import nuclei_estimator
     from biahub.settings import NucleiSettings
 
-    return NucleiEstimator(NucleiSettings(**settings), "similarity", UM, UM)
+    return nuclei_estimator(NucleiSettings(**settings), "similarity", UM)
+
+
+PROBE = np.array([[12, 60, 60], [12, 60, 450], [12, 450, 60], [12, 450, 450], [12, 256, 256]])
+
+
+def test_nuclei_is_a_landmark_based_graph_matching_estimator():
+    # The same parts as beads: a detector per channel, a graph matcher, a fit.
+    from biahub.registration.methods.beads import NodeGraphEstimator
+    from biahub.registration.methods.nuclei import NucleiNodeDetector
+
+    estimator = _estimator()
+    assert isinstance(estimator, NodeGraphEstimator)
+    assert isinstance(estimator.mov_detector, NucleiNodeDetector)
+    assert isinstance(estimator.ref_detector, NucleiNodeDetector)
+    assert estimator.beads_match_settings.algorithm == "hungarian"
 
 
 def test_nuclei_recover_a_camera_scale_rotation_and_shift():
     truth = _forward()
     mov, ref = _pair(truth)
     found = _estimator().estimate(mov, ref, seed=Transform.identity(3))
-    probe = np.array(
-        [[12, 60, 60], [12, 60, 450], [12, 450, 60], [12, 450, 450], [12, 256, 256]]
-    )
-    err_um = (found.apply_points(probe) - truth.apply_points(probe)) * np.asarray(UM)
-    assert np.abs(err_um).max() < 0.15  # a fraction of a µm across the field, z included
+    err_um = (found.apply_points(PROBE) - truth.apply_points(PROBE)) * np.asarray(UM)
+    assert np.abs(err_um).max() < 0.15
 
 
 def test_the_fit_holds_yx_and_a_z_offset_only():
@@ -83,31 +95,23 @@ def test_the_fit_holds_yx_and_a_z_offset_only():
     )
 
 
-def test_a_seed_far_past_the_radius_fails_and_says_why():
-    # 20 µm off with 5 µm radii: too few pairs, and the message points to a coarse block.
-    # (Somewhat past the first radius, nuclei can pair with neighbours instead: the seed
-    # must be within it -- see NucleiEstimator.)
-    from biahub.registration.estimators import EstimationError
-
-    mov, ref = _pair(_forward(shift_vox=(0.0, 200.0, 0.0)), layout="scattered")
-    with pytest.raises(EstimationError, match=r"pairs within .* µm .*coarse block"):
-        _estimator().estimate(mov, ref, seed=Transform.identity(3))
-
-
 def test_different_voxel_sizes_on_the_two_sides():
-    # the moving grid is twice as coarse in yx: the fit works in µm, not voxels
-    from biahub.registration.methods.nuclei import NucleiEstimator
+    # the moving grid is twice as coarse in yx: nuclei are detected on the warped moving
+    # volume, on the reference grid, so the fit is in one grid
+    from biahub.registration.methods.nuclei import nuclei_estimator
     from biahub.settings import NucleiSettings
 
     ref = _nuclei_layer()
-    mov = ref[:, ::2, ::2].copy()  # same field, half the pixels
-    found = NucleiEstimator(NucleiSettings(), "similarity", (0.2, 0.206, 0.206), UM).estimate(
-        mov, ref, seed=Transform(np.diag([1.0, 2.0, 2.0, 1.0]))
+    mov = ref[:, ::2, ::2].copy()
+    found = nuclei_estimator(NucleiSettings(), "similarity", UM).estimate(
+        mov,
+        ref,
+        seed=Transform(np.diag([1.0, 2.0, 2.0, 1.0])),  # forward: moving -> reference
     )
     np.testing.assert_allclose(np.diag(np.asarray(found.matrix))[1:3], [2.0, 2.0], atol=0.01)
 
 
-def test_nuclei_is_a_method_and_a_block():
+def test_nuclei_is_a_method_and_a_block_with_the_matchers_of_beads():
     from biahub.settings import EstimateTransformSettings
 
     def settings(method):
@@ -118,14 +122,15 @@ def test_nuclei_is_a_method_and_a_block():
         )
 
     single = settings("nuclei")
-    assert single.nuclei.match_radii_um == [5.0, 2.0]
+    assert single.nuclei.algorithm == "hungarian"
     assert single.effective_score_metric == "correlation"
-    stack = settings([{"phase-cross-corr": {}}, {"nuclei": {"match_radii_um": [4.0, 1.5]}}])
-    assert stack.stack_settings()[1].nuclei.match_radii_um == [4.0, 1.5]
+    stack = settings(
+        [{"phase-cross-corr": {"local": {}}}, {"nuclei": {"algorithm": "spectral"}}]
+    )
+    assert stack.stack_settings()[1].nuclei.algorithm == "spectral"
 
 
 def test_nuclei_on_a_single_slice():
-    # One slice has no depth profile: every nucleus was skipped and the method failed.
     truth = _forward(shift_vox=(0.0, 15.0, -10.0))
     mov, ref = _pair(truth)
     mov, ref = mov[12:13], ref[12:13]

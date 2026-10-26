@@ -1084,29 +1084,25 @@ class FallbackSettings(MyBaseModel):
 
 
 class NucleiSettings(MyBaseModel):
-    """Settings for the nuclei method: detect nucleus centres, pair them, fit.
+    """Settings for the nuclei method: landmark-based, as beads, with nuclei for landmarks.
 
-    Detection as `biahub.registration.evaluate.detect_nuclei` (areas in µm², so they
-    hold across instruments). Pairs are mutual nearest neighbours in yx within each
-    radius of `match_radii_um` in turn, refitting after each; the first must exceed how
-    far off the seed may be (put a coarse block before this one when it is more).
+    Detection as `biahub.registration.evaluate.detect_nuclei` (areas in µm², so they hold
+    across instruments); matching with the same graph matchers as beads (`algorithm` and
+    its settings, and the match filters); `iterations` passes, each re-detecting on the
+    moving volume warped by the current transform. The fit is yx plus a z shift: a cell
+    layer constrains no z scale or tilt.
     """
 
     min_area_um2: PositiveFloat = 8.0
     max_area_um2: PositiveFloat = 320.0
     min_solidity: float = Field(0.9, gt=0, le=1)
     smooth_um: float = Field(0.2, ge=0)
-    match_radii_um: list[PositiveFloat] = [5.0, 2.0]
-    min_matches: PositiveInt = 6
-
-    @field_validator("match_radii_um")
-    @classmethod
-    def check_radii(cls, v):
-        if not v or any(b > a for a, b in zip(v, v[1:], strict=False)):
-            raise ValueError(
-                f"match_radii_um must be one or more radii, not increasing; got {v}"
-            )
-        return v
+    algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
+    hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
+    spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
+    match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
+    filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
+    iterations: PositiveInt = 2
 
 
 EstimationMethod = Literal[
