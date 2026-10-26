@@ -1309,10 +1309,14 @@ class EstimateTransformSettings(MyBaseModel):
     @model_validator(mode="after")
     def check_bead_report_metrics_have_beads(self) -> "EstimateTransformSettings":
         bead_metrics = [m for m in self.score.report if m not in INTENSITY_METRICS]
+        where = "a final block" if self.is_stack else "method"
         if bead_metrics and self.final_method != "beads":
             raise ValueError(
-                f"report metrics {bead_metrics} detect beads: they need method beads"
+                f"report metrics {bead_metrics} detect beads: they need {where} beads"
             )
+        metric = self.effective_score_metric
+        if metric not in INTENSITY_METRICS and self.final_method != "beads":
+            raise ValueError(f"score metric {metric!r} detects beads: it needs {where} beads")
         return self
 
     @model_validator(mode="after")
@@ -1472,6 +1476,13 @@ class EstimateTransformSettings(MyBaseModel):
         configs = []
         for k, block in enumerate(self.method, start=1):
             data = copy.deepcopy(run)
+            if k < len(self.method):
+                # the report and a bead score are the run's, from its final block
+                data["score"]["report"] = [
+                    m for m in run["score"]["report"] if m in INTENSITY_METRICS
+                ]
+                if data["score"]["metric"] not in (None, *INTENSITY_METRICS):
+                    data["score"]["metric"] = None
             data["method"] = block.method
             data["preprocess"] = [b.model_dump() for b in block.preprocess]
             data[METHOD_BLOCKS[block.method]] = block.settings
