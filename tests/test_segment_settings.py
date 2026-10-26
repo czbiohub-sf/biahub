@@ -181,7 +181,11 @@ def test_eval_args_cannot_set_the_image_or_self(key):
 
 
 def test_nextflow_a549_segment_config_carries_the_validated_cellpose_settings():
-    """The A549 segment config took over track.yml's validated cellpose values."""
+    """The A549 segment config runs cellpose at native resolution (diameter null).
+
+    Validated against the annotated A549 divisions: native resolution keeps the small
+    rounded daughter nuclei that diameter 80 (37.5 % resize) loses.
+    """
     import yaml
 
     from biahub.settings import SegmentationSettings
@@ -194,9 +198,9 @@ def test_nextflow_a549_segment_config_carries_the_validated_cellpose_settings():
     assert model.pretrained_model == "cpsam_v2"
     assert model.channels == ["nuclei_prediction"]
     assert model.eval_args == {
-        "diameter": 80,
+        "diameter": None,
         "cellprob_threshold": 0.0,
         "flow_threshold": 0.4,
-        "min_size": 2500,
+        "min_size": 300,
     }
     assert not settings.is_3d
