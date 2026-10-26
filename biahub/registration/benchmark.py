@@ -2,7 +2,7 @@
 
 The registration skill runs a few candidate pipelines (estimate configs, e.g. stacks of
 methods) through `nextflow/registration_benchmark_wf.nf` on a sample of positions and picks
-one with `pick_pipeline`, so the choice is a rule on the held-out evaluation, not a guess.
+one with `select_pipeline`, so the choice is a rule on the held-out evaluation, not a guess.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ def _float(value) -> float | None:
         return None
 
 
-def pick_pipeline(
+def select_pipeline(
     benchmark_csv,
     blocks: dict[str, int] | None = None,
     tie_um: float = 0.05,
@@ -90,7 +90,7 @@ def pick_pipeline(
     return {**base, "pipeline": winner, "median_um": scores[winner], "reason": reason}
 
 
-def choose_positions(survey_rows: list[dict], n_held_out: int = 3) -> tuple[str, list[str]]:
+def select_positions(survey_rows: list[dict], n_held_out: int = 3) -> tuple[str, list[str]]:
     """Return (the position to estimate on, held-out positions) from `survey_positions`.
 
     Usable positions are written and under half NaN. The estimate position has the most
@@ -114,7 +114,7 @@ def choose_positions(survey_rows: list[dict], n_held_out: int = 3) -> tuple[str,
     return estimate, (others + same)[:n_held_out]
 
 
-def benchmark_spec(
+def write_benchmark_config(
     path,
     case_name: str,
     moving,

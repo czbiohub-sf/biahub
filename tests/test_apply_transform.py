@@ -1006,23 +1006,23 @@ def test_an_applied_output_matches_the_warp_and_copies_the_reference(
 ):
     # Agents checked written outputs by hand four times: the written moving channel against
     # the warp evaluation uses (Transform.apply), and the reference copied unchanged.
-    from biahub.apply_transform import check_applied
+    from biahub.apply_transform import verify_apply_transform
 
     out, moving, config, reference = _registered(structured_plate, tmp_path)
-    check = check_applied(out, moving, config, reference)
+    check = verify_apply_transform(out, moving, config, reference)
     assert check["transformed"]["GFP"]["relative_error"] < 0.01
     assert check["copied"] == {"Phase3D": True}
     assert 0.8 < check["coverage"] <= 1.0 and check["input_empty"] is False
 
 
 def test_a_wrong_output_is_caught(structured_plate, tmp_path):
-    from biahub.apply_transform import check_applied
+    from biahub.apply_transform import verify_apply_transform
 
     out, moving, config, reference = _registered(structured_plate, tmp_path)
     with open_ome_zarr(out, mode="r+") as position:
         gfp = position.channel_names.index("GFP")
         position.data[0, gfp] = np.roll(np.asarray(position.data[0, gfp]), 5, axis=-1)
-    check = check_applied(out, moving, config, reference)
+    check = verify_apply_transform(out, moving, config, reference)
     assert check["transformed"]["GFP"]["relative_error"] > 0.1
 
 

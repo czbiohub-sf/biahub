@@ -32,9 +32,9 @@ def _benchmark(tmp_path, ants_points=(0.6, 0.5), tiles_ants_points=(0.5, 0.6)):
 
 
 def test_the_winner_is_the_lowest_median_on_held_out_positions(tmp_path):
-    from biahub.registration.benchmark import pick_pipeline
+    from biahub.registration.benchmark import select_pipeline
 
-    choice = pick_pipeline(_benchmark(tmp_path, ants_points=(1.0, 1.2)))
+    choice = select_pipeline(_benchmark(tmp_path, ants_points=(1.0, 1.2)))
     assert choice["pipeline"] == "tiles_ants" and choice["metric"] == "points_median_um"
     assert choice["median_um"] == pytest.approx(0.55)
     assert "tiles_ants" in choice["reason"]
@@ -42,32 +42,32 @@ def test_the_winner_is_the_lowest_median_on_held_out_positions(tmp_path):
 
 def test_a_tie_goes_to_the_simpler_pipeline(tmp_path):
     # equal within the tolerance: fewer blocks wins
-    from biahub.registration.benchmark import pick_pipeline
+    from biahub.registration.benchmark import select_pipeline
 
-    choice = pick_pipeline(_benchmark(tmp_path), blocks={"ants": 1, "tiles_ants": 2})
+    choice = select_pipeline(_benchmark(tmp_path), blocks={"ants": 1, "tiles_ants": 2})
     assert choice["pipeline"] == "ants" and "simpler" in choice["reason"]
 
 
 def test_tiles_decide_when_there_are_no_landmarks(tmp_path):
-    from biahub.registration.benchmark import pick_pipeline
+    from biahub.registration.benchmark import select_pipeline
 
     rows = [
         ("c", p, cand, "A/1/0", tiles, "")
         for p, tiles in (("ants", 0.9), ("tiles_ants", 0.4))
         for cand, tiles in (("unregistered", 3.0), ("transforms", tiles))
     ]
-    choice = pick_pipeline(_table(tmp_path, rows))
+    choice = select_pipeline(_table(tmp_path, rows))
     assert (choice["pipeline"], choice["metric"]) == ("tiles_ants", "tiles_median_um")
 
 
 def test_no_winner_when_nothing_clearly_beats_unregistered(tmp_path):
-    from biahub.registration.benchmark import pick_pipeline
+    from biahub.registration.benchmark import select_pipeline
 
     rows = [
         ("c", "ants", cand, "A/1/0", tiles, tiles)
         for cand, tiles in (("unregistered", 1.0), ("transforms", 0.9))
     ]
-    choice = pick_pipeline(_table(tmp_path, rows))
+    choice = select_pipeline(_table(tmp_path, rows))
     assert choice["pipeline"] is None and "unregistered" in choice["reason"]
 
 
@@ -86,9 +86,9 @@ def _survey():
 
 
 def test_positions_are_chosen_from_the_survey_held_out_in_other_wells_first():
-    from biahub.registration.benchmark import choose_positions
+    from biahub.registration.benchmark import select_positions
 
-    estimate, held_out = choose_positions(_survey(), n_held_out=3)
+    estimate, held_out = select_positions(_survey(), n_held_out=3)
     assert estimate == "A/1/1"  # the most spread out of the usable ones
     # other wells first (by spread), then the estimate's own well; never empty or mostly NaN
     assert held_out == ["A/2/0", "B/1/0", "A/1/0"]
@@ -111,7 +111,7 @@ def _store(tmp_path, name, channels):
 def test_the_benchmark_file_is_written_and_checked(tmp_path):
     import yaml
 
-    from biahub.registration.benchmark import benchmark_spec
+    from biahub.registration.benchmark import write_benchmark_config
 
     moving, reference = (
         _store(tmp_path, "m.zarr", ["DAPI"]),
@@ -121,7 +121,7 @@ def test_the_benchmark_file_is_written_and_checked(tmp_path):
         __import__("pathlib").Path(__file__).parents[1]
         / ".claude/skills/register-with-engine/templates/pipelines"
     )
-    path = benchmark_spec(
+    path = write_benchmark_config(
         tmp_path / "benchmark.yml",
         "case",
         moving,
@@ -138,7 +138,7 @@ def test_the_benchmark_file_is_written_and_checked(tmp_path):
     assert [p["name"] for p in spec["pipelines"]] == ["tiles_ants", "ants"]
 
     with pytest.raises(ValueError, match="not in"):  # a position the store does not have
-        benchmark_spec(
+        write_benchmark_config(
             tmp_path / "b.yml",
             "case",
             moving,
@@ -150,7 +150,7 @@ def test_the_benchmark_file_is_written_and_checked(tmp_path):
             {"ants": templates / "ants.yml"},
         )
     with pytest.raises(ValueError, match="held out"):  # estimated on is not held out
-        benchmark_spec(
+        write_benchmark_config(
             tmp_path / "b.yml",
             "case",
             moving,
@@ -183,11 +183,11 @@ def test_points_decide_only_when_every_pipeline_matched_enough_nuclei(tmp_path):
     # A pipeline that matched 4 nuclei shows a small median from its few near pairs:
     # ranking then falls back to tiles, which every pipeline measured over the whole
     # field. Beating unregistered is judged on tiles too (its points match few nuclei).
-    from biahub.registration.benchmark import pick_pipeline
+    from biahub.registration.benchmark import select_pipeline
 
     rows = []
     for pipeline, tiles, points, n in (("good", 0.4, 0.6, 30), ("few", 2.0, 0.3, 4)):
         rows.append(("c", pipeline, "unregistered", "A/1/0", 3.0, 0.5, 3))
         rows.append(("c", pipeline, "transforms", "A/1/0", tiles, points, n))
-    choice = pick_pipeline(_table(tmp_path, rows))
+    choice = select_pipeline(_table(tmp_path, rows))
     assert (choice["pipeline"], choice["metric"]) == ("good", "tiles_median_um")

@@ -642,7 +642,7 @@ def apply_transform_cli(
     )
 
 
-def check_applied(
+def verify_apply_transform(
     output_position,
     moving_position,
     transforms_filepath,
