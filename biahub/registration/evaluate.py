@@ -18,11 +18,11 @@ from numpy.typing import ArrayLike
 from scipy.ndimage import shift as ndi_shift
 from scipy.spatial import cKDTree
 from skimage import filters
-from skimage.registration import phase_cross_correlation
 
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import position_key
 from biahub.core.transform import Transform
+from biahub.registration.methods.pcc import phase_cross_corr
 from biahub.utils.ngff import is_unwritten
 
 # Fewer matched points than this do not constrain an affine residual (12 parameters,
@@ -424,17 +424,13 @@ def tile_residuals(
             if r.std() == 0 or w.std() == 0:
                 continue
             r, w = _zscore(r), _zscore(w)
-            shift, _error, _phase = phase_cross_correlation(
-                r * window, w * window, upsample_factor=10, normalization=None
-            )
+            shift, _ = phase_cross_corr(r * window, w * window, upsample_factor=10)
             if np.abs(shift).max() > max_shift:
                 continue
             # the shared window pulls the peak toward zero shift (~5% short on nuclei):
             # measure the remainder once more, where that pull is a share of almost nothing
             moved = ndi_shift(w, shift, order=1, mode="nearest")
-            remainder, _error, _phase = phase_cross_correlation(
-                r * window, moved * window, upsample_factor=10, normalization=None
-            )
+            remainder, _ = phase_cross_corr(r * window, moved * window, upsample_factor=10)
             shift = shift + remainder
             if np.abs(shift).max() > max_shift:
                 continue
@@ -491,9 +487,7 @@ def z_residuals(
             continue
         if compare == "intensity":
             w = np.where(cov, w, np.median(w[cov]))
-        shift, _error, _phase = phase_cross_correlation(
-            _zscore(r), _zscore(w), upsample_factor=10, normalization=None
-        )
+        shift, _ = phase_cross_corr(_zscore(r), _zscore(w), upsample_factor=10)
         crops[name] = (np.asarray(shift) * um).tolist()
     # one value per distinct place: corners of a crop as big as the image are one place
     corner_dz = list(

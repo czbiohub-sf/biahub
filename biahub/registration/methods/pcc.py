@@ -157,6 +157,7 @@ def phase_cross_corr(
     normalization: Literal["magnitude", "classic"] | None = None,
     output_path: Path | None = None,
     verbose: bool = False,
+    upsample_factor: int = 1,
 ) -> tuple[int, ...]:
     """
     Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
@@ -174,6 +175,10 @@ def phase_cross_corr(
         Normalization method.
     verbose : bool
         If True, print verbose output.
+    upsample_factor : int
+        1: whole-pixel shifts (the correlation's arg maximum). Above 1: refined to
+        1/upsample_factor of a pixel by an upsampled DFT around that peak (Guizar-Sicairos
+        et al. 2008, as skimage.registration.phase_cross_correlation).
 
     Returns
     -------
@@ -208,8 +213,38 @@ def phase_cross_corr(
 
     shift = np.stack(maxima).astype(float_dtype, copy=False)
     shift[shift > midpoint] -= np.array(corr.shape)[shift > midpoint]
+    if upsample_factor > 1:
+        shift = _refine_shift(ref_img, mov_img, shift, normalization, upsample_factor)
 
     return shift, corr_shifted
+
+
+def _upsampled_dft(data, region_size: int, upsample_factor: int, offsets) -> np.ndarray:
+    """Return the cross-correlation upsampled by matrix-multiply DFT in a small region."""
+    for n_items, offset in list(zip(data.shape, offsets, strict=True))[::-1]:
+        kernel = (np.arange(region_size) - offset)[:, None] * np.fft.fftfreq(
+            n_items, upsample_factor
+        )
+        data = np.tensordot(np.exp(-1j * 2 * np.pi * kernel), data, axes=(1, -1))
+    return data
+
+
+def _refine_shift(ref_img, mov_img, shift, normalization, upsample_factor: int) -> np.ndarray:
+    """Return `shift` refined to 1/upsample_factor pixel around the correlation peak."""
+    product = np.fft.fftn(ref_img) * np.fft.fftn(mov_img).conj()
+    eps = np.finfo(product.real.dtype).eps
+    if normalization == "magnitude":
+        product = product / np.fmax(np.abs(product), eps)
+    elif normalization == "classic":
+        norm = np.abs(np.fft.fftn(ref_img)) * np.abs(np.fft.fftn(mov_img))
+        product = product / np.fmax(norm, eps)
+    shift = np.round(np.asarray(shift, dtype=float) * upsample_factor) / upsample_factor
+    region = int(np.ceil(upsample_factor * 1.5))
+    centre = np.fix(region / 2.0)
+    offsets = centre - shift * upsample_factor
+    correlation = _upsampled_dft(product.conj(), region, upsample_factor, offsets).conj()
+    peak = np.unravel_index(np.argmax(np.abs(correlation)), correlation.shape)
+    return shift + (np.stack(peak).astype(float) - centre) / upsample_factor
 
 
 class PCCEstimator:
