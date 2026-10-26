@@ -644,3 +644,62 @@ def apply_transform_cli(
 
 if __name__ == "__main__":
     apply_transform_cli()
+
+
+def check_applied(
+    output_position,
+    moving_position,
+    transforms_filepath,
+    reference_position=None,
+    t: int = 0,
+) -> dict:
+    """Check what apply-transform wrote for one position at timepoint `t`.
+
+    Each transformed channel is compared with the moving channel warped by
+    `Transform.apply` (the resampler estimation and evaluation use), inside the area the
+    warp covers: `relative_error` is the RMS difference over the RMS signal (a misplaced
+    structure dominates it). Copied channels are compared with the reference's
+    (`copied`). Also the output's `coverage` (non-zero share of the first transformed
+    channel) and `input_empty`, as recorded. A cropped output (`--crop-to-overlap`) is not
+    warp-compared.
+    """
+    from biahub.registration.evaluate import coverage
+
+    settings = load_transform_settings(transforms_filepath)
+    key = "/".join(Path(moving_position).parts[-3:])
+    transform = settings.transform_for(t, key if settings.per_position else None)
+    with open_ome_zarr(output_position, mode="r") as out:
+        record = dict(out.zattrs["biahub-apply-transform"])
+        times = record["time_indices"]
+        t_out = times.index(t) if isinstance(times, list) else t
+        written = {
+            c: np.asarray(out.data[t_out, out.channel_names.index(c)], dtype=np.float32)
+            for c in record["channels_transformed"] + record["channels_copied"]
+        }
+    result = {"transformed": {}, "copied": {}, "input_empty": record.get("input_empty")}
+    with open_ome_zarr(moving_position, mode="r") as moving:
+        for c in record["channels_transformed"]:
+            if not record["keep_overhang"]:
+                result["transformed"][c] = {"relative_error": None, "note": "cropped output"}
+                continue
+            volume = np.asarray(moving.data[t, moving.channel_names.index(c)], np.float32)
+            expected = transform.apply(volume, reference=written[c])
+            inside = coverage(transform, volume.shape, written[c].shape)
+            gap = (written[c] - expected)[inside]
+            signal = np.sqrt(np.mean(expected[inside] ** 2)) if inside.any() else 0.0
+            result["transformed"][c] = {
+                "relative_error": float(np.sqrt(np.mean(gap**2)) / signal) if signal else None
+            }
+    if record["channels_copied"] and reference_position is not None:
+        with open_ome_zarr(reference_position, mode="r") as reference:
+            for c in record["channels_copied"]:
+                source = np.asarray(
+                    reference.data[t, reference.channel_names.index(c)], np.float32
+                )
+                result["copied"][c] = bool(
+                    source.shape == written[c].shape
+                    and np.allclose(written[c], source, rtol=1e-5, atol=1e-5)
+                )
+    first = record["channels_transformed"][0] if record["channels_transformed"] else None
+    result["coverage"] = float((written[first] != 0).mean()) if first else None
+    return result

@@ -970,3 +970,57 @@ def test_an_empty_input_position_is_named_and_recorded(tmp_path, capsys):
     for fov, empty in (("0", False), ("1", True)):
         with open_ome_zarr(output / "A" / "1" / fov, mode="r") as out:
             assert out.zattrs["biahub-apply-transform"]["input_empty"] is empty
+
+
+def _registered(structured_plate, tmp_path, shift=(0, 2, -3)):
+    position, data = structured_plate
+    target = tmp_path / "target.zarr"
+    with open_ome_zarr(target, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
+        plate.create_position("A", "1", "0")["0"] = data[:, 1:]
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=_translation(*shift))],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+    reference = target / "A" / "1" / "0"
+    apply_transform(
+        [position],
+        config,
+        output,
+        reference_position_dirpaths=[reference],
+        keep_overhang=True,
+        cluster="debug",
+        channels=["GFP"],
+    )
+    return output / "A" / "1" / "0", position, config, reference
+
+
+def test_an_applied_output_matches_the_warp_and_copies_the_reference(
+    structured_plate, tmp_path
+):
+    # Agents checked written outputs by hand four times: the written moving channel against
+    # the warp evaluation uses (Transform.apply), and the reference copied unchanged.
+    from biahub.apply_transform import check_applied
+
+    out, moving, config, reference = _registered(structured_plate, tmp_path)
+    check = check_applied(out, moving, config, reference)
+    assert check["transformed"]["GFP"]["relative_error"] < 0.01
+    assert check["copied"] == {"Phase3D": True}
+    assert 0.8 < check["coverage"] <= 1.0 and check["input_empty"] is False
+
+
+def test_a_wrong_output_is_caught(structured_plate, tmp_path):
+    from biahub.apply_transform import check_applied
+
+    out, moving, config, reference = _registered(structured_plate, tmp_path)
+    with open_ome_zarr(out, mode="r+") as position:
+        gfp = position.channel_names.index("GFP")
+        position.data[0, gfp] = np.roll(np.asarray(position.data[0, gfp]), 5, axis=-1)
+    check = check_applied(out, moving, config, reference)
+    assert check["transformed"]["GFP"]["relative_error"] > 0.1
