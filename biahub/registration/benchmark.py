@@ -89,3 +89,96 @@ def pick_pipeline(
         "scores": scores,
         "reason": reason,
     }
+
+
+def choose_positions(survey_rows: list[dict], n_held_out: int = 3) -> tuple[str, list[str]]:
+    """Return (the position to estimate on, held-out positions) from `survey_positions`.
+
+    Usable positions are written and under half NaN. The estimate position has the most
+    spread-out structure (what constrains scale and rotation); held-out ones are the next
+    most spread, from other wells first, so the evaluation sees how the transform carries
+    across the plate.
+    """
+    usable = [
+        r for r in survey_rows if not r.get("empty") and (r.get("nan_fraction") or 0) < 0.5
+    ]
+    if not usable:
+        raise ValueError("no usable position: every one is empty or mostly NaN")
+    ranked = sorted(usable, key=lambda r: -(r.get("spread") or 0))
+    estimate = ranked[0]["position"]
+
+    def well(position):
+        return position.rsplit("/", 1)[0]
+
+    others = [r["position"] for r in ranked[1:] if well(r["position"]) != well(estimate)]
+    same = [r["position"] for r in ranked[1:] if well(r["position"]) == well(estimate)]
+    return estimate, (others + same)[:n_held_out]
+
+
+def benchmark_spec(
+    path,
+    case_name: str,
+    moving,
+    reference,
+    moving_channel: str,
+    reference_channel: str,
+    estimate_positions,
+    evaluate_positions: list[str],
+    pipelines: dict,
+    landmarks: str | None = None,
+    tile_px: int | None = None,
+):
+    """Write the benchmark file `registration_benchmark_wf.nf` reads, checked first.
+
+    One case (its stores, channels, estimate and held-out positions) and `pipelines`
+    (name -> estimate config). Every config must load, every position must exist in the
+    stores, and no position may be both estimated on and held out.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    from biahub.settings import EstimateTransformSettings
+
+    estimate_positions = (
+        [estimate_positions]
+        if isinstance(estimate_positions, str)
+        else list(estimate_positions)
+    )
+    for store in [moving] + ([reference] if reference else []):
+        for position in estimate_positions + list(evaluate_positions):
+            if not (Path(store) / position).is_dir():
+                raise ValueError(f"position {position} is not in {store}")
+    both = set(estimate_positions) & set(evaluate_positions)
+    if both:
+        raise ValueError(f"{sorted(both)} are estimated on, so cannot be held out")
+    for name, config in pipelines.items():
+        try:
+            EstimateTransformSettings(**yaml.safe_load(Path(config).read_text()))
+        except Exception as error:
+            raise ValueError(f"pipeline {name}: {config} does not load: {error}") from None
+    case = {
+        "name": case_name,
+        "moving": str(Path(moving).resolve()),
+        "moving_channel": moving_channel,
+        "estimate_positions": estimate_positions,
+        "evaluate_positions": list(evaluate_positions),
+    }
+    if reference:
+        case.update(
+            reference=str(Path(reference).resolve()), reference_channel=reference_channel
+        )
+    if landmarks:
+        case["landmarks"] = landmarks
+    if tile_px:
+        case["tile_px"] = tile_px
+    spec = {
+        "cases": [case],
+        "pipelines": [
+            {"name": name, "config": str(Path(config).resolve())}
+            for name, config in pipelines.items()
+        ],
+    }
+    path = Path(path)
+    path.write_text(yaml.safe_dump(spec, sort_keys=False))
+    return path

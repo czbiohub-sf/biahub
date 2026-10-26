@@ -1,0 +1,11 @@
+# Pipeline: tiles, then ANTs. tiles takes the camera scale, rotation and shift in yx from
+# tile phase correlation; ANTs refines from there, z included. Channels are placeholders:
+# the benchmark (or you) sets each case's. Best on DragonFly 2025_04_18 (DAPI onto VS nuclei).
+moving: {channel: placeholder}
+reference: {frame: cross, channel: placeholder}
+method:
+  - tiles: {}
+  - ants: {preprocess: [{clip_percentiles: {}}]}
+transform: {type: similarity}
+time_indices: 0
+fallback: {repair: null}

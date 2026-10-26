@@ -1,0 +1,8 @@
+# Pipeline: ANTs alone, from the seed (identity unless transform.seed is set). Channels are
+# placeholders.
+moving: {channel: placeholder}
+reference: {frame: cross, channel: placeholder}
+method: ants
+transform: {type: similarity}
+time_indices: 0
+fallback: {repair: null}

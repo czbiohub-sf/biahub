@@ -1,0 +1,9 @@
+# Pipeline: beads (both channels see beads). Detection thresholds are data-specific: copy
+# them from ../estimate-transform-beads.yml or the project's old config. Channels are
+# placeholders.
+moving: {channel: placeholder}
+reference: {frame: cross, channel: placeholder}
+method: beads
+transform: {type: affine}
+time_indices: 0
+fallback: {repair: null}
