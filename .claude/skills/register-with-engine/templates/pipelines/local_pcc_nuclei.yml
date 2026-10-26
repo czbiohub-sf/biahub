@@ -1,0 +1,11 @@
+# Pipeline: local phase cross-correlation, then nuclei. nuclei matches nucleus centres
+# from that result and adds a z offset from them; needs nuclei in both channels.
+# Channels are placeholders.
+moving: {channel: placeholder}
+reference: {frame: cross, channel: placeholder}
+method:
+  - phase-cross-corr: {local: {}}
+  - nuclei: {}
+transform: {type: similarity}
+time_indices: 0
+fallback: {repair: null}

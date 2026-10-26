@@ -1,8 +1,0 @@
-# Pipeline: tiles alone: yx only (scale, rotation, shift); z stays the seed's. A baseline,
-# or a first block. Channels are placeholders.
-moving: {channel: placeholder}
-reference: {frame: cross, channel: placeholder}
-method: tiles
-transform: {type: similarity}
-time_indices: 0
-fallback: {repair: null}

@@ -1,0 +1,12 @@
+# Pipeline: local phase cross-correlation, then ANTs. The local phase cross-correlation
+# takes the camera scale, rotation and shift in yx; ANTs refines from there, z included.
+# Channels are placeholders: the benchmark (or you) sets each case's. Best on DragonFly
+# 2025_04_18 (DAPI onto VS nuclei).
+moving: {channel: placeholder}
+reference: {frame: cross, channel: placeholder}
+method:
+  - phase-cross-corr: {local: {}}
+  - ants: {preprocess: [{clip_percentiles: {}}]}
+transform: {type: similarity}
+time_indices: 0
+fallback: {repair: null}

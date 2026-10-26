@@ -330,8 +330,10 @@ def test_propagated_blocks_are_the_winning_runs_and_empty_frames_have_none():
 def test_bead_metrics_belong_to_the_run_and_need_a_final_beads_block():
     # The report and the score are the run's, computed by the final block: a stack ending
     # in beads may report bead metrics; one ending elsewhere may not score with them.
-    stack = _settings([{"tiles": {}}, BEADS_BLOCK], score={"report": ["overlap"]})
-    assert stack.stack_settings()[0].method == "tiles"
+    stack = _settings(
+        [{"phase-cross-corr": {"local": {}}}, BEADS_BLOCK], score={"report": ["overlap"]}
+    )
+    assert stack.stack_settings()[0].method == "phase-cross-corr"
     with pytest.raises(ValidationError, match="final block"):
         _settings([BEADS_BLOCK, {"ants": {}}], score={"metric": "overlap"})
 

@@ -1,4 +1,4 @@
-"""The tiles block: tile shifts on max projections, fitted in yx; z stays the seed's."""
+"""Local phase cross-correlation: tile shifts on max projections, fitted in yx; z stays the seed's."""
 
 import numpy as np
 import pytest
@@ -36,10 +36,12 @@ def _pair(truth):
 
 
 def _estimator(**settings):
-    from biahub.registration.methods.tiles import TilesEstimator
-    from biahub.settings import TilesSettings
+    from biahub.registration.methods.pcc import LocalPCCEstimator
+    from biahub.settings import LocalPhaseCrossCorrSettings
 
-    return TilesEstimator(TilesSettings(tile_px=96, grid=5, **settings), "similarity", UM)
+    return LocalPCCEstimator(
+        LocalPhaseCrossCorrSettings(tile_px=96, grid=5, **settings), "similarity", UM
+    )
 
 
 PROBE = np.array([[12, 50, 50], [12, 50, 330], [12, 330, 50], [12, 330, 330], [12, 192, 192]])
@@ -73,7 +75,7 @@ def test_too_few_tiles_fail_and_say_why():
         _estimator().estimate(mov, ref, seed=Transform.identity(3))
 
 
-def test_tiles_is_a_method_and_a_block():
+def test_local_is_an_option_of_phase_cross_corr():
     from biahub.settings import EstimateTransformSettings
 
     def settings(method):
@@ -83,6 +85,8 @@ def test_tiles_is_a_method_and_a_block():
             method=method,
         )
 
-    assert settings("tiles").tiles.rounds == 2
-    stack = settings([{"tiles": {"compare": "intensity"}}, {"ants": {}}])
-    assert stack.stack_settings()[0].tiles.compare == "intensity"
+    whole = settings("phase-cross-corr")
+    assert whole.phase_cross_corr.local is None  # one translation, as before
+    stack = settings([{"phase-cross-corr": {"local": {"compare": "intensity"}}}, {"ants": {}}])
+    assert stack.stack_settings()[0].phase_cross_corr.local.compare == "intensity"
+    assert stack.stack_settings()[0].phase_cross_corr.local.rounds == 2

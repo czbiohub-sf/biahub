@@ -130,12 +130,12 @@ def test_the_benchmark_file_is_written_and_checked(tmp_path):
         "VS",
         "A/1/0",
         ["A/2/0"],
-        {"tiles_ants": templates / "tiles_ants.yml", "ants": templates / "ants.yml"},
+        {"local_pcc_ants": templates / "local_pcc_ants.yml", "ants": templates / "ants.yml"},
         landmarks="nuclei",
     )
     spec = yaml.safe_load(path.read_text())
     assert spec["cases"][0]["evaluate_positions"] == ["A/2/0"]
-    assert [p["name"] for p in spec["pipelines"]] == ["tiles_ants", "ants"]
+    assert [p["name"] for p in spec["pipelines"]] == ["local_pcc_ants", "ants"]
 
     with pytest.raises(ValueError, match="not in"):  # a position the store does not have
         write_benchmark_config(
@@ -174,7 +174,7 @@ def test_every_pipeline_template_loads():
         Path(__file__).parents[1] / ".claude/skills/register-with-engine/templates/pipelines"
     )
     names = sorted(p.stem for p in folder.glob("*.yml"))
-    assert names == ["ants", "beads", "tiles", "tiles_ants", "tiles_nuclei"]
+    assert names == ["ants", "beads", "local_pcc", "local_pcc_ants", "local_pcc_nuclei"]
     for path in folder.glob("*.yml"):
         EstimateTransformSettings(**yaml.safe_load(path.read_text()))
 

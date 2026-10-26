@@ -47,8 +47,7 @@ from biahub.registration.methods.beads import NodeGraphEstimator
 from biahub.registration.methods.focus import FocusEstimator
 from biahub.registration.methods.manual import ManualEstimator
 from biahub.registration.methods.nuclei import NucleiEstimator
-from biahub.registration.methods.pcc import PCCEstimator
-from biahub.registration.methods.tiles import TilesEstimator
+from biahub.registration.methods.pcc import LocalPCCEstimator, PCCEstimator
 from biahub.registration.methods.vote_icp import VoteIcpEstimator, VoteSeedCorrection
 from biahub.registration.metrics import (
     PREWARPED,
@@ -1051,6 +1050,12 @@ def build_estimator(
         estimator = AntsEstimator.from_settings(
             settings.ants, affine, verbose=settings.verbose
         )
+    elif settings.method == "phase-cross-corr" and settings.phase_cross_corr.local:
+        estimator = LocalPCCEstimator(
+            settings.phase_cross_corr.local,
+            settings.transform.type,
+            ref_voxel_size or (1.0, 1.0, 1.0),
+        )
     elif settings.method == "phase-cross-corr":
         estimator = PCCEstimator.from_settings(settings.phase_cross_corr, shape_zyx)
     elif settings.method == "focus-finding":
@@ -1063,10 +1068,6 @@ def build_estimator(
             settings.transform.type,
             mov_voxel_size or (1.0, 1.0, 1.0),
             ref_voxel_size or (1.0, 1.0, 1.0),
-        )
-    elif settings.method == "tiles":
-        estimator = TilesEstimator(
-            settings.tiles, settings.transform.type, ref_voxel_size or (1.0, 1.0, 1.0)
         )
     elif settings.method == "manual":
         manual = settings.manual
