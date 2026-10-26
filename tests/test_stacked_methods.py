@@ -360,3 +360,16 @@ def test_a_stack_gets_time_for_each_block(beads_plate, tmp_path):
     )
     minutes = lambda plan: plan["resources"]["estimate"]["time_minutes"]  # noqa: E731
     assert minutes(two) == 2 * minutes(one)
+
+
+def test_every_method_has_a_family_and_says_what_it_estimates():
+    from typing import get_args
+
+    from biahub.settings import METHOD_FAMILIES, EstimationMethod
+
+    assert set(METHOD_FAMILIES) == set(get_args(EstimationMethod))
+    assert {family for family, _ in METHOD_FAMILIES.values()} == {
+        "landmark-based",
+        "intensity-based",
+        "interactive",
+    }

@@ -1177,6 +1177,21 @@ _METHOD_NAME = TypeAdapter(EstimationMethod)
 _METHOD_STACK = TypeAdapter(MethodStack)
 
 
+# What each method measures from, and what it can estimate. Landmark-based methods detect
+# structures seen in both channels and match them (graph matching); intensity-based ones
+# compare the images directly; interactive ones ask a person. The family says whether a
+# method can work on a dataset (landmarks, or shared image structure); the estimate says
+# where it goes in a stack (translations make coarse first blocks).
+METHOD_FAMILIES: dict[str, tuple[str, str]] = {
+    "beads": ("landmark-based", "affine"),
+    "nuclei": ("landmark-based", "yx linear and a z shift"),
+    "phase-cross-corr": ("intensity-based", "translation; yx linear when local"),
+    "ants": ("intensity-based", "linear (the transform type)"),
+    "focus-finding": ("intensity-based", "translation (z by focus, yx by stackreg)"),
+    "manual": ("interactive", "linear (clicked pairs)"),
+}
+
+
 ScoreMetric = Literal[
     "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
 ]
