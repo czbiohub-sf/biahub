@@ -1,6 +1,8 @@
 # Base [dca.*] block for A549 live-cell timelapse plates imaged on Mantis v2 and processed by
 # biahub. `biahub dca-finalize` resolves it against one metadata row per FOV: the per-well
 # columns of the metadata table plus the `store_*` facts read from the store.
+# The plate-name date is the acquisition date. Fields no row carries (study.experimenter,
+# study.release_date) come from the plate's confirmed file.
 
 [dca.study]
 source = "Chan Zuckerberg Biohub San Francisco"
@@ -15,7 +17,6 @@ biahub pipeline."""
 study_type = ["TimeLapse", "FourDPlus", "SPIM"]
 year_imaged = { column = "dataset_year" }
 license = "CC-BY-4.0"
-release_date = { column = "store_name_date" }
 
 [[dca.study.additional_metadata]]
 name = "Infection condition"
@@ -163,10 +164,6 @@ match_status = "exact"
 source_kind = "human"
 [dca.provenance.study.license]
 source_kind = "human"
-# placeholder: date parsed from the plate name; confirm the real release date
-# (override in the confirmed file with source_kind = "human").
-[dca.provenance.study.release_date]
-source_kind = "original_data"
 [dca.provenance.biosample.group_id]
 source_kind = "original_data"
 [dca.provenance.biosample.tissue_type]

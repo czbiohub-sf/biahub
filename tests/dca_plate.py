@@ -28,10 +28,14 @@ WELLS = ("A/1", "B/1")
 TIME_POINTS = 2
 TIME_INCREMENT_S = 1800.0
 STAT_KEYS = ("p1", "p5", "p95", "p99", "mean", "std", "median", "iqr", "p95_p5", "p99_p1")
+RELEASE_DATE = "2026-12-01"
 CONFIRMED = (
     "[dca.study]\n"
     'experimenter = [{ first_name = "Ada", last_name = "Example", institution = "Example Lab" }]\n'
+    f'release_date = "{RELEASE_DATE}"\n'
     "[dca.provenance.study.experimenter]\n"
+    'source_kind = "human"\n'
+    "[dca.provenance.study.release_date]\n"
     'source_kind = "human"\n'
 )
 

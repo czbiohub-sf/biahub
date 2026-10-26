@@ -9,6 +9,7 @@ import pytest
 from biahub.dca_finalize import dca_finalize
 from biahub.dca_metadata import AIRTABLE_FIELDS
 from tests.dca_plate import (
+    RELEASE_DATE,
     WELLS,
     attributes,
     build_plate,
@@ -23,6 +24,9 @@ from tests.dca_plate import (
 UNSOURCED_EXPERIMENTER = (
     "[dca.study]\n"
     'experimenter = [{ first_name = "Ada", last_name = "Example", institution = "Example Lab" }]\n'
+    f'release_date = "{RELEASE_DATE}"\n'
+    "[dca.provenance.study.release_date]\n"
+    'source_kind = "human"\n'
 )
 
 
