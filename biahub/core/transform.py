@@ -337,9 +337,10 @@ class Transform:
     ) -> dict:
         """Return how far apart this and `other` put a volume of `shape_zyx`, in µm.
 
-        `max_um` is exact (the difference of two affine maps is largest at a corner);
-        `mean_um` is the mean over a `samples`-per-axis grid. Both on the output grid in
-        the transforms' own direction, scaled by `voxel_um` (z, y, x).
+        Points are sampled over the input volume (`shape_zyx`, where the transforms map
+        from) and their two images compared, in output voxels scaled by `voxel_um` (the
+        output's z, y, x). `max_um` is exact (the difference of two affine maps is largest
+        at a corner); `mean_um` is the mean over a `samples`-per-axis grid.
         """
         axes = [np.linspace(0, n - 1, samples) for n in shape_zyx]
         grid = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(shape_zyx))

@@ -54,3 +54,10 @@ def test_one_sample_on_an_axis_cannot_show_spread_there():
     spread = transform_spread(one_time, SHAPE, UM)
     assert spread["across_timepoints_um"] is None
     assert spread["choice"] == "per position"
+
+
+def test_the_worst_position_pair_says_when():
+    from biahub.registration.evaluate import transform_spread
+
+    spread = transform_spread(_estimates(per_position=3.0), SHAPE, UM)
+    assert spread["worst_positions_t"] in TIMES

@@ -88,6 +88,14 @@ class ChainedEstimator:
         """Only the first stage starts from the seed; the others from the stage before."""
         return bool(getattr(self.stages[0], "uses_seed", True))
 
+    @property
+    def holds_xy_across_gaps(self) -> bool:
+        """Focus-finding's across-gap rule (z measured, yx held), when every stage holds it.
+
+        In a mixed stack, holding yx would drop what the other stages estimated.
+        """
+        return all(getattr(stage, "holds_xy_across_gaps", False) for stage in self.stages)
+
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
     ) -> Transform:

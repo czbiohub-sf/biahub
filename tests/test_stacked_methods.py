@@ -182,7 +182,13 @@ def test_a_stack_plans_for_its_heaviest_and_interactive_blocks(beads_plate, tmp_
     stack = engine.init_run(
         beads_plate, beads_plate, _settings([BEADS_BLOCK, {"ants": {}}]), tmp_path / "b"
     )
-    assert stack["resources"] == ants_alone["resources"]  # ANTs needs the most
+    for phase in ("estimate", "repair"):  # the heaviest block's CPUs and memory
+        for key in ("cpus", "mem_gb"):
+            assert stack["resources"][phase][key] == ants_alone["resources"][phase][key]
+    # time for each block, run one after another
+    assert stack["resources"]["estimate"]["time_minutes"] == (
+        2 * ants_alone["resources"]["estimate"]["time_minutes"]
+    )
     manual = engine.init_run(
         beads_plate,
         beads_plate,
@@ -328,3 +334,27 @@ def test_bead_metrics_belong_to_the_run_and_need_a_final_beads_block():
     assert stack.stack_settings()[0].method == "tiles"
     with pytest.raises(ValidationError, match="final block"):
         _settings([BEADS_BLOCK, {"ants": {}}], score={"metric": "overlap"})
+
+
+def test_a_focus_only_stack_keeps_the_across_gap_rule_and_a_mixed_one_does_not():
+    from biahub.registration.estimators import ChainedEstimator
+
+    class _Focus:
+        holds_xy_across_gaps = True
+
+    class _Other:
+        pass
+
+    assert ChainedEstimator([_Focus(), _Focus()]).holds_xy_across_gaps
+    assert not ChainedEstimator([_Focus(), _Other()]).holds_xy_across_gaps
+
+
+def test_a_stack_gets_time_for_each_block(beads_plate, tmp_path):
+    from biahub.registration import engine
+
+    one = engine.init_run(beads_plate, beads_plate, _settings([{"ants": {}}]), tmp_path / "a")
+    two = engine.init_run(
+        beads_plate, beads_plate, _settings([{"ants": {}}, {"ants": {}}]), tmp_path / "b"
+    )
+    minutes = lambda plan: plan["resources"]["estimate"]["time_minutes"]  # noqa: E731
+    assert minutes(two) == 2 * minutes(one)

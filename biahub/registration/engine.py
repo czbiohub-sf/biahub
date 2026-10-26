@@ -1794,7 +1794,8 @@ def init_run(
         key=lambda r: r[0] * r[1],
     )
     n_trials = len(settings.sweep_trials()) if settings.fallback.sweep is not None else 0
-    estimate_minutes = (
+    # a stack's blocks run one after another in each job
+    estimate_minutes = len(settings.method_names) * (
         _propagation_minutes(len(time_indices)) if propagated else ESTIMATE_MINUTES
     )
 

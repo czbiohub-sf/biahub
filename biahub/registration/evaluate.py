@@ -711,27 +711,31 @@ def transform_spread(
     positions at one timepoint; across timepoints, between two timepoints at one position.
     Each is compared with `tolerance_um` (default half a voxel in yx): `choice` is "one",
     "per position", "per timepoint" or "per position and timepoint". An axis with one
-    sample shows no spread (None).
+    sample shows no spread (None). Measured over one grid (`shape_zyx`, `voxel_um`): pass
+    the moving volume's shape with the reference's voxel size.
     """
     tolerance = 0.5 * min(voxel_um[1:]) if tolerance_um is None else tolerance_um
     positions = sorted({p for p, _ in estimates})
     times = sorted({t for _, t in estimates})
 
     def widest(groups):
-        best, worst = None, ()
-        for group in groups:
+        best, worst, where = None, (), None
+        for label, group in groups:
             if len(group) < 2:
                 continue
             gap, pair = _widest_pair(group, shape_zyx, voxel_um)
             if best is None or gap > best:
-                best, worst = gap, pair
-        return best, worst
+                best, worst, where = gap, pair, label
+        return best, worst, where
 
-    across_p, worst_p = widest(
-        [{p: estimates[p, t] for p in positions if (p, t) in estimates} for t in times]
+    across_p, worst_p, worst_p_t = widest(
+        [(t, {p: estimates[p, t] for p in positions if (p, t) in estimates}) for t in times]
     )
-    across_t, worst_t = widest(
-        [{(p, t): estimates[p, t] for t in times if (p, t) in estimates} for p in positions]
+    across_t, worst_t, _ = widest(
+        [
+            (p, {(p, t): estimates[p, t] for t in times if (p, t) in estimates})
+            for p in positions
+        ]
     )
     by_position = across_p is not None and across_p > tolerance
     by_time = across_t is not None and across_t > tolerance
@@ -747,6 +751,7 @@ def transform_spread(
         "across_positions_um": across_p,
         "across_timepoints_um": across_t,
         "worst_positions": list(worst_p),
+        "worst_positions_t": worst_p_t,
         "worst_timepoints": [list(k) for k in worst_t],
         "n_positions": len(positions),
         "n_timepoints": len(times),
