@@ -30,7 +30,8 @@ SIX = [
     "membrane_prediction",
 ]
 FIVE = [name for name in SIX if "mCherry" not in name]
-UNSOURCED = ["study.experimenter"]
+UNSOURCED = ["study.experimenter", "study.release_date"]
+RELEASE_DATE = "2026-12-01"
 STATS = {"p1": 0.0, "p5": 1.0, "p95": 9.0, "p99": 10.0, "mean": 5.0, "std": 2.0}
 
 
@@ -61,6 +62,9 @@ def confirmed_file(tmp_path: Path) -> Path:
     path.write_text(
         "[dca.study]\n"
         'experimenter = [{ first_name = "Ada", last_name = "Example", institution = "Example Lab" }]\n'
+        f'release_date = "{RELEASE_DATE}"\n'
+        "[dca.provenance.study.release_date]\n"
+        'source_kind = "human"\n'
     )
     return path
 
@@ -106,10 +110,20 @@ def test_column_fed_fields_warn_without_provenance(tmp_path, overrides, gaps):
     assert sorted(warnings) == [provenance_gap(field) for field in sorted(gaps)]
 
 
-def test_release_date_is_original_data_without_citation(tmp_path):
+def test_plate_name_date_is_the_acquisition_date(tmp_path):
     out = validate_dca(resolved(SIX, full_row(), confirmed_file(tmp_path)), where="t")
-    assert out["provenance"]["study.release_date"] == {
+    assert out["acquisition"]["acquisition_date"] == "2026-01-02T00:00:00"
+    assert out["provenance"]["acquisition.acquisition_date"] == {
         "source_kind": "original_data",
+        "field_path": "acquisition.acquisition_date",
+    }
+
+
+def test_release_date_comes_from_the_confirmed_file(tmp_path):
+    out = validate_dca(resolved(SIX, full_row(), confirmed_file(tmp_path)), where="t")
+    assert str(out["study"]["release_date"]) == RELEASE_DATE
+    assert out["provenance"]["study.release_date"] == {
+        "source_kind": "human",
         "field_path": "study.release_date",
     }
 
@@ -173,12 +187,15 @@ def test_base_config_alone_reports_unsourced_fields():
     assert sorted(error.value.fields) == UNSOURCED
 
 
-def test_dateless_name_reports_release_date(tmp_path):
+def test_dateless_name_prunes_the_plate_date_fields(tmp_path):
     row = full_row(store_name_date="", dataset_year="")
+    block = resolved(SIX, row, confirmed_file(tmp_path))
+    assert "acquisition_date" not in block["acquisition"]
+    assert str(block["study"]["release_date"]) == RELEASE_DATE
     with pytest.raises(DcaValidationError) as error:
-        validate_dca(resolved(SIX, row, confirmed_file(tmp_path)), where="t")
-    for field in ("study.release_date", "study.year_imaged"):
-        assert field in error.value.fields
+        validate_dca(block, where="t")
+    assert "study.year_imaged" in error.value.fields
+    assert "study.release_date" not in error.value.fields
     assert any("acquisition.acquisition_date" in issue for issue in error.value.issues)
 
 

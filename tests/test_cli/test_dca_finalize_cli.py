@@ -120,7 +120,8 @@ def test_unresolved_field_lists_position_and_field(plate, config):
     result = run(plate, config)
     assert result.exit_code != 0
     for well in WELLS:
-        assert f"{plate / well / '0'}: study.experimenter" in result.output
+        for field in ("study.experimenter", "study.release_date"):
+            assert f"{plate / well / '0'}: {field}" in result.output
 
 
 def test_resolver_errors_are_collected(plate, config):
