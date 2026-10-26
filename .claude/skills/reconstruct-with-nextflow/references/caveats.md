@@ -149,9 +149,9 @@ deliberately (§2).
 `cellprob_threshold`, `flow_threshold`, `min_size`, ...). Segment reads the
 **projected** (Z=1) plate and writes one label image per model INTO it,
 `labels/<name>`; it does not project (a model without `eval_args.do_3D` needs a
-Z=1 input). The A549 template carries the cellpose values tracking was validated
-with (cpsam_v2, diameter 80, min_size 2500) — they used to live in `track.yml`'s
-`cellpose_config`.
+Z=1 input). The A549 template runs cpsam_v2 at native resolution (`diameter: null`,
+`min_size: 300`), validated against annotated divisions; the earlier diameter 80
+(37.5 % resize) lost small daughter nuclei.
 
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
 fields: `output_mode`, `fov`, `blank_frames_path`, `segmentation_method`

@@ -7,19 +7,20 @@
 # (project.yml) makes from the assembled plate. Channel names are the PRE-rename names
 # of the assembled plate, which the projected plate inherits.
 #
-# The cellpose settings are the ones tracking ran with when it still segmented itself
-# (cpsam_v2, diameter 80, min_size 2500): validated on the 2026_04_28 annotated FOVs and
-# reproduced position by position on the 2026_08_11 v8 debug reconstruction. Cellpose 4
-# resizes each frame by 30 / diameter before inference, so diameter 80 runs at 37.5 %
-# of native resolution, which shrinks small rounded mitotic nuclei; `diameter: null`
-# with `min_size: 300` keeps them, at the cost of more false positives, and has not been
-# validated for tracking.
+# Cellpose runs at native resolution (`diameter: null`). Cellpose 4 resizes each frame by
+# 30 / diameter before inference, so the earlier diameter 80 ran at 37.5 % of native
+# resolution and lost small, dim daughter nuclei right after a division. Against the
+# TrackEdit divisions (track.yml unchanged, min_sibling_length 3), division F1 rose
+# 0.68 -> 0.71 on 2026_04_28 (v2), 0.47 -> 0.52 on 2025_07_24 and 0.41 -> 0.55 on
+# 2025_08_26 (v1), mostly from recall (25 of the 69 divisions diameter 80 missed);
+# mitotic-cell detection on 2026_04_21 rose 0.95 -> 0.99. min_size 300 px drops cellpose
+# fragments; ultrack's min_area (track.yml) still sets the smallest tracked object.
 models:
   nuclei:
     pretrained_model: cpsam_v2      # cellpose 4: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path
     channels: [nuclei_prediction]   # projected-plate channel name(s), at most 3
     eval_args:
-      diameter: 80
+      diameter: null                # native resolution (no 30 / diameter resize)
       cellprob_threshold: 0.0
       flow_threshold: 0.4
-      min_size: 2500                # px at native resolution
+      min_size: 300                 # px at native resolution
