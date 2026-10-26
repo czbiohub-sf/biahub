@@ -267,3 +267,55 @@ def test_every_timepoint_records_its_blocks_and_the_report_sums_them(beads_plate
     assert set(summary) == {"1:phase-cross-corr", "2:beads"}
     assert sum(s["won"] for s in summary.values()) == 2  # two timepoints, one winner each
     assert all("median_score" in s and "failed" in s for s in summary.values())
+
+
+class _Shift:
+    """A block that moves its start by `d` voxels in x."""
+
+    def __init__(self, d):
+        self.d = d
+
+    def estimate(self, mov, ref, seed=None):
+        from biahub.core.transform import Transform
+
+        start = seed if seed is not None else Transform.identity(3)
+        return Transform.from_translation([0.0, 0.0, self.d]) @ start
+
+
+def test_propagated_blocks_are_the_winning_runs_and_empty_frames_have_none():
+    # With seed_from previous_timepoint the chain runs twice per timepoint (from the
+    # previous result and from the input seed); the record kept the second run's blocks
+    # even when the first won, and an empty frame kept the previous timepoint's.
+    import numpy as np
+
+    from biahub.core.transform import Transform
+    from biahub.registration.engine import CrossChannel, estimate_propagated
+    from biahub.registration.estimators import ChainedEstimator
+
+    def score(t, mov, ref):  # best near x = 3
+        return -abs(t.translation[2] - 3)
+
+    chain = ChainedEstimator([_Shift(1.0), _Shift(1.0)], score_fn=score, names=["1:a", "2:b"])
+    mov = np.random.default_rng(0).random((4, 4, 8, 8)).astype(np.float32) + 1
+    mov[2] = 0  # an empty frame
+    ref = mov.copy()
+    seen = {}
+
+    def on_timepoint(t, result):
+        seen[t] = (result.transforms.get(t), chain.last_stages)
+
+    estimate_propagated(
+        mov,
+        CrossChannel(ref),
+        chain,
+        Transform.identity(3),
+        score,
+        [0, 1, 2, 3],
+        on_timepoint=on_timepoint,
+    )
+    for t in (1, 3):
+        transform, stages = seen[t]
+        won = [s for s in stages if s["won"]]
+        assert len(won) == 1
+        np.testing.assert_allclose(won[0]["matrix"], transform.matrix)  # the chosen run's
+    assert seen[2][1] is None  # the empty frame was not estimated

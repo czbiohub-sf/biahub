@@ -558,6 +558,7 @@ def estimate_series(
         journal=journal if journal is not None else RunJournal(),
     )
     for t in time_indices:
+        _forget_blocks(estimator)
         mov_t = np.asarray(mov[t])
         ref_t = np.asarray(reference_policy.reference_for(mov, t))
         if is_empty(mov_t) or is_empty(ref_t):
@@ -633,7 +634,9 @@ def _estimate_competing(estimator, mov, ref, seed, competitor, score_fn) -> Tran
             errors.append(str(e))
             continue
         score = score_fn(transform, mov, ref)
-        results.append((transform, float(score) if np.isfinite(score) else -np.inf))
+        # a stack's record of its blocks belongs to the run that is kept
+        stages = getattr(estimator, "last_stages", None)
+        results.append((transform, float(score) if np.isfinite(score) else -np.inf, stages))
     if not results:
         raise EstimationError(
             f"failed from both the previous result and the input seed: {'; '.join(errors)}"
@@ -642,7 +645,15 @@ def _estimate_competing(estimator, mov, ref, seed, competitor, score_fn) -> Tran
     for candidate in results[1:]:
         if candidate[1] > best[1]:
             best = candidate
+    if hasattr(estimator, "last_stages"):
+        estimator.last_stages = best[2]
     return best[0]
+
+
+def _forget_blocks(estimator) -> None:
+    """Clear a stack's record of its blocks: a timepoint not estimated has none."""
+    if getattr(estimator, "last_stages", None) is not None:
+        estimator.last_stages = None
 
 
 def estimate_propagated(
@@ -670,6 +681,7 @@ def estimate_propagated(
     result = SeriesResult()
     previous: Transform | None = None  # what the next timepoint starts from
     for t in time_indices:
+        _forget_blocks(estimator)
         if t in done:
             # Carry the chain on as the fresh run did: the reference frame restarts it, an
             # empty frame (no transform, no stand-in) leaves it alone.

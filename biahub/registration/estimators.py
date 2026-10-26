@@ -93,6 +93,8 @@ class ChainedEstimator:
     ) -> Transform:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
+        if self.names is not None:
+            self.last_stages = None  # a failed estimate leaves no earlier one's stages
         current = seed
         best: Transform | None = None
         best_score = -np.inf
