@@ -6,19 +6,15 @@ import pytest
 
 
 def _table(tmp_path, rows):
+    """Rows of (case, pipeline, candidate, position, tiles, points[, points_n]); n=20 if absent."""
     path = tmp_path / "benchmark.csv"
-    fields = [
-        "case",
-        "pipeline",
-        "candidate",
-        "position",
-        "tiles_median_um",
-        "points_median_um",
-    ]
+    fields = ["case", "pipeline", "candidate", "position", "tiles_median_um"]
+    fields += ["points_median_um", "points_n"]
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for row in rows:
+            row = tuple(row) + ((20,) if len(row) == 6 else ())
             writer.writerow(dict(zip(fields, row, strict=True)))
     return path
 
@@ -181,3 +177,17 @@ def test_every_pipeline_template_loads():
     assert names == ["ants", "beads", "tiles", "tiles_ants", "tiles_nuclei"]
     for path in folder.glob("*.yml"):
         EstimateTransformSettings(**yaml.safe_load(path.read_text()))
+
+
+def test_points_decide_only_when_every_pipeline_matched_enough_nuclei(tmp_path):
+    # A pipeline that matched 4 nuclei shows a small median from its few near pairs:
+    # ranking then falls back to tiles, which every pipeline measured over the whole
+    # field. Beating unregistered is judged on tiles too (its points match few nuclei).
+    from biahub.registration.benchmark import pick_pipeline
+
+    rows = []
+    for pipeline, tiles, points, n in (("good", 0.4, 0.6, 30), ("few", 2.0, 0.3, 4)):
+        rows.append(("c", pipeline, "unregistered", "A/1/0", 3.0, 0.5, 3))
+        rows.append(("c", pipeline, "transforms", "A/1/0", tiles, points, n))
+    choice = pick_pipeline(_table(tmp_path, rows))
+    assert (choice["pipeline"], choice["metric"]) == ("good", "tiles_median_um")

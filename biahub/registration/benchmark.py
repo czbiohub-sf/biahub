@@ -24,71 +24,70 @@ def pick_pipeline(
     blocks: dict[str, int] | None = None,
     tie_um: float = 0.05,
     must_beat: float = 0.5,
+    min_points: int = 10,
 ) -> dict:
     """Return the pipeline to register with, and why, from a benchmark table.
 
     Each pipeline's final transform ("transforms" rows; its blocks are not choices) is
-    scored by the median over held-out positions of `points_median_um` when the table has
-    landmarks, else `tiles_median_um`. The lowest wins; within `tie_um` of it, the pipeline
-    with fewer `blocks` (simpler) does. No winner unless it is below `must_beat` times the
-    unregistered pair's median (registration must clearly help).
+    scored by the median over held-out positions of `points_median_um` when every final
+    transform matched at least `min_points` landmarks on every position (fewer pairs make
+    a median that looks good), else of `tiles_median_um`. The lowest wins; within `tie_um`
+    of it, the pipeline with fewer `blocks` (simpler) does. No winner unless its tile
+    median is below `must_beat` times the unregistered pair's (judged on tiles: the
+    unregistered pair matches few landmarks).
     """
     with open(benchmark_csv) as f:
         rows = list(csv.DictReader(f))
     finals = [r for r in rows if r["candidate"] == "transforms"]
-    metric = (
-        "points_median_um"
-        if any(_float(r.get("points_median_um")) is not None for r in finals)
-        else "tiles_median_um"
+    enough = finals and all(
+        _float(r.get("points_median_um")) is not None
+        and (_float(r.get("points_n")) or 0) >= min_points
+        for r in finals
     )
+    metric = "points_median_um" if enough else "tiles_median_um"
 
-    def median(selected):
-        values = [_float(r.get(metric)) for r in selected]
+    def median(selected, column):
+        values = [_float(r.get(column)) for r in selected]
         values = [v for v in values if v is not None]
         return float(np.median(values)) if values else None
 
-    scores = {}
+    scores, tiles = {}, {}
     for pipeline in dict.fromkeys(r["pipeline"] for r in finals):
-        score = median([r for r in finals if r["pipeline"] == pipeline])
+        selected = [r for r in finals if r["pipeline"] == pipeline]
+        score = median(selected, metric)
         if score is not None:
-            scores[pipeline] = score
-    unregistered = median([r for r in rows if r["candidate"] == "unregistered"])
+            scores[pipeline], tiles[pipeline] = score, median(selected, "tiles_median_um")
+    unregistered = median(
+        [r for r in rows if r["candidate"] == "unregistered"], "tiles_median_um"
+    )
+    base = {"metric": metric, "unregistered_tiles_um": unregistered, "scores": scores}
     if not scores:
         return {
+            **base,
             "pipeline": None,
-            "metric": metric,
             "median_um": None,
-            "unregistered_um": unregistered,
-            "scores": {},
             "reason": "no pipeline was evaluated",
         }
     best = min(scores.values())
-    close = [p for p, s in scores.items() if s - best <= tie_um]
+    close = [p for p, v in scores.items() if v - best <= tie_um]
     blocks = blocks or {}
     winner = min(close, key=lambda p: (blocks.get(p, 1), scores[p]))
-    if unregistered is not None and scores[winner] >= must_beat * unregistered:
+    if unregistered is not None and (tiles[winner] or np.inf) >= must_beat * unregistered:
         return {
+            **base,
             "pipeline": None,
-            "metric": metric,
             "median_um": scores[winner],
-            "unregistered_um": unregistered,
-            "scores": scores,
-            "reason": f"no pipeline clearly beats unregistered ({unregistered:.2f} µm): "
-            f"the best, {winner}, reaches {scores[winner]:.2f} µm",
+            "reason": f"no pipeline clearly beats unregistered (tiles {unregistered:.2f} µm): "
+            f"the best, {winner}, reaches {tiles[winner]:.2f} µm",
         }
     reason = f"{winner}: {metric} median {scores[winner]:.2f} µm on held-out positions"
     if unregistered is not None:
-        reason += f" (unregistered {unregistered:.2f} µm)"
+        reason += f" (unregistered tiles {unregistered:.2f} µm)"
+    if not enough:
+        reason += f"; tiles decided: some pipeline matched fewer than {min_points} landmarks"
     if len(close) > 1 and blocks.get(winner, 1) < max(blocks.get(p, 1) for p in close):
         reason += f"; within {tie_um} µm of the best, the simpler pipeline"
-    return {
-        "pipeline": winner,
-        "metric": metric,
-        "median_um": scores[winner],
-        "unregistered_um": unregistered,
-        "scores": scores,
-        "reason": reason,
-    }
+    return {**base, "pipeline": winner, "median_um": scores[winner], "reason": reason}
 
 
 def choose_positions(survey_rows: list[dict], n_held_out: int = 3) -> tuple[str, list[str]]:
