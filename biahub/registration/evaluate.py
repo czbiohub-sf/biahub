@@ -909,15 +909,23 @@ def block_candidates(run_dir) -> dict:
     """Return each block of a stack run as a candidate: {block: {t or (position, t): T}}.
 
     From the per-timepoint records the run wrote (`blocks`: every block's transform),
-    under `<run>/timepoints/` or, one list per position, `<run>/positions/<r/c/f>/...`.
+    under `<run>/timepoints/` or, one list per position, `<run>/positions/<r/c/f>/...` --
+    only the layout of the positions in the run's `run.json`, not an earlier run's.
     """
     import json
 
     run_dir = Path(run_dir)
-    record_dirs = [(None, run_dir / "timepoints")] + [
-        ("/".join(d.parent.relative_to(run_dir / "positions").parts), d)
-        for d in sorted((run_dir / "positions").glob("*/*/*/timepoints"))
-    ]
+    run_file = run_dir / "run.json"  # the run's positions: only its own layout is read
+    positions = json.loads(run_file.read_text())["positions"] if run_file.exists() else None
+    if positions is None:
+        record_dirs = [(None, run_dir / "timepoints")] + [
+            ("/".join(d.parent.relative_to(run_dir / "positions").parts), d)
+            for d in sorted((run_dir / "positions").glob("*/*/*/timepoints"))
+        ]
+    elif len(positions) == 1:
+        record_dirs = [(None, run_dir / "timepoints")]
+    else:
+        record_dirs = [(key, run_dir / "positions" / key / "timepoints") for key in positions]
     candidates: dict = {}
     for position, directory in record_dirs:
         for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:

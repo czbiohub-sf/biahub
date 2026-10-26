@@ -51,10 +51,25 @@ def evaluate_transform(
     """
     transforms = load_transform_settings(transforms_filepath)
     keys = ["/".join(Path(p).parts[-3:]) for p in moving_position_dirpaths]
-    candidates = {"transforms": _file_candidate(transforms, keys, t)}
+    # positions the file has no list for (held out from a per-position estimate): each
+    # estimated position's transform is a candidate there, named after it
+    held_out = transforms.per_position and not set(keys) <= set(transforms.positions)
+    if held_out:
+        candidates = {
+            f"transforms ({pos})": {t: transforms.transform_for(t, pos)}
+            for pos in transforms.positions
+        }
+    else:
+        candidates = {"transforms": _file_candidate(transforms, keys, t)}
     run_dir = Path(transforms_filepath).with_suffix("")
     if blocks and run_dir.is_dir():
-        candidates.update(block_candidates(run_dir))
+        for name, by_key in block_candidates(run_dir).items():
+            if held_out:
+                for key, transform in by_key.items():
+                    if isinstance(key, tuple) and key[1] == t:
+                        candidates[f"{name} ({key[0]})"] = {t: transform}
+            else:
+                candidates[name] = by_key
     output_filepath = Path(output_filepath)
     rows = evaluate_candidates(
         candidates,
