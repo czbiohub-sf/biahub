@@ -9,21 +9,18 @@ import yaml
 
 from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
+from iohub.ngff.utils import create_empty_labels
 from pydantic import ValidationError
 
 from biahub.cli.main import cli
 from biahub.settings import HoctConfig, TrackastraConfig, TrackingSettings, TracksdataConfig
 
 INPUT_IMAGES = [{"path": None, "channels": {"nuclei_prediction": []}}]
+LABELS = "nuclei"
 
 
 def _settings(**kw):
-    base = {
-        "input_images": INPUT_IMAGES,
-        "segmentation_method": "cellpose",
-        "cellpose_config": {},
-    }
-    return TrackingSettings(**{**base, **kw})
+    return TrackingSettings(**{"labels": LABELS, **kw})
 
 
 def _disk(shape, cy, cx, r):
@@ -66,12 +63,13 @@ def test_ultrack_stays_the_default_tracker():
 
 
 @pytest.mark.parametrize("tracker", ["tracksdata", "hoct", "trackastra"])
-def test_label_trackers_need_cellpose_labels(tracker):
-    with pytest.raises(ValidationError, match="segmentation_method: cellpose"):
+def test_label_trackers_need_a_label_image(tracker):
+    with pytest.raises(ValidationError, match="links fixed instance labels"):
         TrackingSettings(
             input_images=INPUT_IMAGES,
             tracker=tracker,
             segmentation_method="foreground_contour",
+            target_channel="nuclei_prediction",
         )
 
 
@@ -292,16 +290,49 @@ def test_hoct_real_model_tracks_a_division():
 # --- the CLI ------------------------------------------------------------------------
 
 
+SEGMENT_PROVENANCE = {
+    "biahub-segment": {
+        "models": {LABELS: {"pretrained_model": "cpsam_v2", "channels": ["nuclei_prediction"]}}
+    }
+}
+
+
+def _write_plate(tmp_path, labels, image, label_metadata=SEGMENT_PROVENANCE):
+    """A projected (Z=1) plate with the image and `labels/nuclei`, as segment writes it."""
+    plate_path = tmp_path / "plate.zarr"
+    with open_ome_zarr(
+        plate_path, layout="hcs", mode="w", channel_names=["nuclei_prediction", "other"]
+    ) as plate:
+        position = plate.create_position("A", "1", "0")
+        # (T, C=2, Z=1, Y, X): the tracker image is channel 0; channel 1 is noise.
+        other = np.random.default_rng(0).random(image.shape, dtype=np.float32)
+        position.create_image("0", np.stack([image, other], axis=1)[:, :, None])
+    create_empty_labels(plate_path, [("A", "1", "0")], [LABELS], label_metadata=label_metadata)
+    with open_ome_zarr(plate_path / "A" / "1" / "0", mode="r+") as position:
+        position.get_label(LABELS)["0"][:, 0, 0] = labels
+    return plate_path
+
+
 @pytest.fixture
 def dividing_plate(tmp_path):
     labels, image = _dividing_movie(T=6, size=64)
-    plate_path = tmp_path / "plate.zarr"
-    with open_ome_zarr(
-        plate_path, layout="hcs", mode="w", channel_names=["nuclei_prediction"]
-    ) as plate:
-        position = plate.create_position("A", "1", "0")
-        position.create_image("0", image[:, None, None])  # (T, C=1, Z=1, Y, X)
-    return plate_path, labels
+    return _write_plate(tmp_path, labels, image), labels
+
+
+def _track_config(tmp_path, tracker, **kw):
+    config = tmp_path / "track.yml"
+    config.write_text(
+        yaml.safe_dump({"output_mode": "2D", "labels": LABELS, "tracker": tracker, **kw})
+    )
+    return config
+
+
+def _tracked(plate_path):
+    """The tracked labels, (T, Y, X), and the tracks CSV of the test position."""
+    position_path = plate_path / "A" / "1" / "0"
+    with open_ome_zarr(position_path, mode="r") as position:
+        tracked = np.asarray(position.get_label(f"tracks_{LABELS}")["0"][:, 0, 0])
+    return tracked, pd.read_csv(position_path / "tracks_A_1_0.csv")
 
 
 @pytest.mark.parametrize("tracker", ["tracksdata", "hoct", "trackastra"])
@@ -310,11 +341,6 @@ def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path,
     import biahub.track as track_mod
 
     plate_path, labels = dividing_plate
-    # cellpose is stubbed: its labels are the synthetic ones.
-    monkeypatch.setattr(track_mod, "run_cellpose_per_frame", lambda images, **kw: labels)
-    monkeypatch.setattr(track_mod, "cellpose_device", lambda gpu: "cpu")
-    monkeypatch.setattr(track_mod, "stage_cellpose_weights", lambda: None)
-    monkeypatch.setattr(track_mod, "warm_cellpose_weights", lambda name: None)
     warmed = []
     monkeypatch.setattr(track_mod, "warm_hoct_weights", lambda model: warmed.append(model))
     monkeypatch.setattr(
@@ -332,21 +358,10 @@ def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path,
         staticmethod(lambda name, **kw: Model()),
     )
     _stub_hoct(monkeypatch, labels, {})
-    config = tmp_path / "track.yml"
-    config.write_text(
-        yaml.safe_dump(
-            {
-                "output_mode": "2D",
-                "target_channel": "nuclei_prediction",
-                "input_images": INPUT_IMAGES,
-                "segmentation_method": "cellpose",
-                "cellpose_config": {"gpu": False},
-                "tracker": tracker,
-                "min_sibling_length": 1,
-            }
-        )
-    )
-    position, out = str(plate_path / "A" / "1" / "0"), str(tmp_path / "out.zarr")
+    config = _track_config(tmp_path, tracker, min_sibling_length=1)
+    position, out = str(plate_path / "A" / "1" / "0"), str(tmp_path / "out")
+    # A GEFF an earlier ultrack run left: these trackers write none, so it must go.
+    (plate_path / "A" / "1" / "0" / "tracks.geff").mkdir()
 
     init = CliRunner().invoke(
         cli, ["track", "--init", "-i", position, "-o", out, "-c", str(config)]
@@ -359,12 +374,11 @@ def test_track_debug_run_with_a_label_tracker(tracker, dividing_plate, tmp_path,
     )
 
     assert result.exit_code == 0, result.output
-    assert f"Tracking with {tracker}" in result.output
+    assert f"labels/{LABELS} with {tracker}" in result.output
     assert "Sibling filter (min_length=1)" in result.output
-    tracks = pd.read_csv(tmp_path / "out.zarr" / "A" / "1" / "0" / "tracks_A_1_0.csv")
-    with open_ome_zarr(tmp_path / "out.zarr" / "A" / "1" / "0", mode="r") as ds:
-        tracked = np.asarray(ds.data[:, 0, 0])
+    tracked, tracks = _tracked(plate_path)
     _check_one_division(tracks, tracked)
+    assert not (plate_path / "A" / "1" / "0" / "tracks.geff").exists()
 
 
 def test_a_one_child_link_is_merged_into_its_parent():
@@ -418,14 +432,10 @@ def test_merge_keeps_divisions_and_follows_chains():
     assert merged[merged.track_id == 4].t.tolist() == [2, 3]
 
 
-def test_label_trackers_need_a_cellpose_config():
-    with pytest.raises(ValidationError, match="cellpose_config"):
-        TrackingSettings(
-            input_images=INPUT_IMAGES,
-            tracker="trackastra",
-            segmentation_method="cellpose",
-            cellpose_config=None,
-        )
+def test_label_trackers_refuse_in_track_cellpose():
+    """Segmentation moved to `biahub segment`; the trackers link its label image."""
+    with pytest.raises(ValidationError, match="biahub segment"):
+        TrackingSettings(tracker="trackastra", segmentation_method="cellpose")
 
 
 def test_thread_count_without_cpu_affinity(monkeypatch):
@@ -496,30 +506,12 @@ def test_an_empty_result_reaches_the_outputs(tracker, dividing_plate, tmp_path, 
     """No cells at all: the run still writes an empty CSV and zero labels, sibling filter on."""
     import biahub.track as track_mod
 
-    plate_path, labels = dividing_plate
-    monkeypatch.setattr(
-        track_mod, "run_cellpose_per_frame", lambda images, **kw: np.zeros_like(labels)
-    )
-    monkeypatch.setattr(track_mod, "cellpose_device", lambda gpu: "cpu")
-    monkeypatch.setattr(track_mod, "stage_cellpose_weights", lambda: None)
-    monkeypatch.setattr(track_mod, "warm_cellpose_weights", lambda name: None)
+    labels, image = _dividing_movie(T=6, size=64)
+    plate_path = _write_plate(tmp_path, np.zeros_like(labels), image)
     monkeypatch.setattr(track_mod, "warm_hoct_weights", lambda model: None)
     monkeypatch.setattr(track_mod, "warm_trackastra_weights", lambda model: None)
-    config = tmp_path / "track.yml"
-    config.write_text(
-        yaml.safe_dump(
-            {
-                "output_mode": "2D",
-                "target_channel": "nuclei_prediction",
-                "input_images": INPUT_IMAGES,
-                "segmentation_method": "cellpose",
-                "cellpose_config": {"gpu": False},
-                "tracker": tracker,
-                "min_sibling_length": 3,
-            }
-        )
-    )
-    position, out = str(plate_path / "A" / "1" / "0"), str(tmp_path / "out.zarr")
+    config = _track_config(tmp_path, tracker, min_sibling_length=3)
+    position, out = str(plate_path / "A" / "1" / "0"), str(tmp_path / "out")
     assert (
         CliRunner()
         .invoke(cli, ["track", "--init", "-i", position, "-o", out, "-c", str(config)])
@@ -532,10 +524,9 @@ def test_an_empty_result_reaches_the_outputs(tracker, dividing_plate, tmp_path, 
     )
 
     assert result.exit_code == 0, result.output
-    tracks = pd.read_csv(tmp_path / "out.zarr" / "A" / "1" / "0" / "tracks_A_1_0.csv")
+    tracked, tracks = _tracked(plate_path)
     assert len(tracks) == 0 and "track_id" in tracks.columns
-    with open_ome_zarr(tmp_path / "out.zarr" / "A" / "1" / "0", mode="r") as ds:
-        assert not np.asarray(ds.data).any()
+    assert not tracked.any()
 
 
 def test_hoct_solver_override_typos_are_refused(monkeypatch):
@@ -565,26 +556,12 @@ def test_hoct_solver_preference_is_refused_in_the_settings():
 
 
 def test_track_init_checks_the_hoct_solver_override(dividing_plate, tmp_path, monkeypatch):
-    """A bad solver key fails at --init, before any worker runs cellpose."""
+    """A bad solver key fails at --init, before any worker runs."""
     import biahub.track as track_mod
 
     plate_path, _ = dividing_plate
-    monkeypatch.setattr(track_mod, "warm_cellpose_weights", lambda name: None)
     monkeypatch.setattr(track_mod, "warm_hoct_weights", lambda model: None)
-    config = tmp_path / "track.yml"
-    config.write_text(
-        yaml.safe_dump(
-            {
-                "output_mode": "2D",
-                "target_channel": "nuclei_prediction",
-                "input_images": INPUT_IMAGES,
-                "segmentation_method": "cellpose",
-                "cellpose_config": {"gpu": False},
-                "tracker": "hoct",
-                "hoct_config": {"solver": {"divison_weight": 1.0}},
-            }
-        )
-    )
+    config = _track_config(tmp_path, "hoct", hoct_config={"solver": {"divison_weight": 1.0}})
     result = CliRunner().invoke(
         cli,
         [
@@ -592,8 +569,6 @@ def test_track_init_checks_the_hoct_solver_override(dividing_plate, tmp_path, mo
             "--init",
             "-i",
             str(plate_path / "A" / "1" / "0"),
-            "-o",
-            str(tmp_path / "out.zarr"),
             "-c",
             str(config),
         ],
@@ -709,3 +684,73 @@ def test_hoct_real_model_on_temporally_separated_links():
         labels, labels.astype(np.float32), HoctConfig(), pixel_size=0.1133
     )
     assert len(tracks) == 4 and tracked.shape == labels.shape
+
+
+# --- the image hoct and trackastra read ----------------------------------------------
+
+
+def test_tracker_image_channel_comes_from_segment_provenance(dividing_plate):
+    from biahub.track import load_tracker_image, tracker_image_channel
+
+    plate_path, _ = dividing_plate
+    position = plate_path / "A" / "1" / "0"
+    assert tracker_image_channel(position, LABELS) == "nuclei_prediction"
+    image = load_tracker_image(position, "nuclei_prediction")
+    assert image.shape == (6, 64, 64)
+    np.testing.assert_array_equal(image, _dividing_movie(T=6, size=64)[1])
+
+
+def test_tracker_image_channel_override_wins(dividing_plate):
+    from biahub.track import tracker_image_channel
+
+    plate_path, _ = dividing_plate
+    assert tracker_image_channel(plate_path / "A" / "1" / "0", LABELS, "other") == "other"
+
+
+def test_tracker_image_channel_without_provenance_needs_the_override(tmp_path):
+    from biahub.track import tracker_image_channel
+
+    labels, image = _dividing_movie(T=6, size=64)
+    plate_path = _write_plate(tmp_path, labels, image, label_metadata={})
+    position = plate_path / "A" / "1" / "0"
+    with pytest.raises(ValueError, match="image_channel"):
+        tracker_image_channel(position, LABELS)
+    assert tracker_image_channel(position, LABELS, "nuclei_prediction") == "nuclei_prediction"
+
+
+def test_track_init_refuses_a_missing_image_channel(dividing_plate, tmp_path, monkeypatch):
+    """A wrong image_channel fails at --init, before any worker runs."""
+    import biahub.track as track_mod
+
+    plate_path, _ = dividing_plate
+    monkeypatch.setattr(track_mod, "warm_trackastra_weights", lambda model: None)
+    config = _track_config(tmp_path, "trackastra", trackastra_config={"image_channel": "BF"})
+    result = CliRunner().invoke(
+        cli, ["track", "--init", "-i", str(plate_path / "A" / "1" / "0"), "-c", str(config)]
+    )
+    assert result.exit_code != 0
+    assert "'BF'" in str(result.exception) + result.output
+
+
+def test_hoct_reads_the_image_its_labels_were_segmented_from(dividing_plate, monkeypatch):
+    import biahub.track as track_mod
+
+    plate_path, labels = dividing_plate
+    seen = {}
+
+    def fake_hoct(labels_in, images, config, pixel_size):
+        seen["image"] = images
+        return labels_in, track_mod._empty_result(labels_in.shape)[1]
+
+    monkeypatch.setattr(track_mod, "run_hoct", fake_hoct)
+    track_mod.link_fixed_labels(
+        "hoct",
+        plate_path / "A" / "1" / "0",
+        LABELS,
+        None,
+        0.1133,
+        TracksdataConfig(),
+        HoctConfig(),
+        TrackastraConfig(),
+    )
+    np.testing.assert_array_equal(seen["image"], _dividing_movie(T=6, size=64)[1])

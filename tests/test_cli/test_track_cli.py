@@ -1,4 +1,7 @@
 import os
+import tempfile
+
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -7,17 +10,26 @@ import yaml
 
 from click.testing import CliRunner
 from iohub.ngff import open_ome_zarr
+from iohub.ngff.utils import create_empty_labels
 
 from biahub.cli.main import cli
-from biahub.settings import TrackingSettings, ZSlicing
-from biahub.track import _init_output_plate, resolve_z_slice, track
+from biahub.settings import TrackingSettings
+from biahub.track import _init_labels, track, write_tracking_labels
+from biahub.utils.ngff import LABEL_SHARDS, label_chunks, label_layout
+
+# The label image `biahub segment` would write (its model name) and the one track writes.
+INPUT_LABEL = "nuclei"
+LABEL = "tracks_nuclei"
 
 
 @pytest.fixture(scope="function")
 def example_tracking_plate(tmp_path):
     """
-    Create a test plate with nuclei and membrane prediction channels for tracking
+    Create a test plate with nuclei and membrane prediction channels for tracking, and
+    the instance labels of the nuclei spots in ``labels/nuclei`` as segment would write.
     """
+    from skimage.measure import label as connected_components
+
     plate_path = tmp_path / "tracking_plate.zarr"
 
     position_list = (
@@ -33,21 +45,26 @@ def example_tracking_plate(tmp_path):
         channel_names=["nuclei_prediction", "membrane_prediction"],
     )
 
+    # Deterministic spots: on random data ultrack occasionally finds no solution, and
+    # the failing in-process job drops submitit into pdb (which pytest reports as a
+    # read from stdin).
+    np.random.seed(0)
     for row, col, fov in position_list:
         position = plate_dataset.create_position(row, col, fov)
-        # Shape: (T, C, Z, Y, X) = (5, 2, 3, 64, 64)
-        data = np.random.uniform(0.1, 0.3, size=(5, 2, 3, 64, 64)).astype(np.float32)
+        # A projected (Z=1) plate, what 2D tracking reads: (T, C, Z, Y, X) = (5, 2, 1, 64, 64)
+        data = np.random.uniform(0.1, 0.3, size=(5, 2, 1, 64, 64)).astype(np.float32)
 
-        # Add some bright nuclei spots to channel 0
+        # Add some bright nuclei spots to channel 0 (11 x 11 px, above the configs'
+        # min_area of 100; a single plane no longer merges spots across Z)
         for t in range(5):
-            for z in range(3):
+            for z in range(1):
                 for _ in range(np.random.randint(3, 6)):
                     y, x = np.random.randint(10, 54, 2)
-                    data[t, 0, z, y - 3 : y + 4, x - 3 : x + 4] = np.random.uniform(0.7, 1.0)
+                    data[t, 0, z, y - 5 : y + 6, x - 5 : x + 6] = np.random.uniform(0.7, 1.0)
 
         # Add some membrane boundaries to channel 1
         for t in range(5):
-            for z in range(3):
+            for z in range(1):
                 for _ in range(np.random.randint(2, 4)):
                     y, x = np.random.randint(15, 49, 2)
                     yy, xx = np.ogrid[:64, :64]
@@ -55,6 +72,20 @@ def example_tracking_plate(tmp_path):
                     data[t, 1, z][mask] = np.random.uniform(0.6, 0.9)
 
         position["0"] = data
+
+    plate_dataset.close()
+    positions = [plate_path / Path(*key) for key in position_list]
+    create_empty_labels(
+        plate_path, list(position_list), [INPUT_LABEL], label_metadata={"biahub-segment": {}}
+    )
+    for position_path in positions:
+        with open_ome_zarr(str(position_path), mode="r+") as position:
+            nuclei = np.asarray(position["0"][:, 0])  # (T, Z, Y, X)
+            labels = np.stack([connected_components(frame > 0.5) for frame in nuclei])
+            position.get_label(INPUT_LABEL)["0"][:] = labels[:, None].astype(
+                np.uint32
+            )  # (T, 1, Z, Y, X)
+    plate_dataset = open_ome_zarr(plate_path, mode="r")
 
     yield plate_path, plate_dataset
 
@@ -81,34 +112,85 @@ def example_blank_frames_csv(tmp_path):
     yield csv_path
 
 
+def _assert_tracking_outputs(position_path):
+    """Labels in the plate's one plane, a valid GEFF linked to them, and the CSV."""
+    import geff
+
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        labels = pos.get_label(LABEL)["0"][:]
+    assert labels.dtype == np.uint32
+    assert labels.shape[1:3] == (1, 1)  # one channel; the projected (Z=1) plate's Z
+    assert labels.any()
+
+    geff_path = position_path / "tracks.geff"
+    geff.validate_structure(str(geff_path))
+    _, metadata = geff.read(str(geff_path), backend="networkx")
+    (related,) = metadata.related_objects
+    assert related.path == f"../labels/{LABEL}"
+    assert related.node_prop == "seg_id"
+
+    (csv_path,) = position_path.glob("tracks_*.csv")
+    tracks = pd.read_csv(csv_path)
+    assert set(tracks["track_id"]) <= set(np.unique(labels)) - {0}
+
+    # The full Ultrack config is provenance on the label image, not a file beside it.
+    label_attrs = yaml.safe_load((position_path / "labels" / LABEL / "zarr.json").read_text())
+    ultrack_config = label_attrs["attributes"]["biahub-track"]["ultrack_config"]
+    assert "solution_gap" in ultrack_config["tracking"]
+    assert "working_dir" not in ultrack_config["data"]
+
+
+_ULTRACK_CONFIG = {
+    "segmentation_config": {
+        "min_area": 100,
+        "max_area": 80000,
+        "n_workers": 1,
+        "min_frontier": 0.4,
+        "max_noise": 0.05,
+    },
+    "linking_config": {
+        "n_workers": 1,
+        "max_distance": 15,
+        "distance_weight": -0.0001,
+        "max_neighbors": 3,
+    },
+    "tracking_config": {
+        "n_threads": 1,
+        "disappear_weight": -0.0001,
+        "appear_weight": -0.001,
+        "division_weight": -0.0001,
+    },
+}
+
+
 def _make_tracking_config(plate_path, tmp_path):
-    """Create a minimal tracking config pointing at the test plate."""
+    """A minimal config tracking the plate's `labels/nuclei` image (the default path)."""
     config_path = tmp_path / "track_config.yml"
     config = {
         "output_mode": "2D",
         "fov": "*/*/*",
-        "z_slicing": {"method": "central"},
-        "target_channel": "nuclei_prediction",
+        "labels": INPUT_LABEL,
+        "labels_sigma": 1.0,
+        "tracking_config": _ULTRACK_CONFIG,
+    }
+    config_path.write_text(yaml.dump(config))
+    return config_path
+
+
+def _make_foreground_contour_config(plate_path, tmp_path):
+    """A config on the legacy foreground+contour path, which processes image channels."""
+    config_path = tmp_path / "track_config.yml"
+    config = {
+        "output_mode": "2D",
+        "fov": "*/*/*",
+        "target_channel": LABEL,
+        "segmentation_method": "foreground_contour",
         "input_images": [
             {
                 # Primary data source left null -> resolved from the -i input plate.
+                # The plate is projected (Z=1), so the channels need no processing.
                 "path": None,
-                "channels": {
-                    "nuclei_prediction": [
-                        {
-                            "function": "np.mean",
-                            "kwargs": {"axis": 1},
-                            "per_timepoint": False,
-                        },
-                    ],
-                    "membrane_prediction": [
-                        {
-                            "function": "np.mean",
-                            "kwargs": {"axis": 1},
-                            "per_timepoint": False,
-                        },
-                    ],
-                },
+                "channels": {"nuclei_prediction": [], "membrane_prediction": []},
             },
             {
                 "path": None,
@@ -133,27 +215,7 @@ def _make_tracking_config(plate_path, tmp_path):
                 },
             },
         ],
-        "tracking_config": {
-            "segmentation_config": {
-                "min_area": 100,
-                "max_area": 80000,
-                "n_workers": 1,
-                "min_frontier": 0.4,
-                "max_noise": 0.05,
-            },
-            "linking_config": {
-                "n_workers": 1,
-                "max_distance": 15,
-                "distance_weight": -0.0001,
-                "max_neighbors": 3,
-            },
-            "tracking_config": {
-                "n_threads": 1,
-                "disappear_weight": -0.0001,
-                "appear_weight": -0.001,
-                "division_weight": -0.0001,
-            },
-        },
+        "tracking_config": _ULTRACK_CONFIG,
     }
     config_path.write_text(yaml.dump(config))
     return config_path
@@ -175,7 +237,7 @@ def test_track_cli_local(
 
     plate_path, _ = example_tracking_plate
     config_path = _make_tracking_config(plate_path, tmp_path)
-    output_path = tmp_path / "tracking_output.zarr"
+    output_path = tmp_path / "tracking_output"
 
     track(
         input_position_dirpaths=[
@@ -189,10 +251,39 @@ def test_track_cli_local(
         cluster="local",
     )
 
-    assert output_path.exists()
     for position in ["A/1/0", "B/1/0", "B/2/0"]:
-        position_path = output_path / position
-        assert position_path.exists()
+        _assert_tracking_outputs(plate_path / position)
+        assert (output_path / position.replace("/", "_")).is_dir()  # Ultrack database
+        with open_ome_zarr(str(plate_path / position), mode="r") as pos:
+            # The segmentation labels are left as they were, beside the tracked ones.
+            assert pos.label_names() == [INPUT_LABEL, LABEL]
+            assert pos.get_label(INPUT_LABEL)["0"][:].any()
+
+
+def test_track_cli_foreground_contour_path(tmp_path, example_tracking_plate, monkeypatch):
+    """The legacy path processes image channels into a mask and contour map."""
+    monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
+    plate_path, _ = example_tracking_plate
+    config_path = _make_foreground_contour_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A" / "1" / "0"),
+            "-o",
+            str(tmp_path / "out"),
+            "-c",
+            str(config_path),
+            "--cluster",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Tracking with foreground + contour" in result.output
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
 def test_track_cli_with_blank_frames(
@@ -207,7 +298,7 @@ def test_track_cli_with_blank_frames(
 
     plate_path, _ = example_tracking_plate
     config_path = _make_tracking_config(plate_path, tmp_path)
-    output_path = tmp_path / "tracking_output_blank_frames.zarr"
+    output_path = tmp_path / "tracking_output_blank_frames"
 
     # Add blank_frames_path to config
     with open(config_path) as f:
@@ -228,7 +319,7 @@ def test_track_cli_with_blank_frames(
         cluster="local",
     )
 
-    assert output_path.exists()
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
 def test_track_cli_invalid_config(tmp_path, monkeypatch):
@@ -266,9 +357,8 @@ def test_track_cli_missing_input_path(tmp_path, example_track_settings, monkeypa
 
 
 def test_track_cli_init_only(tmp_path, example_tracking_plate):
-    """Test that --init creates the output store and emits RESOURCES."""
+    """--init creates empty label images (the plate's Z) in the -i positions and emits RESOURCES."""
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "track_output.zarr"
     config_path = _make_tracking_config(plate_path, tmp_path)
 
     runner = CliRunner()
@@ -280,8 +370,6 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
             str(plate_path / "A" / "1" / "0"),
             str(plate_path / "B" / "1" / "0"),
             str(plate_path / "B" / "2" / "0"),
-            "-o",
-            str(output_path),
             "-c",
             str(config_path),
             "--init",
@@ -289,12 +377,40 @@ def test_track_cli_init_only(tmp_path, example_tracking_plate):
     )
 
     assert result.exit_code == 0, result.output
-    assert output_path.exists()
     assert "RESOURCES:" in result.output
 
-    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
-        assert ds.data.dtype == np.uint32
-        assert ds.channel_names == ["nuclei_prediction_labels"]
+    for position in ["A/1/0", "B/1/0", "B/2/0"]:
+        with open_ome_zarr(str(plate_path / position), mode="r") as pos:
+            assert pos.label_names() == [INPUT_LABEL, LABEL]
+            assert pos.channel_names == ["nuclei_prediction", "membrane_prediction"]
+            label = pos.get_label(LABEL)
+            assert label["0"].shape == (5, 1, 1, 64, 64)  # one channel, the plate's Z
+            assert label["0"].dtype == np.uint32
+            assert not label["0"][:].any()
+            assert [ax.name.lower() for ax in label.axes] == ["t", "c", "z", "y", "x"]
+        label_attrs = yaml.safe_load(
+            (plate_path / position / "labels" / LABEL / "zarr.json").read_text()
+        )["attributes"]
+        assert label_attrs["biahub-track"]["labels"] == INPUT_LABEL
+        # The labels listing lives on the labels group (OME-NGFF 0.5).
+        labels_attrs = yaml.safe_load(
+            (plate_path / position / "labels" / "zarr.json").read_text()
+        )["attributes"]
+        assert labels_attrs["ome"]["labels"] == [INPUT_LABEL, LABEL]
+
+
+def test_track_init_requires_the_input_label_image(tmp_path, create_custom_plate):
+    """A plate segment has not run on fails at --init, naming `biahub segment`."""
+    plate_path, _ = create_custom_plate(tmp_path, z_size=1)
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli, ["track", "--init", "-i", str(plate_path / "A/1/0"), "-c", str(config_path)]
+    )
+
+    assert result.exit_code != 0
+    assert "biahub segment" in str(result.exception)
+    assert not (plate_path / "A/1/0" / "labels").exists()
 
 
 def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monkeypatch):
@@ -302,169 +418,284 @@ def test_track_cli_debug_single_position(tmp_path, example_tracking_plate, monke
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
 
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "track_output.zarr"
     config_path = _make_tracking_config(plate_path, tmp_path)
+    # No -o: the Ultrack database goes to $TMPDIR and the submitit folder to ./
+    temp_dir = tmp_path / "tmpdir"
+    temp_dir.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_dir))
+    monkeypatch.chdir(tmp_path)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "track",
-            "-i",
-            str(plate_path / "A" / "1" / "0"),
-            "-o",
-            str(output_path),
-            "-c",
-            str(config_path),
-            "--cluster",
-            "debug",
-        ],
-    )
+    def run():
+        return CliRunner().invoke(
+            cli,
+            [
+                "track",
+                "-i",
+                str(plate_path / "A" / "1" / "0"),
+                "-c",
+                str(config_path),
+                "--cluster",
+                "debug",
+            ],
+        )
 
+    result = run()
     assert result.exit_code == 0, result.output
-    assert output_path.exists()
     assert "Tracking complete:" in result.output
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
+    # The temporary database was deleted. (ultrack's own temporary arrays go when
+    # they are garbage collected, at the latest when the worker process exits.)
+    assert not list(temp_dir.glob("biahub-track-*"))
+    assert (tmp_path / "slurm_output").is_dir()
 
-    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
-        data = ds["0"][:]
-        assert data.dtype == np.uint32
-        assert data.shape[0] > 0
-
-
-# ---------------------------------------------------------------------------
-# Z-slicing resolution
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_z_slice_all():
-    z_slices, n = resolve_z_slice(ZSlicing(method="all"), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 30
-
-
-def test_resolve_z_slice_central():
-    z_slices, n = resolve_z_slice(ZSlicing(method="central"), z_shape=21)
-    assert n == z_slices.stop - z_slices.start
-    assert n >= 3
-
-
-def test_resolve_z_slice_range():
-    z_slices, n = resolve_z_slice(ZSlicing(method="range", range=(5, 10)), z_shape=30)
-    assert z_slices == slice(5, 10)
-    assert n == 5
-
-
-def test_resolve_z_slice_range_invalid():
-    with pytest.raises(ValueError):
-        resolve_z_slice(ZSlicing(method="range", range=(10, 5)), z_shape=30)
-
-
-def test_resolve_z_slice_focus_loads_full_reports_window():
-    # focus loads the full stack at read time; the count is the fixed window size.
-    z_slices, n = resolve_z_slice(ZSlicing(method="focus", window_size=15), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 15
-    # window larger than the stack collapses the count to the full depth.
-    _, n = resolve_z_slice(ZSlicing(method="focus", window_size=50), z_shape=30)
-    assert n == 30
-
-
-def test_focus_window_fixed_size_and_shifts_at_edges():
-    from biahub.track import _focus_window
-
-    # centred window of the requested size.
-    assert _focus_window(15, 6, 30, 1 / 3) == (slice(13, 19), 6)
-    # window bigger than the stack collapses to the full range.
-    assert _focus_window(15, 50, 30, 1 / 3) == (slice(0, 30), 30)
-    # a window that would spill past an edge is shifted, not clipped.
-    z_slices, n = _focus_window(29, 6, 30, 0.0)
-    assert n == 6
-    assert 0 <= z_slices.start and z_slices.stop <= 30
-
-
-def test_apply_focus_slicing_uniform_window(monkeypatch):
-    from biahub import track as track_mod
-
-    # Deterministic focus centre so the test doesn't depend on waveorder.
-    monkeypatch.setattr(track_mod, "_median_focus_plane", lambda stack, pixel_size: 15)
-
-    T, Z, Y, X = 4, 30, 8, 8
-    data_dict = {
-        "a": np.arange(T * Z * Y * X).reshape(T, Z, Y, X).astype(float),
-        "b": np.zeros((T, Z, Y, X)),
-    }
-    z = ZSlicing(method="focus", window_size=6, frac_below=1 / 3)
-    out = track_mod.apply_focus_slicing(data_dict, z, pixel_size=0.5)
-
-    # Same fixed window applied to every channel (center=15 -> slice(13, 19)).
-    assert out["a"].shape == (T, 6, Y, X)
-    assert out["b"].shape == (T, 6, Y, X)
-    assert np.array_equal(out["a"], data_dict["a"][:, 13:19])
-
-
-def test_zslicing_focus_defaults_window_size():
-    # focus works without an explicit window_size (defaults to 48).
-    z = ZSlicing(method="focus")
-    assert z.window_size == 48
-
-
-def test_zslicing_ignores_irrelevant_fields():
-    # method decides which fields are used; the rest are ignored, not rejected.
-    z_slices, n = resolve_z_slice(
-        ZSlicing(method="all", range=(0, 5), window_size=10), z_shape=30
-    )
-    assert z_slices == slice(None)
-    assert n == 30
-
-
-def test_resolve_z_slice_range_unset_falls_back_to_all():
-    z_slices, n = resolve_z_slice(ZSlicing(method="range"), z_shape=30)
-    assert z_slices == slice(None)
-    assert n == 30
+    # A retry overwrites the same outputs.
+    result = run()
+    assert result.exit_code == 0, result.output
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
 # ---------------------------------------------------------------------------
-# Output plate shape matches tracked Z
+# Labels and dimensionality: track neither projects nor selects Z (that is
+# `biahub project`); the label image takes the plate's Z
 # ---------------------------------------------------------------------------
 
 
 def _minimal_settings(**overrides):
+    """Legacy-path settings: they need no input label image, only the plate."""
     base = {
-        "target_channel": "nuclei_prediction",
-        "input_images": [
-            {
-                "path": None,
-                "channels": {
-                    "nuclei_prediction": [{"function": "np.mean", "kwargs": {"axis": 1}}]
-                },
-            }
-        ],
+        "target_channel": LABEL,
+        "segmentation_method": "foreground_contour",
+        "input_images": [{"path": None, "channels": {"nuclei_prediction": []}}],
     }
     base.update(overrides)
     return TrackingSettings(**base)
 
 
-@pytest.mark.parametrize(
-    "output_mode, z_slicing, expected_z",
-    [
-        ("2D", {"method": "central"}, 1),
-        ("3D", {"method": "range", "range": (0, 2)}, 2),
-        # Regression: focus + 3D output Z equals the fixed focus window, not the
-        # full stack -- this is the shape-mismatch bug _init_output_plate had.
-        ("3D", {"method": "focus", "window_size": 2}, 2),
-    ],
-)
-def test_init_output_plate_shape(
-    tmp_path, example_tracking_plate, output_mode, z_slicing, expected_z
-):
-    plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "init_shape.zarr"
-    settings = _minimal_settings(output_mode=output_mode, z_slicing=z_slicing)
+def test_labels_is_the_default_and_names_the_output():
+    with pytest.raises(ValueError, match="`labels` is not set"):
+        TrackingSettings()
+    settings = TrackingSettings(labels="nuclei")
+    assert settings.segmentation_method == "labels"
+    assert settings.tracked_label == "tracks_nuclei"
+    assert settings.input_images == []
+    with pytest.raises(ValueError, match="target_channel is for"):
+        TrackingSettings(labels="nuclei", target_channel="x")
 
-    shape = _init_output_plate([str(plate_path / "A" / "1" / "0")], output_path, settings)
-    assert shape[2] == expected_z
-    with open_ome_zarr(str(output_path / "A" / "1" / "0"), mode="r") as ds:
-        assert ds.data.shape[2] == expected_z
+
+def test_foreground_contour_needs_a_target_channel_and_input_images():
+    with pytest.raises(ValueError, match="needs target_channel"):
+        TrackingSettings(segmentation_method="foreground_contour")
+    with pytest.raises(ValueError, match="needs input_images"):
+        TrackingSettings(segmentation_method="foreground_contour", target_channel="x")
+    assert _minimal_settings().tracked_label == LABEL
+
+
+def test_output_label_names_the_tracked_image_and_the_tracks_files():
+    default = TrackingSettings(labels="nuclei")
+    assert (default.tracked_label, default.tracks_stem) == ("tracks_nuclei", "tracks")
+    custom = TrackingSettings(labels="nuclei", output_label="nuclei_sigma3")
+    assert (custom.tracked_label, custom.tracks_stem) == (
+        "nuclei_sigma3",
+        "tracks_nuclei_sigma3",
+    )
+    with pytest.raises(ValueError, match="is the label image being tracked"):
+        TrackingSettings(labels="nuclei", output_label="nuclei")
+    with pytest.raises(ValueError, match="output_label is for"):
+        _minimal_settings(output_label="x")
+
+
+def test_track_debug_run_with_an_output_label(tmp_path, example_tracking_plate, monkeypatch):
+    """Two tracking runs of one segmentation keep their labels, GEFFs and CSVs apart."""
+    monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
+    plate_path, _ = example_tracking_plate
+    config_path = _make_tracking_config(plate_path, tmp_path)
+    config = yaml.safe_load(config_path.read_text())
+    config["output_label"] = "nuclei_run2"
+    config_path.write_text(yaml.safe_dump(config))
+    position_path = plate_path / "A" / "1" / "0"
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "--cluster",
+            "debug",
+            "-i",
+            str(position_path),
+            "-o",
+            str(tmp_path / "o"),
+            "-c",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        assert pos.label_names() == [INPUT_LABEL, "nuclei_run2"]
+        assert pos.get_label("nuclei_run2")["0"][:].any()
+    assert (position_path / "tracks_nuclei_run2.geff").is_dir()
+    assert (position_path / "tracks_nuclei_run2_A_1_0.csv").is_file()
+    assert not (position_path / "tracks.geff").exists()
+    import geff
+
+    _, metadata = geff.read(str(position_path / "tracks_nuclei_run2.geff"), backend="networkx")
+    assert metadata.related_objects[0].path == "../labels/nuclei_run2"
+
+
+def test_cellpose_config_is_rejected_with_a_pointer_to_segment():
+    with pytest.raises(ValueError, match="biahub segment.*labels"):
+        TrackingSettings(labels="nuclei", cellpose_config={"diameter": 80})
+    with pytest.raises(ValueError, match="biahub segment"):
+        TrackingSettings(segmentation_method="cellpose")
+
+
+def test_init_labels_take_the_input_z(tmp_path, example_tracking_plate, create_custom_plate):
+    """The label image has the plate's Z: one plane for a projected plate, the stack in 3D."""
+    flat_path, _ = example_tracking_plate  # Z=1
+    position_path = flat_path / "A" / "1" / "0"
+    shape = _init_labels([position_path], _minimal_settings())
+    assert shape[2] == 1
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        assert pos.get_label(LABEL)["0"].shape == (5, 1, 1, 64, 64)
+
+    stack_path, _ = create_custom_plate(tmp_path, z_size=3)
+    position_path = stack_path / "A" / "1" / "0"
+    shape = _init_labels([position_path], _minimal_settings(output_mode="3D"))
+    assert shape[2] == 3
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        assert pos.get_label(LABEL)["0"].shape == (3, 1, 3, 5, 6)
+
+
+@pytest.mark.parametrize(
+    "output_mode, z_size, message",
+    [("2D", 3, "input is 3D.*biahub project"), ("3D", 1, "one Z-plane")],
+)
+def test_init_labels_refuses_a_dimensionality_mismatch(
+    tmp_path, create_custom_plate, output_mode, z_size, message
+):
+    plate_path, _ = create_custom_plate(tmp_path, z_size=z_size)
+    position_path = plate_path / "A" / "1" / "0"
+    with pytest.raises(ValueError, match=message):
+        _init_labels([position_path], _minimal_settings(output_mode=output_mode))
+    assert not (position_path / "labels").exists()
+
+
+def test_init_labels_leaves_existing_labels(tmp_path, example_tracking_plate):
+    plate_path, _ = example_tracking_plate
+    position_path = plate_path / "A" / "1" / "0"
+    settings = _minimal_settings()
+
+    _init_labels([position_path], settings)
+    with open_ome_zarr(str(position_path), mode="r+") as pos:
+        pos.get_label(LABEL)["0"][0, 0, 0, 0, 0] = 7
+        image = pos["0"][:]
+    _init_labels([position_path], settings)
+    with open_ome_zarr(str(position_path), mode="r") as pos:
+        assert pos.get_label(LABEL)["0"][0, 0, 0, 0, 0] == 7
+        assert np.array_equal(pos["0"][:], image)
+
+
+def test_label_layout(tmp_path, example_tracking_plate):
+    """1 MB uint32 chunks (DCA SHOULD) and a 200 MB shard target, as iohub's sizer takes it."""
+    assert label_chunks((67, 1, 86, 1664, 1193)) == (16, 1, 1, 128, 128)
+    assert label_chunks((5, 1, 1, 64, 64)) == (5, 1, 1, 64, 64)  # clamped to small arrays
+
+    plate_path, _ = example_tracking_plate
+    shape, layout = label_layout(plate_path / "A" / "1" / "0")
+    assert shape == (5, 2, 1, 64, 64)
+    assert layout == {
+        "label_dtype": np.uint32,
+        "label_chunks": (5, 1, 1, 64, 64),
+        "label_shards": LABEL_SHARDS,
+    }
+    # What the sizer makes of it on the A549 projected plate: the 16-timepoint chunk by
+    # the full frame, rounded up to whole 128 px chunks (136 MB); a 32-timepoint shard
+    # would exceed 200 MB.
+    from iohub.core.sharding import resolve_shards
+
+    assert resolve_shards(
+        LABEL_SHARDS,
+        shape=(67, 1, 1, 1664, 1193),
+        chunks=label_chunks((67, 1, 1, 1664, 1193)),
+        dtype=np.uint32,
+        dimension_names=["t", "c", "z", "y", "x"],
+    ) == (16, 1, 1, 1664, 1280)
+
+
+def test_label_layout_copies_the_source_label(tmp_path, create_custom_plate):
+    """A derived label (track's from segment's) takes the source's dtype, chunks and shards."""
+    plate_path, _ = create_custom_plate(tmp_path, position_list=(("A", "1", "0"),), z_size=1)
+    position = plate_path / "A" / "1" / "0"
+    with open_ome_zarr(str(position), mode="r+") as dataset:
+        dataset.create_label_zeros(
+            "cells",
+            shape=(3, 1, 1, 5, 6),
+            dtype=np.uint16,
+            chunks=(1, 1, 1, 5, 3),
+            shards=(3, 1, 1, 5, 6),
+        )
+    _, layout = label_layout(position, source_label="cells")
+    assert layout == {
+        "label_dtype": np.uint16,
+        "label_chunks": (1, 1, 1, 5, 3),
+        "label_shards": (3, 1, 1, 5, 6),
+    }
+
+
+def test_write_tracking_labels_keeps_the_label_dtype_and_refuses_overflow():
+    label_array = np.zeros((2, 1, 1, 4, 4), dtype=np.uint16)
+    write_tracking_labels(label_array, np.full((2, 4, 4), 65535, dtype=np.int64), "2D")
+    assert label_array.dtype == np.uint16 and label_array.max() == 65535
+    with pytest.raises(ValueError, match="more than the label image's uint16"):
+        write_tracking_labels(label_array, np.full((2, 4, 4), 65536, dtype=np.int64), "2D")
+
+
+def test_write_tracking_labels_2d_fills_the_single_plane():
+    label_array = np.zeros((2, 1, 1, 4, 4), dtype=np.uint32)
+
+    write_tracking_labels(label_array, np.ones((2, 4, 4), dtype=np.int64), "2D")
+    assert label_array.all()
+    # A single-plane series that kept its Z axis.
+    write_tracking_labels(label_array, 2 * np.ones((2, 1, 4, 4)), "2D")
+    assert (label_array == 2).all()
+    with pytest.raises(ValueError, match="2D"):
+        write_tracking_labels(label_array, np.ones((2, 3, 4, 4)), "2D")
+
+
+def test_write_tracking_labels_3d_fills_the_stack():
+    label_array = np.zeros((2, 1, 6, 4, 4), dtype=np.uint32)
+
+    write_tracking_labels(label_array, np.ones((2, 6, 4, 4), dtype=np.int64), "3D")
+    assert label_array.all()
+    with pytest.raises(ValueError, match="3D"):
+        write_tracking_labels(label_array, np.ones((2, 5, 4, 4)), "3D")
+
+
+def test_track_cli_refuses_a_3d_input_for_2d_tracking(tmp_path, create_custom_plate):
+    plate_path, _ = create_custom_plate(tmp_path, z_size=3)
+    config_path = _make_tracking_config(plate_path, tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "track",
+            "-i",
+            str(plate_path / "A/1/0"),
+            "-o",
+            str(tmp_path / "o.zarr"),
+            "-c",
+            str(config_path),
+            "--init",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "biahub project" in str(result.exception)
+
+
+def test_z_slicing_is_rejected_with_a_pointer_to_project():
+    with pytest.raises(ValueError, match="z_slicing was removed.*biahub project"):
+        _minimal_settings(z_slicing={"method": "focus"})
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +708,8 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
     monkeypatch.setenv("ULTRACK_ARRAY_MODULE", "numpy")
 
     plate_path, _ = example_tracking_plate
-    output_path = tmp_path / "override_output.zarr"
-    config_path = _make_tracking_config(plate_path, tmp_path)
+    output_path = tmp_path / "override_output"
+    config_path = _make_foreground_contour_config(plate_path, tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -499,56 +730,26 @@ def test_input_images_path_override(tmp_path, example_tracking_plate, monkeypatc
     )
 
     assert result.exit_code == 0, result.output
-    assert output_path.exists()
+    _assert_tracking_outputs(plate_path / "A" / "1" / "0")
 
 
-def test_track_init_rejects_an_unknown_cellpose_model(
-    tmp_path, example_tracking_plate, monkeypatch
-):
-    """A bad model name must fail once at --init, not later in every worker."""
-    import sys
-    import types
-
-    class Model:
-        def __init__(self, gpu=False, pretrained_model="cpsam_v2", device=None):
-            # Cellpose 4 would silently substitute cpsam_v2 here.
-            self.pretrained_model = str(tmp_path / "cpsam_v2")
-
-    models = types.ModuleType("cellpose.models")
-    models.CellposeModel = Model
-    models.MODEL_NAMES = ["cpsam_v2", "cpsam", "cpdino", "cpdino-vitb"]
-    models.get_user_models = lambda: []
-    package = types.ModuleType("cellpose")
-    package.models = models
-    monkeypatch.setitem(sys.modules, "cellpose", package)
-    monkeypatch.setitem(sys.modules, "cellpose.models", models)
+def test_load_labels_fills_blank_frames(tmp_path, example_tracking_plate):
+    from biahub.track import load_labels
 
     plate_path, _ = example_tracking_plate
-    config_path = _make_tracking_config(plate_path, tmp_path)
-    config = yaml.safe_load(config_path.read_text())
-    config["segmentation_method"] = "cellpose"
-    config["cellpose_config"] = {
-        "pretrained_model": "nuclei",
-        "input_channel": "nuclei_prediction",
-    }
-    config_path.write_text(yaml.safe_dump(config))
+    position_path = plate_path / "A" / "1" / "0"
+    with open_ome_zarr(str(position_path), mode="r+") as pos:
+        pos.get_label(INPUT_LABEL)["0"][2] = 0  # a dropped timepoint: nothing segmented
+    csv_path = tmp_path / "blank.csv"
+    pd.DataFrame({"FOV": ["A/1/0"], "t": ["[2]"]}).to_csv(csv_path, index=False)
 
-    result = CliRunner().invoke(
-        cli,
-        [
-            "track",
-            "-i",
-            str(plate_path / "A" / "1" / "0"),
-            "-o",
-            str(tmp_path / "out.zarr"),
-            "-c",
-            str(config_path),
-            "--init",
-        ],
-    )
+    labels = load_labels(position_path, INPUT_LABEL, "2D", csv_path)
 
-    assert result.exit_code != 0
-    assert "Unknown cellpose model 'nuclei'" in str(result.exception) + result.output
+    assert labels.shape == (5, 64, 64)
+    assert np.array_equal(labels[2], labels[1])  # filled from the previous frame
+    assert not load_labels(position_path, INPUT_LABEL, "2D")[2].any()
+    with pytest.raises(ValueError, match="biahub segment"):
+        load_labels(position_path, "missing", "2D")
 
 
 def test_filter_short_siblings_merges_a_one_frame_daughter():
@@ -709,8 +910,8 @@ def test_track_debug_run_applies_the_sibling_filter(tmp_path, example_tracking_p
     assert "Sibling filter (min_length=3)" in result.output
 
 
-def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypatch):
-    """Same as segment: submitit's local executor hides GPUs without gpus_per_node."""
+def test_track_jobs_ask_for_no_gpu(tmp_path, example_tracking_plate, monkeypatch):
+    """Ultrack is CPU work (segmentation is `biahub segment`'s): the cpu partition."""
     import contextlib
 
     recorded = {}
@@ -752,7 +953,8 @@ def test_track_gives_local_jobs_a_gpu(tmp_path, example_tracking_plate, monkeypa
 
     assert result.exit_code == 0, result.output
     assert recorded["cluster"] == "local"
-    assert recorded.get("gpus_per_node") == 1
+    assert "gpus_per_node" not in recorded
+    assert recorded["slurm_partition"] == "preempted"
     assert (
         recorded.get("timeout_min") == recorded["slurm_time"]
     )  # local default kills at 2 min
@@ -807,7 +1009,6 @@ def test_track_local_sbatch_file_overrides_computed_parameters(
 
     assert result.exit_code == 0, result.output
     assert recorded["timeout_min"] == 5
-    assert recorded["gpus_per_node"] == 1
 
 
 def test_track_local_timeout_ignores_a_slurm_time_string(

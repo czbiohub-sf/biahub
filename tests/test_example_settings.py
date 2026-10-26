@@ -16,6 +16,7 @@ from biahub.settings import (
     EstimateTransformSettings,
     FlatFieldCorrectionSettings,
     ProcessingImportFuncSettings,
+    ProjectionSettings,
     SegmentationSettings,
     StitchSettings,
     TrackingSettings,
@@ -41,6 +42,7 @@ example_settings_params = [
     ("example_transform_settings.yml", TransformSettings),
     ("example_transform_settings_stabilization.yml", TransformSettings),
     ("example_process_with_config_settings.yml", ProcessingImportFuncSettings),
+    ("example_project_settings.yml", ProjectionSettings),
     ("example_segmentation_settings.yml", SegmentationSettings),
     ("example_stitch_settings.yml", StitchSettings),
     ("example_track_settings.yml", TrackingSettings),
@@ -211,9 +213,43 @@ def test_nextflow_a549_track_config_validates():
 
     with open("nextflow/configs/a549/track.yml") as f:
         settings = TrackingSettings(**yaml.safe_load(f))
-    assert settings.z_slicing.method == "focus"
-    assert settings.z_slicing.window_size == 60
-    assert settings.z_slicing.focus_channel in settings.input_images[0].channels
+    # Track reads the projected plate's `labels/nuclei` (segment.yml's model) and writes
+    # `labels/tracks_nuclei`; no image channel is processed.
+    assert settings.output_mode == "2D"
+    assert settings.segmentation_method == "labels"
+    assert settings.labels == "nuclei"
+    assert settings.tracked_label == "tracks_nuclei"
+    assert settings.input_images == []
+    assert settings.min_sibling_length == 3
+
+
+def test_nextflow_a549_project_config_validates():
+    """The A549 projection keeps track's old 60-plane focus window (#418) and mean."""
+    import yaml
+
+    from biahub.settings import ProjectionSettings
+
+    with open("nextflow/configs/a549/project.yml") as f:
+        settings = ProjectionSettings(**yaml.safe_load(f))
+    nuclei = settings.channels["nuclei_prediction"]
+    assert nuclei.method == "mean"
+    assert nuclei.z.center == "focus" and (nuclei.z.below, nuclei.z.above) == (20, 40)
+    # Every channel of a typical A549 assembled plate, in plate order, under the
+    # PRE-rename names project sees inside the pipeline.
+    assert list(settings.channels) == [
+        "BF",
+        "GFP EX488 EM525-45",
+        "mCherry EX561 EM600-37",
+        "Phase3D",
+        "nuclei_prediction",
+        "membrane_prediction",
+    ]
+    assert settings.channels["Phase3D"].method == "slice"
+    # One-frame 256 x 256 chunks (the assembled/track grid), ~200 MB full-frame shards.
+    assert settings.chunks_czyx == [1, 1, 256, 256]
+    assert settings.shards == "200MB"
+    assert settings.channels["GFP EX488 EM525-45"].method == "max"
+    assert settings.focus.channel == "Phase3D" and settings.focus.per == "timepoint"
 
 
 def test_skill_config_templates_load():
@@ -233,5 +269,10 @@ def test_track_skill_templates_load_one_per_tracker():
 
     root = Path(__file__).resolve().parents[1] / ".claude" / "skills" / "track-with-biahub"
     templates = sorted((root / "templates").glob("track-*.yml"))
-    trackers = {yaml_to_model(t, TrackingSettings).tracker for t in templates}
-    assert trackers == {"ultrack", "tracksdata", "hoct", "trackastra"}
+    settings = [yaml_to_model(t, TrackingSettings) for t in templates]
+    assert {s.tracker for s in settings} == {"ultrack", "tracksdata", "hoct", "trackastra"}
+    # The runs share one plate: each writes its own label image and CSVs ...
+    assert len({s.tracked_label for s in settings}) == len(settings)
+    # ... and tracks the label image the A549 segment config writes.
+    segment = Path(__file__).resolve().parents[1] / "nextflow/configs/a549/segment.yml"
+    assert {s.labels for s in settings} <= set(yaml.safe_load(segment.read_text())["models"])

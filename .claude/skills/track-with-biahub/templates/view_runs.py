@@ -1,10 +1,12 @@
 """Show finished biahub track runs of one position side by side in napari.
 
 Usage (in a desktop session):
-  python view_runs.py --plate /path/<dataset>.zarr --fov A/3/000002 \
-      track-ultrack/track.zarr track-trackastra/track.zarr [--channel nuclei_prediction]
+  python view_runs.py --plate /path/<dataset>_proj.zarr --fov A/3/000002 \
+      nuclei_ultrack nuclei_trackastra [--channel nuclei_prediction]
 
-One panel per run: the input channel (Z mean-projected), the run's labels, its tracks,
+A run is the name of a tracked label image in the plate (the config's output_label, or
+tracks_<labels> without one), found as compare_tracks.py finds it: labels/<run> and
+tracks_<run>_<fov>.csv, or tracks_<fov>.csv for a run named tracks_*. One panel per run: the input channel (Z mean-projected), the run's labels, its tracks,
 and a yellow circle on every division it calls (daughters' first frame, at the parent's
 last position). Time and zoom are shared, so divisions one tracker calls and another does
 not stand out. Reads only.
@@ -17,6 +19,7 @@ from pathlib import Path
 import napari
 import numpy as np
 import pandas as pd
+import zarr
 
 from iohub import open_ome_zarr
 
@@ -33,6 +36,21 @@ def division_points(tracks: pd.DataFrame) -> np.ndarray:
         if p in last.index
     ]
     return np.array(rows, dtype=float).reshape(-1, 3)
+
+
+def tracks_csv(position: Path, run: str) -> Path:
+    """Return the run's tracks CSV: tracks_<run>_<fov>.csv, else tracks_<fov>.csv (tracks_*)."""
+    fov = "_".join(position.parts[-3:])
+    named = position / f"tracks_{run}_{fov}.csv"
+    if named.exists() or not run.startswith("tracks_"):
+        return named
+    return position / f"tracks_{fov}.csv"
+
+
+def read_labels(position: Path, run: str) -> np.ndarray:
+    """Return labels/<run> as (T, Y, X): (T, 1, Z, Y, X) labels, or older (T, Z, Y, X)."""
+    labels = zarr.open_array(position / "labels" / run / "0", mode="r")
+    return np.asarray(labels[:, 0, 0] if labels.ndim == 5 else labels[:, 0])
 
 
 LAYERS_PER_RUN = 4
@@ -90,8 +108,8 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("runs", nargs="+", type=Path, help="track.zarr outputs")
-    ap.add_argument("--plate", type=Path, required=True, help="the plate the runs tracked")
+    ap.add_argument("runs", nargs="+", help="tracked label names (output_label values)")
+    ap.add_argument("--plate", type=Path, required=True, help="the plate the runs wrote into")
     ap.add_argument("--fov", required=True, help="row/col/fov, e.g. A/3/000002")
     ap.add_argument("--channel", default="nuclei_prediction")
     args = ap.parse_args()
@@ -102,15 +120,12 @@ def main():
             [np.asarray(ds.data[t, c]).mean(axis=0) for t in range(ds.data.shape[0])]
         )
 
-    viewer = napari.Viewer(
-        title=f"{args.fov}: " + " | ".join(r.parent.name for r in args.runs)
-    )
+    position = args.plate / args.fov
+    viewer = napari.Viewer(title=f"{args.fov}: " + " | ".join(args.runs))
     for run in args.runs:
-        name = run.parent.name if run.name == "track.zarr" else run.name
-        with open_ome_zarr(run / args.fov, mode="r") as ds:
-            labels = np.asarray(ds.data[:, 0, 0])
-        tracks = pd.read_csv(next((run / args.fov).glob("tracks_*.csv")))
-        for kind, data, kwargs in run_layers(name, image, labels, tracks):
+        labels = read_labels(position, run)
+        tracks = pd.read_csv(tracks_csv(position, run))
+        for kind, data, kwargs in run_layers(run, image, labels, tracks):
             getattr(viewer, f"add_{kind}")(data, **kwargs)
     viewer.canvas.grid.enabled = True
     viewer.canvas.grid.stride = LAYERS_PER_RUN  # one panel per run

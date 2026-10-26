@@ -1,0 +1,66 @@
+# QC of the PROJECTED plate (`4-assemble/<dataset>_proj.zarr`, Z=1): the plate
+# `biahub project` writes beside the assembled one and tracking reads and writes
+# into. It holds the projected channels and, after tracking, each position's
+# `labels/<labels>` (segment) and `labels/tracks_<labels>` (track) label images,
+# so this is where the cell counts live:
+# `instance_count` reads the TRACKED label image (imaging-qc#243); segment writes
+# `labels/<model>` beside it. The pipeline plans
+# this config after `track --init` (the label image must exist at plan time) and
+# computes it after tracking; without tracking it runs after project.
+#
+# SELF-CONTAINED, with no Hydra `defaults:`, like qc.yaml: imaging-qc loads a
+# stage config through Hydra, which strips the extension and looks for
+# `<stem>.yaml`, so the extension must be `.yaml`.
+#
+# Channel names are the PRE-rename names of the assembled plate (caveats.md 2),
+# which the projected plate inherits.
+
+stage: 6
+display_name: "Projected Plate — Cell Count"
+
+backend: iohub
+positions: null
+metric_group: masks
+log_level: INFO
+
+metric_groups:
+  masks:
+    metrics:
+      - blank
+      - instance_count
+
+# `blank` on the anchor channel masks the count's verdict on a blank frame
+# (a dropped timepoint the segmentation had nothing to find in) instead of failing
+# it twice.
+blank:
+  intensity_threshold: 0.01
+  variance_threshold: 1.0e-6
+  channels:
+    - nuclei_prediction
+  gate:
+    per_channel: true
+
+# Cells per frame, from the label image tracking writes (`label:`, the track config's
+# `labels` with a `tracks_` prefix). `channels:` is the ONE anchor channel the labels
+# were segmented from: the count rows carry its C. The plate has one Z-plane, so
+# the default `split_by: [T, C, Z]` keeps per-(T, Z) rows and counts each instance once.
+instance_count:
+  label: tracks_nuclei
+  channels:
+    - nuclei_prediction
+  gate:
+    # A count of zero on a frame that is not blank: the segmentation found nothing.
+    # The degenerate structural boundary, not a constant calibrated from a dataset.
+    hard_floor: 1
+    # Put the verdict on the anchor channel (`low_instance_count__nuclei_prediction`)
+    # rather than repeating a channel-averaged flag on every channel.
+    per_channel: true
+
+report:
+  max_timepoints: 5
+  compact: false
+  metric_archetypes:
+    instance_count: timeseries
+  metric_labels:
+    blank: "Blank Detection"
+    instance_count: "Cell Count"

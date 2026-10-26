@@ -8,7 +8,7 @@ import numpy as np
 import submitit
 
 from iohub.ngff import open_ome_zarr
-from iohub.ngff.utils import create_empty_plate, process_single_position
+from iohub.ngff.utils import create_empty_labels, process_single_position
 
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import (
@@ -17,7 +17,6 @@ from biahub.cli.parsing import (
     init_only,
     input_position_dirpaths,
     monitor,
-    output_dirpath,
     resume,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -38,14 +37,13 @@ from biahub.utils.cluster import (
     local_executor_parameters,
 )
 from biahub.utils.config import settings_fingerprint, yaml_to_model
-from biahub.utils.ngff import (
-    PROVENANCE_METADATA_KEYS,
-    get_output_paths,
-    resolve_ome_zarr_version,
-)
+from biahub.utils.ngff import label_layout
 
 if TYPE_CHECKING:
     import torch
+
+# Provenance key on each label image: the segment settings as written.
+PROVENANCE_KEY = "biahub-segment"
 
 
 @dataclass(frozen=True)
@@ -56,7 +54,7 @@ class ResolvedModel:
     pretrained_model: str
     channel_indices: list[int]
     eval_args: dict[str, Any]
-    z_slice_2D: int | None
+    is_3d: bool
     # (function, channel index, kwargs), applied in order
     preprocessing: list[tuple[Callable, int, dict[str, Any]]] = field(default_factory=list)
 
@@ -69,9 +67,10 @@ def resolve_models(
 ) -> list[ResolvedModel]:
     """Resolve each configured model against the input plate, without touching ``settings``.
 
-    Channel names become dataset indices, 3D models get the dataset anisotropy unless the
-    config sets one, and ``z_slice_2D`` is checked against the stack. ``settings`` is left
-    exactly as written, so it can be recorded as provenance.
+    Channel names become dataset indices and 3D models get the dataset anisotropy unless
+    the config sets one. The models' dimensionality must match the input: 2D models need
+    a Z=1 plate (see `biahub project`), 3D models a stack. ``settings`` is left exactly as
+    written, so it can be recorded as provenance.
     """
 
     def index(name: str, what: str) -> int:
@@ -81,14 +80,22 @@ def resolve_models(
             )
         return channel_names.index(name)
 
+    if settings.is_3d and z_size == 1:
+        raise ValueError(
+            "The input has one Z-plane but the models segment in 3D (eval_args.do_3D or "
+            "stitch_threshold); remove those arguments to segment in 2D."
+        )
+    if not settings.is_3d and z_size > 1:
+        raise ValueError(
+            f"The input is 3D (Z={z_size}) but the models segment in 2D. Project the plate "
+            "with `biahub project` and segment the projected (Z=1) plate, or set "
+            "eval_args.do_3D: true to segment the stack."
+        )
+
     resolved = []
     for name, model in settings.models.items():
-        if model.z_slice_2D is not None and model.z_slice_2D >= z_size:
-            raise ValueError(
-                f"Model {name}: z_slice_2D={model.z_slice_2D} is outside the input stack (Z={z_size})."
-            )
         eval_args = dict(model.eval_args)
-        if model.z_slice_2D is None and eval_args.get("anisotropy") is None:
+        if model.is_3d and eval_args.get("anisotropy") is None:
             eval_args["anisotropy"] = scale[-3] / scale[-1]
         resolved.append(
             ResolvedModel(
@@ -96,7 +103,7 @@ def resolve_models(
                 pretrained_model=model.pretrained_model,
                 channel_indices=[index(c, f"Model {name}:") for c in model.channels],
                 eval_args=eval_args,
-                z_slice_2D=model.z_slice_2D,
+                is_3d=model.is_3d,
                 preprocessing=[
                     (
                         p.function,
@@ -133,7 +140,7 @@ def _segment_czyx(
 ) -> np.ndarray:
     """Segment a CZYX image with each resolved cellpose model.
 
-    Returns an array of shape (n_models, Z or 1, Y, X).
+    Returns an array of shape (n_models, Z, Y, X); Z is 1 for 2D models.
     """
     # Every job this step submits asks SLURM for a GPU, so an unusable one is a
     # broken allocation, not a reason to fall back to a ~130x slower CPU run.
@@ -151,36 +158,68 @@ def _segment_czyx(
             czyx_data[c_idx] = func(czyx_data[c_idx], **kwargs)
 
         # Cellpose 4 refuses a z axis for 2D processing, so a 2D model gets the (C, Y, X)
-        # plane and a 3D model the (C, Z, Y, X) stack. It also ignores `channels` and keeps
-        # the first 3 channels it is given, so pass only the configured ones.
+        # plane of the Z=1 input and a 3D model the (C, Z, Y, X) stack. It also ignores
+        # `channels` and keeps the first 3 channels it is given, so pass only the
+        # configured ones.
         cellpose_model = _cached_model(model.pretrained_model, device)
-        if model.z_slice_2D is not None:
-            image, z_axis = czyx_data[model.channel_indices, model.z_slice_2D], None
-        else:
+        if model.is_3d:
             image, z_axis = czyx_data[model.channel_indices], 1
+        else:
+            image, z_axis = czyx_data[model.channel_indices, 0], None
         segmentation, _, _ = cellpose_model.eval(
             image, channel_axis=0, z_axis=z_axis, **model.eval_args
         )
-        # Cellpose squeezes singleton axes (e.g. a 3D model on a single-plane input);
-        # restore the (Z or 1, Y, X) shape the output plate expects.
+        # Cellpose squeezes singleton axes; restore the (Z, Y, X) shape the output
+        # plate expects (Z is 1 for a 2D model).
         segmentation = np.reshape(
-            segmentation,
-            (1, *image.shape[-2:]) if model.z_slice_2D is not None else image.shape[1:],
+            segmentation, image.shape[1:] if model.is_3d else (1, *image.shape[-2:])
         )
         czyx_segmentation.append(segmentation)
     return np.stack(czyx_segmentation, axis=0)
 
 
-def _init_output_plate(
+def _check_existing_label(
+    position, name: str, model_settings: dict, shape_tczyx: tuple
+) -> None:
+    """Refuse to write model ``name`` into a label image made with other settings.
+
+    Segmentation strategies accumulate in a plate as differently named label images, so
+    a label image is only ever rewritten by the model that made it. A different shape
+    (a model renamed from 3D to 2D, say) or different recorded model settings mean
+    another strategy owns the name.
+    """
+    if name not in position.label_names():
+        return
+    label = position.get_label(name)
+    existing_shape = tuple(label["0"].shape)
+    if existing_shape != shape_tczyx:
+        raise ValueError(
+            f"{position.zgroup.path} already has a label image {name!r} of shape "
+            f"{existing_shape}, but a label of this image is {shape_tczyx} (T, 1, Z, Y, X). Rename the "
+            "model or remove the old label image."
+        )
+    recorded = dict(label.zattrs).get(PROVENANCE_KEY, {}).get("models", {}).get(name)
+    if recorded is not None and recorded != model_settings:
+        raise ValueError(
+            f"{position.zgroup.path} already has a label image {name!r} segmented with "
+            f"other settings:\n  recorded: {recorded}\n  this config: {model_settings}\n"
+            "Give this strategy its own model name to keep both, or remove the old "
+            "label image to replace it."
+        )
+
+
+def _init_label_images(
     input_position_dirpaths: list[Path],
-    output_dirpath: Path,
     settings: SegmentationSettings,
 ) -> tuple[tuple[int, int, int, int, int], list[ResolvedModel]]:
-    """Create (or extend) the empty label plate and resolve the models against the input.
+    """Create the empty ``labels/<model>`` images in the input positions.
 
-    create_empty_plate is idempotent: re-running with the same positions is a no-op and
-    new positions are appended, so both --init and per-position workers can call it.
-    The settings are recorded as provenance exactly as written (names, not indices).
+    One label image per model, named after it, with the image's shape (its Z: one
+    plane for a projected plate). Existing label images are left untouched, so both
+    --init and per-position workers can call this; one made by another strategy (other
+    shape or settings under the same name, see :func:`_check_existing_label`) is
+    refused. The settings are recorded on each label image exactly as written (names,
+    not indices).
 
     Returns the input (T, C, Z, Y, X) shape and the resolved models.
     """
@@ -190,62 +229,68 @@ def _init_output_plate(
         channel_names = input_dataset.channel_names
 
     models = resolve_models(settings, channel_names, scale, Z)
-    Z_out = 1 if models[0].z_slice_2D is not None else Z
+    label_names = [m.name for m in models]
+    recorded = settings.model_dump(mode="json")
 
-    # Label channel i belongs to model i. On an existing output, create_empty_plate keeps
-    # the stored channels and array shape, so a reordered config would write into swapped
-    # channels and a 3D -> 2D switch would keep the old Z planes.
-    label_channels = [m.name + "_labels" for m in models]
-    output_shape = (T, len(models), Z_out, Y, X)
-    position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
-    for key in position_keys:
-        output_position = Path(output_dirpath, *key)
-        if not output_position.exists():
-            continue
-        with open_ome_zarr(str(output_position), mode="r") as output_dataset:
-            existing = output_dataset.channel_names
-            existing_shape = tuple(output_dataset.data.shape)
-        if existing != label_channels or existing_shape != output_shape:
-            raise ValueError(
-                f"{output_position} has label channels {existing} and shape "
-                f"{existing_shape}, but this config writes {label_channels} with shape "
-                f"{output_shape}. Keep the models and their settings, or segment into "
-                "a new output."
-            )
+    for position_dirpath in input_position_dirpaths:
+        with open_ome_zarr(str(position_dirpath), mode="r") as position:
+            for name in label_names:
+                _check_existing_label(
+                    position, name, recorded["models"][name], (T, 1, Z, Y, X)
+                )
 
-    input_plate = Path(input_position_dirpaths[0]).parents[2]
-    create_empty_plate(
-        store_path=output_dirpath,
-        position_keys=position_keys,
-        channel_names=label_channels,
-        shape=output_shape,
-        dtype=np.uint32,
-        scale=scale,
-        version=resolve_ome_zarr_version(
-            input_position_dirpaths[0], settings.output_ome_zarr_version
-        ),
-        metadata_sources=input_plate,
-        metadata_keys=PROVENANCE_METADATA_KEYS,
-        extra_metadata={"biahub-segment": settings.model_dump(mode="json")},
+    _, layout = label_layout(input_position_dirpaths[0])
+    create_empty_labels(
+        Path(input_position_dirpaths[0]).parents[2],
+        [Path(p).parts[-3:] for p in input_position_dirpaths],
+        label_names,
+        label_metadata={PROVENANCE_KEY: recorded},
+        **layout,
     )
     return (T, C, Z, Y, X), models
 
 
-def _resume_token(settings: SegmentationSettings) -> str:
-    """Fingerprint the settings, including the order of the models.
+def _resume_token(settings: SegmentationSettings, model: str) -> str:
+    """Fingerprint the settings and the model whose label image is being written.
 
-    settings_fingerprint sorts keys, but model order decides which label channel each
-    model writes, so finished work from another order must not be skipped.
+    Each model has its own label image, so the model order does not matter; a changed
+    setting does, and makes a resumed run recompute.
     """
-    return settings_fingerprint(
-        {"settings": settings.model_dump(mode="json"), "model_order": list(settings.models)}
-    )
+    return settings_fingerprint({"settings": settings.model_dump(mode="json"), "model": model})
+
+
+def _segment_position(
+    input_position_path: Path,
+    models: list[ResolvedModel],
+    n_channels: int,
+    settings: SegmentationSettings,
+    resume: bool,
+) -> None:
+    """Segment one position into its own label images, one per model.
+
+    Each model gets one ``process_single_position`` call writing the label image named
+    after it (iohub's ``output_label``); the cellpose model cache makes the repeated
+    calls free.
+    """
+    for model in models:
+        process_single_position(
+            _segment_czyx,
+            input_position_path,
+            input_position_path,
+            input_channel_indices=[list(range(n_channels))],
+            output_label=model.name,
+            # One process per position: timepoints share the loaded model and
+            # the GPU, which is the bottleneck.
+            num_workers=1,
+            resume=resume,
+            resume_token=_resume_token(settings, model.name),
+            models=[model],
+        )
 
 
 def segment(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: Path,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = True,
@@ -258,11 +303,10 @@ def segment(
     ----------
     input_position_dirpaths : list[Path]
         Paths to input positions, for example: "input.zarr/0/0/0", "input.zarr/0/0/[0-9]",
-        or "input.zarr/*/*/*".
+        or "input.zarr/*/*/*". The labels are written into these positions as OME-NGFF
+        label images, ``labels/<model>``, which is what `biahub track` reads.
     config_filepath : Path
         Path to the segmentation YAML configuration file.
-    output_dirpath : Path
-        Path to the "output.zarr" label plate.
     sbatch_filepath : str, optional
         SBATCH filepath that contains slurm parameters to overwrite defaults.
     cluster : str, optional
@@ -271,13 +315,19 @@ def segment(
     monitor : bool, optional
         Monitor of submitted SLURM jobs.
     init_only : bool, optional
-        Only initialize the output store (and check/warm the models) and exit.
+        Only create the empty label images (and check/warm the models) and exit.
     resume : bool, optional
-        Skip the (time, channel) units a previous attempt already finished; see
+        Skip the timepoints a previous attempt already finished; see
         ``iohub.ngff.utils.process_single_position``.
+
+    Notes
+    -----
+    Segmentation strategies accumulate in a plate as differently named label images
+    (the model names); a name is only rewritten by the model that made it (see
+    :func:`_check_existing_label`). The SLURM logs go to ``./slurm_output``.
     """
-    output_dirpath = Path(output_dirpath)
-    slurm_out_path = output_dirpath.parent / "slurm_output"
+    # Not $TMPDIR: submitit's folder must be visible from the compute nodes.
+    slurm_out_path = Path("slurm_output").absolute()
 
     resolved_cluster = get_submitit_cluster(cluster=cluster)
     if not init_only and resolved_cluster == "debug":
@@ -292,9 +342,7 @@ def segment(
         # Fail on a bad model name before scaffolding anything.
         for name in dict.fromkeys(m.pretrained_model for m in settings.models.values()):
             check_cellpose_model_name(name)
-    (T, C, Z, Y, X), models = _init_output_plate(
-        input_position_dirpaths, output_dirpath, settings
-    )
+    (T, C, Z, Y, X), models = _init_label_images(input_position_dirpaths, settings)
 
     # Calibrated on a real 2D run (2026_04_28 SEC61B, 67 x 1664 x 1193, 6 input channels,
     # cpsam_v2 on one GPU): ~5 s per frame (6-10 min per position, incl. weight staging) and
@@ -303,7 +351,7 @@ def segment(
     # earlier conservative 2.5 min per frame. CPUs and RAM (the input timepoint, C volumes,
     # plus cellpose buffers, x up to 4 CPUs) deliberately keep a margin over the 2D run,
     # which also covers the unmeasured 3D path (~20-30 GB for an A549 plate).
-    is_2d = models[0].z_slice_2D is not None
+    is_2d = not settings.is_3d
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(T, len(models), Z, Y, X),
         ram_multiplier=C + 4,
@@ -319,10 +367,12 @@ def segment(
         # than N workers racing for it. Workers must not (staging needs cellpose unimported).
         for name in dict.fromkeys(m.pretrained_model for m in models):
             warm_cellpose_weights(name)
-        click.echo(f"Initialized {output_dirpath} ({len(input_position_dirpaths)} positions)")
+        click.echo(
+            f"Created labels/{{{', '.join(m.name for m in models)}}} in "
+            f"{Path(input_position_dirpaths[0]).parents[2]} "
+            f"({len(input_position_dirpaths)} positions)"
+        )
         return
-
-    output_position_paths = get_output_paths(input_position_dirpaths, output_dirpath)
 
     slurm_args = {
         "slurm_job_name": "segment",
@@ -350,23 +400,15 @@ def segment(
     click.echo("Submitting jobs...")
     jobs = []
     with submitit.helpers.clean_env(), executor.batch():
-        for input_position_path, output_position_path in zip(
-            input_position_dirpaths, output_position_paths, strict=True
-        ):
+        for input_position_path in input_position_dirpaths:
             jobs.append(
                 executor.submit(
-                    process_single_position,
-                    _segment_czyx,
+                    _segment_position,
                     input_position_path,
-                    output_position_path,
-                    input_channel_indices=[list(range(C))],
-                    output_channel_indices=[list(range(len(models)))],
-                    # One process per position: timepoints share the loaded model and
-                    # the GPU, which is the bottleneck.
-                    num_workers=1,
-                    resume=resume,
-                    resume_token=_resume_token(settings),
                     models=models,
+                    n_channels=C,
+                    settings=settings,
+                    resume=resume,
                 )
             )
 
@@ -391,7 +433,6 @@ def segment(
 @click.command("segment")
 @input_position_dirpaths()
 @config_filepath()
-@output_dirpath()
 @sbatch_filepath()
 @cluster()
 @monitor()
@@ -400,7 +441,6 @@ def segment(
 def segment_cli(
     input_position_dirpaths: list[Path],
     config_filepath: Path,
-    output_dirpath: Path,
     sbatch_filepath: str | None = None,
     cluster: str = "slurm",
     monitor: bool = False,
@@ -409,23 +449,25 @@ def segment_cli(
 ):
     """Segment positions with cellpose 4 models configured in a YAML file.
 
-    \b
-    SLURM fan-out of positions across a whole plate:
-    >>> biahub segment -i ./input.zarr/*/*/* -c ./segment.yml -o ./segment.zarr
+    Writes one label image per model into each -i position (labels/<model>), where
+    `biahub track` reads them. Strategies accumulate as differently named models; a
+    name is only rewritten by the model that made it.
 
     \b
-    Initialize the output plate only (Nextflow init step):
-    >>> biahub segment --init -i ./input.zarr/*/*/* -c ./segment.yml -o ./segment.zarr
+    SLURM fan-out of positions across a whole plate:
+    >>> biahub segment -i ./input.zarr/*/*/* -c ./segment.yml
+
+    \b
+    Create the empty label images only (Nextflow init step):
+    >>> biahub segment --init -i ./input.zarr/*/*/* -c ./segment.yml
 
     \b
     In-process run of a single position (Nextflow per-position worker):
-    >>> biahub segment --cluster debug -i ./input.zarr/B/3/000000 -c ./segment.yml \\
-        -o ./segment.zarr --resume
+    >>> biahub segment --cluster debug -i ./input.zarr/B/3/000000 -c ./segment.yml --resume
     """  # noqa: D301
     segment(
         input_position_dirpaths=input_position_dirpaths,
         config_filepath=config_filepath,
-        output_dirpath=output_dirpath,
         sbatch_filepath=sbatch_filepath,
         cluster=cluster,
         monitor=monitor,

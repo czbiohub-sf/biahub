@@ -36,19 +36,22 @@ Counts only, so say so in the report:
 On one FOV per condition, open the finished runs side by side:
 
 ```bash
-python templates/view_runs.py --plate <plate> --fov <row/col/fov> track-*/track.zarr
+python templates/view_runs.py --plate <plate> --fov <row/col/fov> \
+  nuclei_ultrack nuclei_tracksdata nuclei_hoct nuclei_trackastra
 ```
 
 One panel per run (the input channel, the run's labels, its tracks, and a yellow circle on
 every division it calls), with shared time and zoom. Look at the divisions one tracker calls
 and another does not: ten of those say more about which tracker to trust than the counts.
-To tune one tracker on a single FOV, edit its `track-<tracker>.yml`, rerun just that position
-into a new output, and view it next to the previous run:
+To tune one tracker on a single FOV, copy its config, change the settings and give it a
+new `output_label` (e.g. `nuclei_<tracker>_v2`; reusing one overwrites that run), rerun
+just that position, and view it next to the previous run:
 
 ```bash
-biahub track --init -i <plate>/<row/col/fov> -o track-<tracker>-v2/track.zarr -c track-<tracker>.yml
-biahub track --cluster debug -i <plate>/<row/col/fov> -o track-<tracker>-v2/track.zarr -c track-<tracker>.yml
-python templates/view_runs.py --plate <plate> --fov <row/col/fov> track-<tracker>/track.zarr track-<tracker>-v2/track.zarr
+biahub track --init -i <plate>/<row/col/fov> -c track-<tracker>-v2.yml
+biahub track --cluster debug -i <plate>/<row/col/fov> -c track-<tracker>-v2.yml
+python templates/view_runs.py --plate <plate> --fov <row/col/fov> \
+  nuclei_<tracker> nuclei_<tracker>_v2
 ```
 
 (`scripts/debug_track.py` predates the current track settings and runs ultrack only.)

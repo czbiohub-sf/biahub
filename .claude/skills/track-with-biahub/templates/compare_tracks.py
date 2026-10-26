@@ -1,14 +1,19 @@
-"""Compare biahub track outputs: per-tracker counts, and division scores if annotated.
+"""Compare biahub track runs of one plate: per-run counts, and division scores if annotated.
 
 Usage:
-  python compare_tracks.py track-ultrack/track.zarr track-trackastra/track.zarr ...
-  python compare_tracks.py RUN.zarr ... --gt "/path/annotation/{fov}/v*_tracks.csv" \
+  python compare_tracks.py --plate <dataset>_proj.zarr nuclei_ultrack nuclei_trackastra ...
+  python compare_tracks.py --plate PLATE RUN ... --gt "/path/annotation/{fov}/v*_tracks.csv" \
       --pixel-size 0.1133
 
-Each run is a track.zarr with <row>/<col>/<fov>/tracks_<row>_<col>_<fov>.csv. Without
---gt it prints, per run: FOVs, tracks, divisions, cells per frame, mean track length.
-With --gt (a glob, {fov} = row_col_fov, e.g. A_3_000002) it also matches divisions to
-the annotated ones: a division is (the daughters' first frame, the parent's last
+A run is the name of a tracked label image in the plate, i.e. the config's output_label
+(or tracks_<labels> for a run without one, such as the pipeline's tracks_nuclei). Its
+tracks are, in every position that has labels/<run>:
+  <row>/<col>/<fov>/tracks_<run>_<row>_<col>_<fov>.csv   (written with output_label)
+  <row>/<col>/<fov>/tracks_<row>_<col>_<fov>.csv          (fallback, only for a run
+                                                           named tracks_*: no output_label)
+Without --gt it prints, per run: FOVs, tracks, divisions, cells per frame, mean track
+length. With --gt (a glob, {fov} = row_col_fov, e.g. A_3_000002) it also matches divisions
+to the annotated ones: a division is (the daughters' first frame, the parent's last
 position); a predicted and an annotated division match when their frames differ by at
 most --max-frames and their positions by at most --max-um (one-to-one, closest first).
 """
@@ -39,13 +44,30 @@ def division_events(tracks: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["t", "y", "x"])
 
 
+def run_positions(plate: Path, run: str) -> list[Path]:
+    """Return the plate's positions that have the tracked label image labels/<run>."""
+    return sorted(p.parents[1] for p in plate.glob(f"*/*/*/labels/{run}"))
+
+
+def tracks_csv(position: Path, run: str) -> Path | None:
+    """Return the run's tracks CSV in a position, or None (rule in the module docstring)."""
+    fov = "_".join(position.parts[-3:])
+    named = position / f"tracks_{run}_{fov}.csv"
+    if named.exists():
+        return named
+    default = position / f"tracks_{fov}.csv"
+    if run.startswith("tracks_") and default.exists():
+        return default
+    return None
+
+
 def cells_per_frame(tracks: pd.DataFrame, n_frames: int) -> float:
     """Return detections per frame over the whole movie, empty frames included."""
     return len(tracks) / n_frames
 
 
 def n_frames(position: Path, tracks: pd.DataFrame) -> int:
-    """Return the movie length from the output position's labels, else from the tracks."""
+    """Return the movie length from the position's image, else from the tracks."""
     try:
         from iohub import open_ome_zarr
 
@@ -86,7 +108,8 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("runs", nargs="+", type=Path, help="track.zarr outputs")
+    ap.add_argument("--plate", type=Path, required=True, help="the plate the runs wrote into")
+    ap.add_argument("runs", nargs="+", help="tracked label names (output_label values)")
     ap.add_argument(
         "--gt", help='annotated tracks CSV glob, with {fov}, e.g. ".../{fov}/v*_tracks.csv"'
     )
@@ -99,12 +122,15 @@ def main():
 
     rows = []
     for run in args.runs:
-        for csv in sorted(run.glob("*/*/*/tracks_*.csv")):
-            fov = csv.stem.removeprefix("tracks_")
+        csvs = [c for p in run_positions(args.plate, run) if (c := tracks_csv(p, run))]
+        if not csvs:
+            raise SystemExit(f"No tracks CSV for run {run!r} in {args.plate}.")
+        for csv in csvs:
+            fov = "_".join(csv.parent.parts[-3:])
             tracks = pd.read_csv(csv)
             events = division_events(tracks)
             row = {
-                "run": run.parent.name if run.name == "track.zarr" else run.name,
+                "run": run,
                 "fov": fov,
                 "tracks": tracks.track_id.nunique(),
                 "detections": len(tracks),
@@ -119,9 +145,6 @@ def main():
                     tp = match(events, gt, args.max_frames, args.max_um / args.pixel_size)
                     row.update(gt_divisions=len(gt), matched=tp)
             rows.append(row)
-    if not rows:
-        raise SystemExit("No tracks_*.csv found under the given runs.")
-
     out = summarize(pd.DataFrame(rows))
     print(out.round(3).to_string())
     print("\nper FOV:")

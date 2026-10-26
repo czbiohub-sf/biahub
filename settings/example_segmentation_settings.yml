@@ -1,12 +1,15 @@
 # Segmentation settings for cellpose 4 (`biahub segment`).
-# Model names become the output channel names (e.g. membrane -> membrane_labels).
-# All models in one config must be either 2D (z_slice_2D set) or 3D (z_slice_2D: null with
-# eval_args.do_3D: true), because they share one output array. Run 3D models separately.
+# Model names become the label image names in each -i position (e.g. membrane ->
+# labels/membrane), which `biahub track` reads. Strategies accumulate as differently
+# named models; a name is only rewritten by the model that made it.
+# A model segments in 2D unless eval_args.do_3D (or a stitch_threshold) is set. Segment
+# does not project: 2D models need a Z=1 input plate (make one from a stack with
+# `biahub project`), 3D models a stack; a mismatch is an error. All models in one config
+# must be either 2D or 3D, because they share one input and output. Run 3D models separately.
 models:
   membrane:
     pretrained_model: cpsam_v2  # cellpose 4 model (cpsam_v2, cpsam, cpdino, cpdino-vitb) or path to weights
     channels: ['mem', 'nuc']    # dataset channel names passed to cellpose (at most 3, any order)
-    z_slice_2D: 10              # plane for 2D segmentation; null = 3D (needs eval_args.do_3D: true)
     # Other CellposeModel.eval() arguments; see https://cellpose.readthedocs.io/en/latest/api.html
     eval_args:
       diameter: 65              # cellpose 4 resizes by 30 / diameter; null = native resolution
@@ -23,7 +26,6 @@ models:
   nucleus:
     pretrained_model: cpsam_v2
     channels: ['nuc']
-    z_slice_2D: 10
     eval_args:
       diameter: 60
       cellprob_threshold: 0.0

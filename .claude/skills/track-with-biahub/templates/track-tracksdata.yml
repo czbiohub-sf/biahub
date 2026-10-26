@@ -1,40 +1,20 @@
-# biahub track, tracker: tracksdata (ILP on the cellpose labels).
+# biahub track, tracker: tracksdata (ILP on the segment labels as they are).
 # Defaults: the A549 benchmark's full-movie run (not yet tuned). Distances in um.
+# Tracks the labels `biahub segment` wrote into the projected plate (segment.yml).
 
-output_mode: "2D"
+output_mode: "2D"                  # the Z=1 projected plate; track does not project
 fov: "*/*/*"
-target_channel: nuclei_prediction
 
-# Z: a 60-plane window around the Phase3D focus, mean-projected (input_images below).
-z_slicing:
-  method: focus
-  window_size: 60
-  focus_channel: Phase3D
-
-# cellpose labels feed every tracker; tracksdata, hoct and trackastra link them as they are.
-segmentation_method: cellpose
-cellpose_config:
-  pretrained_model: cpsam_v2
-  diameter: 80
-  cellprob_threshold: 0.0
-  flow_threshold: 0.4
-  gpu: true
-  min_size: 2500
-  input_channel: nuclei_prediction
-  labels_sigma: 5.0
+# The label image to track: segment.yml's model name, labels/nuclei in every position.
+labels: nuclei
+# The tracked labels go to labels/nuclei_tracksdata, with
+# tracks_nuclei_tracksdata_<fov>.csv (<fov> = row_col_fov; no .geff yet for tracksdata),
+# so each tracker's run sits beside the others in the plate (the pipeline's own run is
+# labels/tracks_nuclei). Rename it to keep a tuning run beside the previous one.
+output_label: nuclei_tracksdata
 
 # Drop a daughter that lives 3 frames or fewer (VS hallucinations, neighbours).
 min_sibling_length: 3
-
-input_images:
-  - path: null                     # null = the -i plate
-    channels:
-      nuclei_prediction:
-        - function: np.mean
-          kwargs:
-            axis: 1
-          per_timepoint: false
-      Phase3D: []                  # loaded only for focus finding
 
 tracker: tracksdata
 tracksdata_config:

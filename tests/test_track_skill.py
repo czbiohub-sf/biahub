@@ -148,3 +148,41 @@ def test_track_length_is_weighted_by_track_count(compare):
         ]
     )
     assert compare.summarize(rows).loc["a", "track_length"] == pytest.approx(19.0)
+
+
+def test_runs_found_by_tracked_label_name(compare, tmp_path):
+    """A run is labels/<run>; its CSV is tracks_<run>_<fov>.csv, or tracks_<fov>.csv
+    for a run named tracks_* (no output_label)."""
+    plate = tmp_path / "plate.zarr"
+    a, b = plate / "A/1/000000", plate / "B/2/000001"
+    for position, run in [(a, "nuclei_hoct"), (a, "tracks_nuclei"), (b, "nuclei_hoct")]:
+        (position / "labels" / run).mkdir(parents=True)
+    (a / "tracks_nuclei_hoct_A_1_000000.csv").touch()
+    (a / "tracks_A_1_000000.csv").touch()
+    (b / "tracks_nuclei_hoct_B_2_000001.csv").touch()
+
+    assert compare.run_positions(plate, "nuclei_hoct") == [a, b]
+    assert compare.run_positions(plate, "tracks_nuclei") == [a]
+    assert compare.tracks_csv(a, "nuclei_hoct").name == "tracks_nuclei_hoct_A_1_000000.csv"
+    assert compare.tracks_csv(a, "tracks_nuclei").name == "tracks_A_1_000000.csv"
+    # A named run never falls back to another run's default-stem CSV.
+    assert compare.tracks_csv(a, "nuclei_trackastra") is None
+
+
+@pytest.mark.parametrize("shape", [(3, 1, 1, 4, 5), (3, 1, 4, 5)])
+def test_view_runs_reads_5d_and_older_4d_labels(tmp_path, shape):
+    import numpy as np
+    import zarr
+
+    pytest.importorskip("napari")
+    spec = importlib.util.spec_from_file_location("view_runs", SCRIPT.parent / "view_runs.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    position = tmp_path / "plate.zarr/A/1/000000"
+    data = np.arange(np.prod(shape), dtype=np.uint32).reshape(shape)
+    zarr.create_array(position / "labels/nuclei_hoct/0", data=data)
+
+    labels = module.read_labels(position, "nuclei_hoct")
+
+    assert labels.shape == (3, 4, 5)
+    assert (labels == data.reshape(3, 4, 5)).all()

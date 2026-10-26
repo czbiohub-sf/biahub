@@ -651,7 +651,7 @@ def _resolve_concatenate_inputs(
     output_metadata = {
         "shape": (len(input_time_indices), len(all_channel_names)) + tuple(cropped_shape_zyx),
         "chunks": chunk_size,
-        "shards_ratio": settings.shards_ratio,
+        "shards": settings.shards,
         "version": resolve_ome_zarr_version(
             all_data_paths[0], settings.output_ome_zarr_version
         ),
@@ -793,7 +793,12 @@ def concatenate(
     # 16-worker tasks took 7-26 min; 0.15 min/volume budgets 60 min here.
     T_out, C_out, _, _, _ = prep["output_metadata"]["shape"]
     _, _, Z, Y, X = prep["shape"]
-    batch_size = settings.shards_ratio[0] if settings.shards_ratio else 1
+    # iohub writes one shard's timepoints per unit, so the shard's T extent is the
+    # batch a worker holds. Read it back from the plate init just created rather than
+    # predicting it: the config may give the shards as a size target.
+    with open_ome_zarr(output_dirpath, layout="hcs", mode="r") as output_plate:
+        _, first_position = next(output_plate.positions())
+        batch_size = (first_position.data.shards or first_position.data.chunks)[0]
     time_minutes, num_cpus, gb_ram_per_cpu = estimate_resources(
         shape=(max(T_out // batch_size, 1), C_out, Z, Y, X),
         ram_multiplier=8 * batch_size,

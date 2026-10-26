@@ -1,40 +1,47 @@
-# Output layout. "2D" writes a Z=1 plate (the input must be projected, e.g. via the
-# np.mean step below); "3D" keeps the selected z-window. output_mode does NOT project
-# the data itself -- it only controls the output shape.
+# The dimensionality of the tracking. "2D" tracks a Z=1 input plate and writes a Z=1
+# label image; "3D" tracks the stack and writes labels of the same Z. Track does NOT
+# project or select Z-planes: a 3D input with output_mode 2D is an error. To track a
+# projection, a window or one plane of a stack, make the Z=1 plate first with
+# `biahub project` (settings/example_project_settings.yml) and track that.
 output_mode: "2D"
 
 fov: "*/*/*"
-
-# How to SELECT the Z-planes used for tracking. Set exactly one `method`; only the
-# fields relevant to that method apply (others are rejected at load time):
-#   all      - use every plane.
-#   central  - auto-centered window.
-#   range    - explicit [start, stop] (requires `range`).
-#   focus    - fixed window of `window_size` planes around the per-FOV in-focus plane
-#              (`frac_below`/`frac_above` split it; `focus_channel` picks the channel
-#              focus-finding runs on).
-z_slicing:
-  method: all
-  # range: [10, 25]           # method: range
-  # window_size: 48           # method: focus (number of z-planes in the window; default 48)
-  # frac_below: 0.33          # method: focus
-  # frac_above: 0.67          # method: focus
-  # focus_channel: nuclei_prediction  # method: focus
-
-# Name of the target channel used to name the tracking output label channel.
-target_channel: nuclei_prediction
 blank_frames_path: blank_frames.csv
 
-# Segmentation method used to feed the tracker: "cellpose" or "foreground_contour".
-# - cellpose: run a Cellpose model per frame to produce instance labels.
-# - foreground_contour: derive a foreground mask + contour map (ultrack segments).
-segmentation_method: cellpose
+# What feeds ultrack: "labels" (the default) tracks the instance labels of a label
+# image of the -i plate, written by `biahub segment`
+# (settings/example_segmentation_settings.yml); "foreground_contour" is the legacy
+# path, which derives a foreground mask and contour map from input_images. Track does
+# not segment: the cellpose settings live in the segment config.
+segmentation_method: labels
 
-# The linker: ultrack (default; re-segments and links, configured by tracking_config
-# below), tracksdata (ILP), hoct (learned edge scores + ILP) or trackastra (transformer
-# links). tracksdata, hoct and trackastra link the cellpose labels as they are, so they
-# need segmentation_method: cellpose and output_mode: 2D. Distances are in um; the
-# defaults below are the A549 benchmark's.
+# The label image to track, `labels/<labels>` in every -i position: the segment
+# config's model name. The tracked labels are written next to it as
+# `labels/tracks_<labels>`, with tracks.geff and a tracks CSV.
+labels: nuclei
+# Optional: another name for the tracked label image, to keep several tracking runs of
+# one segmentation side by side. The tracks then go to tracks_<output_label>.geff and
+# tracks_<output_label>_<fov>.csv rather than tracks.geff / tracks_<fov>.csv.
+# output_label: tracks_nuclei_sigma3
+# Smoothing (pixels) ultrack applies to the labels' contours before it builds its own
+# segmentation hypotheses from them.
+labels_sigma: 5.0
+
+# Optional post-processing (ultrack filter_short_sibling_tracks): at a division where
+# exactly one daughter lives N frames or fewer and does not divide again, drop that
+# daughter and merge the other into the parent; a division whose two daughters are
+# both that short is kept. Removes short false divisions. Off by default.
+# min_sibling_length: 3
+
+# The linker: ultrack (default; builds its own segmentation hypotheses from the labels'
+# contours and links them, configured by tracking_config below), tracksdata (ILP),
+# hoct (learned edge scores + ILP) or trackastra (transformer links). tracksdata, hoct
+# and trackastra link the instance labels of `labels` as they are, so they need
+# segmentation_method: labels and output_mode: 2D, and they write the tracked labels
+# and the CSV but no tracks.geff yet. Distances are in um; the defaults below are the
+# A549 benchmark's. hoct and trackastra also read the image the labels were segmented
+# from: the first channel `biahub segment` recorded for the label image, or
+# image_channel when set (needed for a label image segment did not write).
 # tracker: ultrack
 # tracksdata_config:
 #   distance_threshold_um: 22.66   # candidate edges to the next frame
@@ -48,6 +55,7 @@ segmentation_method: cellpose
 #   border_appearance_weight: -1.0 # ... costs this instead of appearance_weight
 # hoct_config:
 #   model: general_v1              # HOCT registry name or a path to weights
+#   image_channel: null            # default: the channel segment recorded
 #   distance_threshold_um: 33.99
 #   n_neighbors: 5
 #   max_delta_t: 3                 # frames an edge may skip
@@ -55,88 +63,53 @@ segmentation_method: cellpose
 # trackastra_config:
 #   model: general_2d              # pretrained name (general_2d, ctc) or a model folder
 #   mode: greedy                   # greedy | greedy_nodiv | ilp
+#   image_channel: null            # default: the channel segment recorded
 
-# Optional post-processing (ultrack filter_short_sibling_tracks): at a division where
-# exactly one daughter lives N frames or fewer and does not divide again, drop that
-# daughter and merge the other into the parent; a division whose two daughters are
-# both that short is kept. Removes short false divisions. Off by default.
-# min_sibling_length: 3
-
-# Cellpose model parameters (used only when segmentation_method: cellpose).
-cellpose_config:
-  pretrained_model: cpsam_v2  # cellpose 4: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path
-  diameter: 80  # frames are resized by 30/diameter before inference; null = native size
-  cellprob_threshold: 0.0
-  flow_threshold: 0.4
-  gpu: true
-  min_size: 2500
-  input_channel: nuclei_prediction  # channel (from input_images) to segment
-  labels_sigma: 5.0                  # smoothing applied to labels before ultrack
-
-# Input image configurations. Each entry defines one dataset (path) and the channels
-# to load/process from it.
+# ---------------------------------------------------------------------------
+# Alternative: segmentation_method: foreground_contour (legacy)
+# Replace `labels` / `labels_sigma` above with `target_channel` (the name of the label
+# image the tracks are written to) and an input_images block whose processing functions
+# produce the foreground mask and contour map:
 #
-# Two input sources feed tracking:
+# segmentation_method: foreground_contour
+# target_channel: nuclei_prediction
+#
+# Input image configurations. Each entry defines one dataset (path) and the channels
+# to load/process from it. Two input sources feed tracking:
 #   * `-i` (input_position_dirpaths) defines the plate structure (positions, shape, scale).
 #   * input_images[].path supplies the pixel data loaded per FOV.
 # The FIRST entry with `path: null` is the primary data source: it resolves to
-# `--input-images-path` if given (Nextflow), else to the `-i` input plate. So you can
-# leave it null here and point `-i` at the data. Any LATER null entries are
-# virtual/computed channels (see the foreground_contour example below).
-input_images:
-
-  # Cellpose mode: load and Z-project the channel named by cellpose_config.input_channel.
-  # path: null -> resolved from -i (or --input-images-path). Use an explicit
-  # /path/to/virtual_staining.zarr if the data lives elsewhere than the -i plate.
-  - path: null
-    channels:
-      nuclei_prediction:
-        # Z-projection using mean intensity
-        - function: np.mean
-          kwargs:
-            axis: 1
-          per_timepoint: False
-
-  # ---------------------------------------------------------------------------
-  # Alternative: segmentation_method: foreground_contour
-  # Replace the input_images block above with the following (first entry is the
-  # primary data source -> path: null; the second entry's null is a virtual channel):
-  #
-  # - path: null
-  #   channels:
-  #     nuclei_prediction:
-  #       - function: np.mean
-  #         kwargs:
-  #           axis: 1
-  #         per_timepoint: False
-  #       - function: ultrack.imgproc.normalize
-  #         kwargs:
-  #           gamma: 0.7
-  #     membrane_prediction:
-  #       - function: np.mean
-  #         kwargs:
-  #           axis: 1
-  #         per_timepoint: False
-  #       - function: ultrack.imgproc.normalize
-  #         kwargs:
-  #           gamma: 0.7
-  #
-  # # Virtual channel computed dynamically from the prior outputs (path: null).
-  # - path: null
-  #   channels:
-  #     foreground:
-  #       - function: ultrack.imgproc.detect_foreground
-  #         input_channels:
-  #           - nuclei_prediction
-  #         kwargs:
-  #           sigma: 90
-  #     contour:
-  #       - function: biahub.cli.track.mem_nuc_contour
-  #         input_channels:
-  #           - nuclei_prediction
-  #           - membrane_prediction
-  #         kwargs: {}
-  # ---------------------------------------------------------------------------
+# `--input-images-path` if given (Nextflow), else to the `-i` input plate. Any LATER
+# null entries are virtual/computed channels.
+#
+# input_images:
+#   - path: null
+#     channels:
+#       nuclei_prediction:
+#         - function: ultrack.imgproc.normalize
+#           kwargs:
+#             gamma: 0.7
+#       membrane_prediction:
+#         - function: ultrack.imgproc.normalize
+#           kwargs:
+#             gamma: 0.7
+#
+#   # Virtual channel computed dynamically from the prior outputs (path: null).
+#   - path: null
+#     channels:
+#       foreground:
+#         - function: ultrack.imgproc.detect_foreground
+#           input_channels:
+#             - nuclei_prediction
+#           kwargs:
+#             sigma: 90
+#       contour:
+#         - function: biahub.cli.track.mem_nuc_contour
+#           input_channels:
+#             - nuclei_prediction
+#             - membrane_prediction
+#           kwargs: {}
+# ---------------------------------------------------------------------------
 
 # Configuration for Ultrack tracking algorithm (used only when tracker: ultrack).
 # See: https://royerlab.github.io/ultrack/

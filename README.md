@@ -99,7 +99,7 @@ Some steps include an `estimate-*` command that writes a YAML of parameters you 
 | | |
 | `flat-field` | Apply flat-field correction to selected channels |
 | `flip` | Flip images in a dataset |
-| `pyramid` | Create multiscale pyramid levels |
+| `pyramid` | Compute multiscale pyramids of images and label images, in place |
 | `process-with-config` | Apply arbitrary YAML-defined functions to a dataset |
 | | |
 | `estimate-deskew` | Estimate deskewing parameters |
@@ -120,9 +120,10 @@ Some steps include an `estimate-*` command that writes a YAML of parameters you 
 | `stitch` | Stitch positions within wells |
 | `concatenate` | Concatenate datasets channel-wise, with optional cropping |
 | | |
-| `segment` | Segment positions with a pretrained model or pipeline |
+| `project` | Project a 3D plate to 2D: max, mean, sum or one plane per channel, optionally around the in-focus plane |
+| `segment` | Segment positions with cellpose 4; writes one label image per model into the plate |
 | `virtual-stain` | Run VisCy/cytoland virtual staining |
-| `track` | Track objects in 2D/3D time-lapse data |
+| `track` | Track the instance labels of a label image (ultrack); writes tracked labels and tracks.geff into the plate |
 | | |
 | `nf list-positions` | List position keys of a plate zarr (used for Nextflow fan-out) |
 
@@ -215,7 +216,7 @@ nextflow run mantis-v2.nf \
 | `--*_config` | Per-step YAML settings, as passed to the CLI via `-c` |
 | `--biahub_project` | Path to a `biahub` checkout to run tasks from |
 | `--max_positions` | Process only the first N positions (`0` = all) |
-| `--max_jobs` | Cap on concurrently submitted Slurm jobs (default 30) |
+| `--max_jobs` | Cap on concurrently submitted Slurm jobs (default 60) |
 | `--cleanup_intermediates` | `auto`, `true` or `false` (default). Once the last step finishes, delete the intermediate stores and the work directory; `auto` does so only when `concatenate.yml` takes all the data (every field `all`; `time_indices: max` also counts) |
 
 With `--biahub_project`, each task runs as `uv run --project <path> biahub ...`; omit it to use whatever `biahub` is on `PATH` on the compute node. `--max_positions` is useful for smoke tests on a handful of positions.
@@ -223,7 +224,7 @@ With `--biahub_project`, each task runs as `uv run --project <path> biahub ...`;
 Profiles select *where* work runs:
 
 - `-profile local` — everything on the current machine. Good for debugging and single-node runs.
-- `-profile slurm` — per-position work goes to the `preempted` partition, virtual-stain prediction to the `preempted` partition on GPU nodes (it resumes where a reclaimed task stopped), tracking to the `gpu` partition, and lightweight init steps stay local. Preempted, timed-out, and OOM-killed tasks are retried automatically (up to 5 times, with escalating time/memory); genuine errors fail fast instead of burning retries.
+- `-profile slurm` — per-position work goes to the `preempted` partition, virtual-stain prediction and segmentation to the `preempted` partition on GPU nodes (both resume where a reclaimed task stopped), tracking to the `preempted` partition as well (ultrack cannot resume, but a position tracks in minutes), and lightweight init steps stay local. Preempted, timed-out, and OOM-killed tasks are retried automatically (up to 5 times, with escalating time/memory); genuine errors fail fast instead of burning retries.
 
 Nextflow's own flags still apply — most usefully `-resume` to reuse completed tasks after a failure or a config tweak, and `-w /fast/scratch` to move the work directory off the output filesystem.
 
@@ -234,7 +235,7 @@ Each step writes `<dataset>.zarr` into its own numbered subdirectory of `--outpu
 ```
 output/
 ├── 0-flatfield/     1-deskew/     2-reconstruct/
-├── 3-virtual-stain/ 4-track/      5-assemble/
+├── 3-virtual-stain/ 4-assemble/   # <ds>.zarr and, with --project_config, <ds>_proj.zarr
 │   └── slurm_output/README.md      # (in each step) points to the real logs
 └── nextflow/
     ├── report.html  timeline.html  dag.html  trace.txt
@@ -244,9 +245,9 @@ output/
 
 Per-task logs (progress and tracebacks) are in `nextflow/slurm_output/<step>/`. The `slurm_output/` inside each step directory is created by the CLI, but because tasks run it with `--cluster debug`, it only holds submitit placeholder files; each step's init writes a `README.md` there that points to the real logs.
 
-With cleanup on (`--cleanup_intermediates true`, or `auto` when `concatenate.yml` crops nothing), once the last step (QC, when it runs) has finished, the pipeline deletes the flat-field, deskew, reconstruct and virtual-stain directories, the `slurm_output/` placeholders beside the assembled and tracking stores, the assembled store's `.iohub-progress/` resume markers, and the task directories in `nextflow/work`. What it removed is appended to `nextflow/intermediates_cleaned.txt`. Assemble copies those stores' channels, so when `concatenate.yml` keeps all the data this only removes the duplicate copy; if it crops, the cropped-out data is lost. A cleaned run is final: with no cached tasks and no resume markers left, rerunning it, even with `-resume`, recomputes everything from the raw input.
+With cleanup on (`--cleanup_intermediates true`, or `auto` when `concatenate.yml` crops nothing), once the last step (QC, when it runs) has finished, the pipeline deletes the flat-field, deskew, reconstruct and virtual-stain directories, the `slurm_output/` placeholders beside the assembled and projected plates, their `.iohub-progress/` resume markers (assemble, project and segment write them; track does not), and the task directories in `nextflow/work`. What it removed is appended to `nextflow/intermediates_cleaned.txt`. Assemble copies those stores' channels, so when `concatenate.yml` keeps all the data this only removes the duplicate copy; if it crops, the cropped-out data is lost. A cleaned run is final: with no cached tasks and no resume markers left, rerunning it, even with `-resume`, recomputes everything from the raw input.
 
-The pipeline runs flat-field → deskew → reconstruct → virtual-stain → assemble → track; `5-assemble` concatenates the deskew, reconstruct, and virtual-stain channels into one plate, which tracking then consumes.
+The pipeline runs flat-field → deskew → reconstruct → virtual-stain → assemble → project → segment → track → QC; `4-assemble` concatenates the deskew, reconstruct, and virtual-stain channels into one plate, project reduces it to the 2D companion plate beside it, segment writes cellpose label images into that plate, and track links them and writes the tracked labels and `tracks.geff` beside them. Assemble, project, segment, track and QC each run only when their config is passed.
 
 ### Adapting a pipeline
 
