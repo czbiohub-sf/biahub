@@ -161,3 +161,45 @@ def test_bead_landmarks_take_the_runs_detection_threshold(tmp_path):
     bare.write_text(output.read_text())
     result = CliRunner().invoke(cli, args[:6] + [str(bare)] + args[7:])
     assert result.exit_code != 0 and "--bead-threshold" in result.output
+
+
+def test_a_stabilization_is_evaluated_against_its_reference_frame(tmp_path):
+    # Stabilization compares timepoint t with the reference frame (t=0), in the same store
+    # and channel; comparing t with itself measured nothing.
+    from iohub import open_ome_zarr
+    from scipy.ndimage import shift as ndi_shift
+
+    from tests.test_registration_estimators import _synthetic_blob_volume
+
+    first = _synthetic_blob_volume(
+        np.random.default_rng(3), (24, 192, 192), n_blobs=200, sigma=3.0
+    )
+    first = first + 100.0
+    drifted = ndi_shift(first, SHIFT, order=1, mode="nearest")
+    path = tmp_path / "drift.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["DAPI"]) as plate:
+        plate.create_position("A", "1", "0").create_image(
+            "0", np.stack([first, drifted])[:, None].astype(np.float32)
+        )
+    position = path / "A" / "1" / "0"
+    exact = Transform.from_translation([-s for s in SHIFT])
+    transforms = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["DAPI"],
+            transforms=[
+                TransformEntry(t=0, matrix=np.eye(4).tolist()),
+                TransformEntry(t=1, matrix=np.asarray(exact.matrix).tolist()),
+            ],
+        ),
+        transforms,
+    )
+    output = tmp_path / "evaluation.csv"
+    args = ["evaluate-transform", "-m", str(position), "-r", str(position)]
+    args += ["-c", str(transforms), "-o", str(output), "--tile-px", "64", "--t", "1"]
+    args += ["--reference-t", "0"]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    tiles = {r["candidate"]: float(r["tiles_median_um"]) for r in _rows(output)}
+    assert tiles["transforms"] < 0.05 < tiles["unregistered"]

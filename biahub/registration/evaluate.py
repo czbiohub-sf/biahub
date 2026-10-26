@@ -850,6 +850,7 @@ def evaluate_candidates(
     compare: str = "edges",
     detect_kwargs: dict | None = None,
     figures_dir=None,
+    reference_t: int | None = None,
     **image_kwargs,
 ) -> list[dict]:
     """Evaluate every candidate on every position at `t`: one row each (`_row`).
@@ -860,6 +861,8 @@ def evaluate_candidates(
     position paths. Each position also gets an "unregistered" row (identity), measured
     once; landmarks are detected once per position. With `figures_dir`, each candidate's
     figure (`plot_evaluation`, against that unregistered pair) is saved there.
+    `reference_t` reads the reference at another timepoint than `t` (a stabilization's
+    reference frame); by default the same.
     """
     from iohub import open_ome_zarr
 
@@ -868,7 +871,10 @@ def evaluate_candidates(
         key = "/".join(Path(mov_path).parts[-3:])
         with open_ome_zarr(mov_path, mode="r") as m, open_ome_zarr(ref_path, mode="r") as r:
             mov = np.asarray(m.data[t, m.channel_names.index(moving_channel)], np.float32)
-            ref = np.asarray(r.data[t, r.channel_names.index(reference_channel)], np.float32)
+            t_ref = t if reference_t is None else reference_t
+            ref = np.asarray(
+                r.data[t_ref, r.channel_names.index(reference_channel)], np.float32
+            )
             mov_um, ref_um = tuple(m.scale[-3:]), tuple(r.scale[-3:])
         marks = _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs)
         named = {"unregistered": Transform.identity(3), **candidates}

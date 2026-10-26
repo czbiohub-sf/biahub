@@ -72,6 +72,7 @@ def evaluate_transform(
     figures: bool = False,
     tags: dict | None = None,
     bead_threshold: float | None = None,
+    reference_t: int | None = None,
     **image_kwargs,
 ) -> list[dict]:
     """Evaluate a transforms file (and its stack's blocks) on positions; write the table.
@@ -106,10 +107,12 @@ def evaluate_transform(
         candidates,
         list(zip(moving_position_dirpaths, reference_position_dirpaths, strict=True)),
         moving_channel or transforms.moving_channels[0],
-        reference_channel or transforms.reference_channel,
+        # a stabilization has no reference channel: its reference is the moving channel
+        reference_channel or transforms.reference_channel or transforms.moving_channels[0],
         t=t,
         landmarks=landmarks,
         detect_kwargs=detect_kwargs,
+        reference_t=reference_t,
         figures_dir=output_filepath.with_suffix("") if figures else None,
         **image_kwargs,
     )
@@ -154,6 +157,13 @@ def _parse_tags(tags) -> dict:
     "--t", "t", type=int, default=0, show_default=True, help="Timepoint to evaluate."
 )
 @click.option(
+    "--reference-t",
+    type=int,
+    default=None,
+    help="Read the reference at this timepoint (a stabilization's reference frame, e.g. 0); "
+    "default: --t.",
+)
+@click.option(
     "--tile-px", type=int, default=256, show_default=True, help="Tile size (pixels)."
 )
 @click.option(
@@ -185,6 +195,7 @@ def evaluate_transform_cli(
     reference_channel,
     landmarks,
     t,
+    reference_t,
     tile_px,
     no_blocks,
     figures,
@@ -212,6 +223,7 @@ def evaluate_transform_cli(
         figures=figures,
         tags=_parse_tags(tags),
         bead_threshold=bead_threshold,
+        reference_t=reference_t,
         tile_px=tile_px,
     )
     for row in rows:
