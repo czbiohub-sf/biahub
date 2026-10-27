@@ -20,8 +20,8 @@ from numpy.typing import ArrayLike
 from biahub.core.transform import Transform
 from biahub.registration.estimators import ScoreFn
 from biahub.registration.evaluate import detect_nuclei
-from biahub.registration.methods.beads import NodeGraphEstimator
-from biahub.registration.methods.vote_icp import fit_model
+from biahub.registration.methods.landmark.bead_matching import NodeGraphEstimator
+from biahub.registration.methods.landmark.vote_icp import fit_model
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, NucleiSettings
 
 

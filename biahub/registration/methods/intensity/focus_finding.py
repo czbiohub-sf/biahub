@@ -19,7 +19,7 @@ from waveorder.focus import focus_from_transverse_band
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimationError
-from biahub.registration.methods.stackreg import StackregEstimator
+from biahub.registration.methods.intensity.stackreg import StackregEstimator
 from biahub.settings import FocusSettings
 
 FocusAxes = Literal["z", "xy", "xyz"]

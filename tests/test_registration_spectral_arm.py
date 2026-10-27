@@ -18,7 +18,10 @@ from biahub.registration.estimators import (
     EstimationError,
     TransformEstimator,
 )
-from biahub.registration.methods.beads import BeadNodeDetector, NodeGraphEstimator
+from biahub.registration.methods.landmark.bead_matching import (
+    BeadNodeDetector,
+    NodeGraphEstimator,
+)
 from biahub.settings import (
     AffineTransformSettings,
     BeadsMatchSettings,

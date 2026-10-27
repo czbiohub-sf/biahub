@@ -1,7 +1,7 @@
 """Point-cloud registration primitives for sparse bead fields.
 
 Numpy/scipy algorithms over (N, 3) ZYX peak coordinates, kept apart from the volume code
-in `methods.beads` so each stage is testable on its own. Returned transforms are
+in `bead_matching` so each stage is testable on its own. Returned transforms are
 homogeneous (D+1, D+1) matrices in the inverse convention used by `vote_icp_register`'s
 `initial_transform`: they map reference-space points to moving-space sample coordinates.
 """
@@ -20,7 +20,7 @@ from biahub.registration.estimators import (
     NodeDetector,
     ScoreFn,
 )
-from biahub.registration.methods.beads import BeadNodeDetector
+from biahub.registration.methods.landmark.bead_matching import BeadNodeDetector
 from biahub.settings import BeadsMatchSettings, SeedCorrectionSettings, VoteIcpSettings
 
 

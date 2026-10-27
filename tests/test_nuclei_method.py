@@ -55,7 +55,7 @@ def _pair(truth, layout="grid"):
 
 
 def _estimator(**settings):
-    from biahub.registration.methods.nuclei import nuclei_estimator
+    from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimator
     from biahub.settings import NucleiSettings
 
     return nuclei_estimator(NucleiSettings(**settings), "similarity", UM)
@@ -66,8 +66,8 @@ PROBE = np.array([[12, 60, 60], [12, 60, 450], [12, 450, 60], [12, 450, 450], [1
 
 def test_nuclei_is_a_landmark_based_graph_matching_estimator():
     # The same parts as beads: a detector per channel, a graph matcher, a fit.
-    from biahub.registration.methods.beads import NodeGraphEstimator
-    from biahub.registration.methods.nuclei import NucleiNodeDetector
+    from biahub.registration.methods.landmark.bead_matching import NodeGraphEstimator
+    from biahub.registration.methods.landmark.nuclei_matching import NucleiNodeDetector
 
     estimator = _estimator()
     assert isinstance(estimator, NodeGraphEstimator)
@@ -98,7 +98,7 @@ def test_the_fit_holds_yx_and_a_z_offset_only():
 def test_different_voxel_sizes_on_the_two_sides():
     # the moving grid is twice as coarse in yx: nuclei are detected on the warped moving
     # volume, on the reference grid, so the fit is in one grid
-    from biahub.registration.methods.nuclei import nuclei_estimator
+    from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimator
     from biahub.settings import NucleiSettings
 
     ref = _nuclei_layer()

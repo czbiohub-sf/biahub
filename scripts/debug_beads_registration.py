@@ -23,7 +23,7 @@ from biahub.core.transform import Transform
 import napari
 # the retired estimate-registration schema this script reads its config with
 from biahub.registration.legacy.convert_settings import EstimateRegistrationSettings
-from biahub.registration.methods.beads import (
+from biahub.registration.methods.landmark.bead_matching import (
     transform_from_matches,
     matches_from_beads,
     peaks_from_beads,

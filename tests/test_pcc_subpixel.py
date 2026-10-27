@@ -6,7 +6,7 @@ import pytest
 from scipy.ndimage import gaussian_filter
 from scipy.ndimage import shift as ndi_shift
 
-from biahub.registration.methods.pcc import phase_cross_corr
+from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
 
 
 @pytest.mark.parametrize(

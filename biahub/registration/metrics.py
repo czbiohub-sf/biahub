@@ -27,8 +27,8 @@ from skimage import filters
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import ScoreFn
-from biahub.registration.methods.beads import overlap_score, peaks_from_beads
-from biahub.registration.methods.pcc import phase_cross_corr
+from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
+from biahub.registration.methods.landmark.bead_matching import overlap_score, peaks_from_beads
 from biahub.settings import BeadsMatchSettings
 
 

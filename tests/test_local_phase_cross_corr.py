@@ -36,7 +36,7 @@ def _pair(truth):
 
 
 def _estimator(**settings):
-    from biahub.registration.methods.pcc import LocalPCCEstimator
+    from biahub.registration.methods.intensity.phase_cross_corr import LocalPCCEstimator
     from biahub.settings import LocalPhaseCrossCorrSettings
 
     return LocalPCCEstimator(

@@ -24,7 +24,7 @@ from skimage import filters
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import position_key
 from biahub.core.transform import Transform
-from biahub.registration.methods.pcc import phase_cross_corr
+from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
 from biahub.utils.ngff import is_unwritten
 
 # Fewer matched points than this do not constrain an affine residual (12 parameters,

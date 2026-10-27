@@ -444,3 +444,21 @@ def test_a_timepoint_whose_block_failed_is_unreliable_and_says_why():
     result.provenance[0] = "consensus_full"
     entries = transform_entries(result, [0, 1], [Transform.identity(3)] * 2, hard_fail=0.0)
     assert (entries[0].status, entries[0].note) == ("accepted", None)
+
+
+def test_every_method_lives_in_its_familys_folder_under_its_own_name():
+    # registration/methods/<family>/<method>.py: the family and the name a config uses
+    from pathlib import Path
+
+    import biahub.registration.methods as methods
+
+    from biahub.settings import METHOD_FAMILIES
+
+    folders = {
+        "landmark-based": "landmark",
+        "intensity-based": "intensity",
+        "interactive": "interactive",
+    }
+    root = Path(methods.__file__).parent
+    for method, (family, _) in METHOD_FAMILIES.items():
+        assert (root / folders[family] / f"{method}.py").is_file(), method

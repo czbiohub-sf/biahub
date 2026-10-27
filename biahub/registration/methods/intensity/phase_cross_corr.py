@@ -14,7 +14,7 @@ from scipy.fftpack import next_fast_len
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimationError
-from biahub.registration.methods.vote_icp import fit_model
+from biahub.registration.methods.landmark.vote_icp import fit_model
 from biahub.registration.utils import match_shape, match_shape_origin
 from biahub.settings import LocalPhaseCrossCorrSettings, PhaseCrossCorrSettings
 

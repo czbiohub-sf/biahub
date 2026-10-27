@@ -42,13 +42,16 @@ from biahub.registration.estimators import (
     ScoreFn,
     TransformEstimator,
 )
-from biahub.registration.methods.ants import AntsEstimator, use_task_threads
-from biahub.registration.methods.beads import NodeGraphEstimator
-from biahub.registration.methods.focus import FocusEstimator
-from biahub.registration.methods.manual import ManualEstimator
-from biahub.registration.methods.nuclei import nuclei_estimator
-from biahub.registration.methods.pcc import LocalPCCEstimator, PCCEstimator
-from biahub.registration.methods.vote_icp import VoteIcpEstimator, VoteSeedCorrection
+from biahub.registration.methods.intensity.ants import AntsEstimator, use_task_threads
+from biahub.registration.methods.intensity.focus_finding import FocusEstimator
+from biahub.registration.methods.intensity.phase_cross_corr import (
+    LocalPCCEstimator,
+    PCCEstimator,
+)
+from biahub.registration.methods.interactive.manual import ManualEstimator
+from biahub.registration.methods.landmark.bead_matching import NodeGraphEstimator
+from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimator
+from biahub.registration.methods.landmark.vote_icp import VoteIcpEstimator, VoteSeedCorrection
 from biahub.registration.metrics import (
     PREWARPED,
     bead_alignment_metrics,

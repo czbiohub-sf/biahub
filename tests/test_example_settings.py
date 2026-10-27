@@ -160,7 +160,7 @@ def test_ants_settings_are_all_consumed_by_the_engine():
     (which is what the config-driven ANTs path runs), so a config knob can't be silently
     ignored."""
     from biahub.registration.engine import build_estimator
-    from biahub.registration.methods.ants import AntsEstimator
+    from biahub.registration.methods.intensity.ants import AntsEstimator
     from biahub.settings import AntsRegistrationSettings
 
     source = inspect.getsource(AntsEstimator.from_settings) + inspect.getsource(

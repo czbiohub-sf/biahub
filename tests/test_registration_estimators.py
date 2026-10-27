@@ -9,17 +9,17 @@ from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimationError, NodeDetector, TransformEstimator
-from biahub.registration.methods.ants import DEFAULT_ANTS_KWARGS, AntsEstimator
-from biahub.registration.methods.beads import (
+from biahub.registration.methods.intensity.ants import DEFAULT_ANTS_KWARGS, AntsEstimator
+from biahub.registration.methods.intensity.focus_finding import FocusEstimator, find_focus
+from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
+from biahub.registration.methods.intensity.stackreg import StackregEstimator
+from biahub.registration.methods.interactive.manual import ManualEstimator
+from biahub.registration.methods.landmark.bead_matching import (
     BeadNodeDetector,
     NodeGraphEstimator,
     matches_from_beads,
     transform_from_matches,
 )
-from biahub.registration.methods.focus import FocusEstimator, find_focus
-from biahub.registration.methods.manual import ManualEstimator
-from biahub.registration.methods.pcc import PCCEstimator
-from biahub.registration.methods.stackreg import StackregEstimator
 from biahub.registration.metrics import correlation_score
 from biahub.settings import (
     AffineTransformSettings,
@@ -359,7 +359,7 @@ def test_ants_refines_from_a_far_seed_without_cropping():
 def test_ants_estimator_passes_its_masks_to_ants(monkeypatch):
     import ants
 
-    from biahub.registration.methods import ants as ants_method
+    from biahub.registration.methods.intensity import ants as ants_method
 
     seen = {}
     real = ants.registration
@@ -514,7 +514,7 @@ def test_manual_estimator_inverts_user_assisted_registrations_inverse_output(mon
         return [inverse_matrix.tolist()]
 
     monkeypatch.setattr(
-        "biahub.registration.methods.manual.user_assisted_registration",
+        "biahub.registration.methods.interactive.manual.user_assisted_registration",
         fake_user_assisted_registration,
     )
 
@@ -688,7 +688,7 @@ import numpy as np
 from scipy.ndimage import shift as ndi_shift
 from tests.test_registration_estimators import _synthetic_blob_volume
 from biahub.core.transform import Transform
-from biahub.registration.methods.ants import AntsEstimator
+from biahub.registration.methods.intensity.ants import AntsEstimator
 rng = np.random.default_rng(5)
 ref = _synthetic_blob_volume(rng, (24, 48, 48))
 mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
@@ -708,7 +708,7 @@ assert np.array_equal(first, second), np.abs(first - second).max()
 
 
 def test_ants_threads_follow_the_task_cpus_unless_set(monkeypatch):
-    from biahub.registration.methods.ants import _itk_threads
+    from biahub.registration.methods.intensity.ants import _itk_threads
 
     monkeypatch.delenv("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", raising=False)
     monkeypatch.setenv("SLURM_CPUS_PER_TASK", "8")
@@ -723,7 +723,10 @@ def test_ants_threads_follow_the_task_cpus_unless_set(monkeypatch):
 def test_classic_pcc_normalization_stays_finite_where_the_spectrum_is_zero(padding):
     # A volume with zero-magnitude frequencies (here: constant) must not turn the
     # correlation into NaNs, as the 'magnitude' normalization already guards against.
-    from biahub.registration.methods.pcc import phase_cross_corr, phase_cross_corr_padding
+    from biahub.registration.methods.intensity.phase_cross_corr import (
+        phase_cross_corr,
+        phase_cross_corr_padding,
+    )
 
     vol = np.full((8, 16, 16), 3.0, dtype=np.float32)
     fn = phase_cross_corr_padding if padding else phase_cross_corr
@@ -734,7 +737,7 @@ def test_classic_pcc_normalization_stays_finite_where_the_spectrum_is_zero(paddi
 def test_pcc_center_crop_is_clamped_to_the_image():
     # A crop larger than an axis takes the whole axis; a negative start would wrap around
     # and keep only the far end.
-    from biahub.registration.methods.pcc import pcc_crop
+    from biahub.registration.methods.intensity.phase_cross_corr import pcc_crop
     from biahub.settings import PhaseCrossCorrSettings
 
     _, y, x = pcc_crop(PhaseCrossCorrSettings(center_crop_xy=[150, 150]), (10, 100, 80))
@@ -786,7 +789,7 @@ def test_ants_estimate_starts_from_initial_and_returns_the_full_forward_transfor
     # With near-zero iterations the result is where ANTs started: `initial` itself (used
     # once, not twice), even with a bright blob that moves the moving volume's centre of
     # mass (ANTsPy's own default start).
-    from biahub.registration.methods.ants import estimate
+    from biahub.registration.methods.intensity.ants import estimate
 
     rng = np.random.default_rng(10)
     ref = _synthetic_blob_volume(rng, (24, 48, 48))
@@ -802,7 +805,7 @@ def test_ants_estimate_starts_from_initial_and_returns_the_full_forward_transfor
 
 
 def test_ants_estimate_returns_the_forward_direction():
-    from biahub.registration.methods.ants import estimate
+    from biahub.registration.methods.intensity.ants import estimate
 
     rng = np.random.default_rng(5)
     ref = _synthetic_blob_volume(rng, (24, 48, 48))
@@ -817,7 +820,7 @@ def test_ants_estimate_returns_the_forward_direction():
 def test_ants_estimate_passes_the_masks_to_ants(monkeypatch):
     import ants
 
-    from biahub.registration.methods import ants as ants_method
+    from biahub.registration.methods.intensity import ants as ants_method
 
     seen = {}
     real = ants.registration
@@ -849,7 +852,7 @@ def test_pcc_correlation_keeps_the_input_grid_on_odd_widths(x):
     # Without the spatial shape, irfftn returns 2 * (n // 2 + 1) - 2 samples on the last
     # axis: n - 1 for an odd n, so the correlation peak sits on the wrong grid. The padded
     # path pads to next_fast_len sizes, which can be odd too.
-    from biahub.registration.methods import pcc
+    from biahub.registration.methods.intensity import phase_cross_corr as pcc
 
     rng = np.random.default_rng(3)
     ref = rng.random((6, 20, x)).astype(np.float32)
@@ -863,7 +866,7 @@ def test_pcc_correlation_keeps_the_input_grid_on_odd_widths(x):
 def test_padded_pcc_measures_no_shift_from_unequal_shapes(mov_width):
     # Padding / cropping both volumes to one shape moves their origins by different amounts
     # when their shapes differ; that difference is not a shift of the content.
-    from biahub.registration.methods.pcc import phase_cross_corr_padding
+    from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr_padding
 
     rng = np.random.default_rng(2)
     ref = _synthetic_blob_volume(rng, (24, 64, 72), n_blobs=40)
@@ -889,8 +892,8 @@ def test_padded_pcc_measures_no_shift_from_unequal_shapes(mov_width):
 @pytest.mark.parametrize("crop", [(3, 5), (1, 1), (6, 4), (800, 800)])
 def test_center_crops_keep_the_requested_size(crop):
     # An odd size lost a pixel at each crop (both bounds halved) and [1, 1] was empty.
-    from biahub.registration.methods.focus import center_crop_yx
-    from biahub.registration.methods.pcc import pcc_crop
+    from biahub.registration.methods.intensity.focus_finding import center_crop_yx
+    from biahub.registration.methods.intensity.phase_cross_corr import pcc_crop
     from biahub.settings import PhaseCrossCorrSettings
 
     shape = (4, 9, 7)  # odd Y and X
@@ -903,7 +906,7 @@ def test_center_crops_keep_the_requested_size(crop):
 
 def test_unpadded_pcc_refuses_unequal_shapes_with_guidance():
     # The unpadded correlation needs equal grids; unequal ones raised deep in numpy.
-    from biahub.registration.methods.pcc import PCCEstimator
+    from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
 
     rng = np.random.default_rng(0)
     ref = rng.random((8, 32, 64)).astype(np.float32)
@@ -927,7 +930,7 @@ def test_competing_arms_report_a_non_finite_score():
 
 def test_itk_threads_fall_back_where_cpu_affinity_is_unavailable(monkeypatch):
     # macOS has no os.sched_getaffinity.
-    from biahub.registration.methods import ants as ants_method
+    from biahub.registration.methods.intensity import ants as ants_method
 
     monkeypatch.delenv("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", raising=False)
     monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)

@@ -497,7 +497,7 @@ class AntsRegistrationSettings(MyBaseModel):
 
     The transform family comes from `transform.type`; preparation (Sobel, clipping,
     masks) is the config's `preprocess` blocks. ANTs' search (iterations, shrink factors,
-    smoothing) uses `biahub.registration.methods.ants.DEFAULT_ANTS_KWARGS`.
+    smoothing) uses `biahub.registration.methods.intensity.ants.DEFAULT_ANTS_KWARGS`.
     """
 
     @model_validator(mode="before")
