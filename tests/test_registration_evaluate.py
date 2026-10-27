@@ -418,7 +418,7 @@ def _record(images=True, landmarks=True):
 def test_the_evaluation_figure_shows_both_pairs_and_the_z_residual(
     tmp_path, images, landmarks
 ):
-    from biahub.registration.evaluate_view import plot_evaluation
+    from biahub.registration.view import plot_evaluation
 
     path = tmp_path / "evaluation.png"
     figure = plot_evaluation(_record(images, landmarks), path=path, title="A/1/0 t=0")
@@ -430,7 +430,7 @@ def test_the_evaluation_figure_shows_both_pairs_and_the_z_residual(
 
 def test_a_stored_record_has_no_projections_to_plot():
     from biahub.registration.evaluate import Evaluation
-    from biahub.registration.evaluate_view import plot_evaluation
+    from biahub.registration.view import plot_evaluation
 
     stored = Evaluation(**_record(images=False).to_dict())
     with pytest.raises(ValueError, match="projections"):
@@ -440,7 +440,7 @@ def test_a_stored_record_has_no_projections_to_plot():
 def test_the_video_holds_the_projections_then_scans_through_z(tmp_path):
     import imageio_ffmpeg
 
-    from biahub.registration.evaluate_view import HOLD_FRAMES, animate_evaluation
+    from biahub.registration.view import HOLD_FRAMES, animate_evaluation
 
     ref = _cells(12, shape=(20, 160, 160))
     mov = _ndi_shift(ref, (0.0, 3.0, -2.0), order=1, mode="nearest")
@@ -457,7 +457,7 @@ def test_the_video_holds_the_projections_then_scans_through_z(tmp_path):
 
 
 def test_the_zoom_warps_only_its_corner_and_matches_the_full_warp():
-    from biahub.registration.evaluate_view import _corner_pair
+    from biahub.registration.view import _corner_pair
 
     ref = _cells(13, shape=(20, 160, 160))
     mov = _ndi_shift(ref, (0.0, 3.0, -2.0), order=1, mode="nearest")
@@ -479,7 +479,7 @@ def test_the_visual_check_shows_the_reference_and_the_moving_volume_before_and_a
     # whether it is good.
     pytest.importorskip("napari")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from biahub.registration.evaluate_view import _build_check
+    from biahub.registration.view import _build_check
 
     ref = _cells(14)
     mov = _ndi_shift(ref, (0.0, 3.0, -2.0), order=1, mode="nearest")
@@ -551,7 +551,7 @@ def test_a_nucleus_with_a_flat_depth_profile_is_skipped_not_a_nan():
 
 
 def test_arrows_use_each_axis_voxel_size():
-    from biahub.registration.evaluate_view import _arrows
+    from biahub.registration.view import _arrows
 
     views = {"ref_um": (0.2, 0.1, 0.2), "downsample": 1}
     measure = {"residuals": {"position_um": [[1.0, 5.0, 10.0]], "diff_um": [[0.0, 0.1, 0.2]]}}

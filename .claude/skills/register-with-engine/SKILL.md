@@ -194,7 +194,7 @@ one timepoint of the position it was estimated on and of one or two held-out pos
 import json
 from biahub.core.transform import Transform
 from biahub.registration.evaluate import evaluate
-from biahub.registration.evaluate_view import plot_evaluation
+from biahub.registration.view import plot_evaluation
 from biahub.settings import load_transform_settings
 
 transform = Transform(load_transform_settings("<out>/transforms.yml").matrix_for(t, "forward"))
@@ -237,7 +237,7 @@ Then offer the user a look in napari, on a node with a display (launch it with o
 file, not piped):
 
 ```python
-from biahub.registration.evaluate_view import visual_check
+from biahub.registration.view import visual_check
 visual_check(mov_zyx, ref_zyx, transform, ref_um, phase=phase_zyx)  # phase: optional
 ```
 
@@ -245,7 +245,7 @@ It shows the reference, the moving volume as it was and registered, and phase un
 when given. When the window closes, ask whether the registration is good; record the
 answer. Never call a registration good without it. On request, a video comparing
 transforms (e.g. unregistered, a previous registration, this one):
-`evaluate_view.animate_evaluation(mov_zyx, ref_zyx, {name: transform}, "<out>/evaluation/<fov>.mp4")`.
+`view.animate_evaluation(mov_zyx, ref_zyx, {name: transform}, "<out>/evaluation/<fov>.mp4")`.
 
 ## 10. Optional: apply
 

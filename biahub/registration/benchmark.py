@@ -387,7 +387,7 @@ def evaluate_candidates(
                     for k in ("points", "tiles", "z_crops", "z_um", "z_from")
                 }
             elif figures_dir is not None:
-                from biahub.registration.evaluate_view import plot_evaluation
+                from biahub.registration.view import plot_evaluation
 
                 record.baseline = unregistered  # measured once for the position
                 Path(figures_dir).mkdir(parents=True, exist_ok=True)
