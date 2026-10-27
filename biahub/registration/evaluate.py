@@ -23,6 +23,7 @@ from skimage import filters
 
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import position_key
+from biahub.core.nodes.solvers import medoid as _medoid
 from biahub.core.transform import Transform
 from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
 from biahub.utils.ngff import is_unwritten
@@ -793,15 +794,18 @@ def pool_transforms(
     keys = sorted(estimates)
     if not keys:
         raise ValueError("no estimates to pool")
-    total = {
-        a: sum(
-            estimates[a].displacement_to(estimates[b], shape_zyx, voxel_um)["max_um"]
-            for b in keys
-            if b != a
-        )
-        for a in keys
-    }
-    medoid = min(keys, key=lambda k: (total[k], k))
+    gaps = np.array(
+        [
+            [
+                0.0
+                if a == b
+                else estimates[a].displacement_to(estimates[b], shape_zyx, voxel_um)["max_um"]
+                for b in keys
+            ]
+            for a in keys
+        ]
+    )
+    medoid = keys[_medoid(gaps)]
     matrix = np.array(estimates[medoid].matrix, dtype=float)
     z_shift = 0.0
     if z == "median":

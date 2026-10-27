@@ -45,3 +45,10 @@ def test_the_matchers_are_a_cost_and_a_solver():
     # reversed order: node i pairs with node 29 - i
     pairs = spectral.match(mg, rg)
     assert len(pairs) >= 28 and all(i + j == 29 for i, j in pairs)
+
+
+def test_the_medoid_is_the_node_closest_to_all_the_others():
+    from biahub.core.nodes.solvers import medoid
+
+    points = np.array([[0.0], [1.0], [2.0], [10.0]])
+    assert medoid(cdist(points, points)) == 1  # 1 + 1 + 9 beats 1 + 2 + 10 and 2 + 1 + 8

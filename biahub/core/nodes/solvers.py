@@ -1,7 +1,8 @@
 """Solvers: from costs to pairs (or a centre) -- how the best match is found.
 
 A linear assignment pairs nodes on unary costs (exact, Hungarian); the spectral solver
-relaxes the pairwise (quadratic) problem to an eigenvector and rounds it greedily.
+relaxes the pairwise (quadratic) problem to an eigenvector and rounds it greedily; the
+medoid is the centre of one set of nodes.
 """
 
 import click
@@ -103,3 +104,14 @@ def cross_checked(
     """Return the forward pairs (i, j) that the backward pass also chose, as (j, i)."""
     reverse_map = {(j, i) for i, j in backward}
     return np.array([[i, j] for i, j in forward if (i, j) in reverse_map], dtype=np.int32)
+
+
+def medoid(distances: NDArray[np.floating]) -> int:
+    """Return the node with the smallest summed distance to all the others.
+
+    `distances` is an (N, N) matrix between nodes of one set (points, or e.g. positions
+    with their transforms and `Transform.displacement_to` as the distance). The first
+    such node on a tie.
+    """
+    distances = np.asarray(distances, dtype=float)
+    return int(np.argmin(distances.sum(axis=1)))
