@@ -27,6 +27,9 @@ from biahub.settings import AffineTransformSettings, BeadsMatchSettings, NucleiS
 class NucleiNodeDetector:
     """Detects nucleus centres (voxels, z y x) as nodes for graph matching."""
 
+    # `detect_nuclei` leaves NaN out, so the estimator marks a warp's padding as NaN
+    missing_as_nan = True
+
     def __init__(self, settings: NucleiSettings, voxel_um: tuple[float, float, float]):
         self.settings = settings
         self.voxel_um = tuple(voxel_um)

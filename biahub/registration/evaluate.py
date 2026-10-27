@@ -272,19 +272,34 @@ def detect_nuclei(
     """Return nucleus centres: yx from the max projection's objects, z from each profile.
 
     Objects are kept when compact (solidity), of nuclear size (area in µm², so the same
-    settings hold across instruments) and whole (not cut by the frame). z is the centroid of
-    the nucleus's mean intensity profile above half its maximum.
+    settings hold across instruments) and whole (not cut by the frame or by missing data).
+    z is the centroid of the nucleus's mean intensity profile above half its maximum. NaN
+    marks voxels with no data (e.g. a warp's padding): they are left out, never read as
+    dark, so padding cannot pull the threshold below the background.
     """
-    from scipy.ndimage import gaussian_filter
+    import warnings
+
+    from scipy.ndimage import binary_dilation, gaussian_filter
     from skimage import filters, measure
 
     vol = np.asarray(volume, dtype=np.float32)
     _vz, vy, vx = voxel_um
-    mip = gaussian_filter(vol.max(axis=0), smooth_um / vy)
-    if not np.isfinite(mip).all() or mip.std() == 0:
-        return Landmarks(np.zeros((0, 3)), tuple(voxel_um), "nuclei")
-    labels = measure.label(mip > filters.threshold_otsu(mip))
-    background = np.median(vol[:, labels == 0], axis=1) if (labels == 0).any() else 0.0
+    empty = Landmarks(np.zeros((0, 3)), tuple(voxel_um), "nuclei")
+    with warnings.catch_warnings():  # columns with no data at all: NaN, left out below
+        warnings.simplefilter("ignore", RuntimeWarning)
+        mip = np.nanmax(vol, axis=0)
+    has_data = np.isfinite(mip)
+    if not has_data.any():
+        return empty
+    mip = gaussian_filter(np.where(has_data, mip, np.median(mip[has_data])), smooth_um / vy)
+    if mip[has_data].std() == 0:
+        return empty
+    labels = measure.label((mip > filters.threshold_otsu(mip[has_data])) & has_data)
+    near_missing = binary_dilation(~has_data) if not has_data.all() else None
+    outside = (labels == 0) & has_data
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        background = np.nanmedian(vol[:, outside], axis=1) if outside.any() else 0.0
     points = []
     for region in measure.regionprops(labels):
         area_um2 = region.area * vy * vx
@@ -293,14 +308,21 @@ def detect_nuclei(
         y0, x0, y1, x1 = region.bbox
         if y0 == 0 or x0 == 0 or y1 == mip.shape[0] or x1 == mip.shape[1]:
             continue  # cut by the frame: its centre is not its centre
+        if near_missing is not None and near_missing[y0:y1, x0:x1][region.image].any():
+            continue  # cut by missing data, likewise
         if vol.shape[0] == 1:  # a single slice: no depth to measure, z is that slice
             points.append((0.0, *region.centroid))
             continue
-        profile = vol[:, y0:y1, x0:x1][:, region.image].mean(axis=1) - background
-        profile = profile - profile.min()
-        if not np.isfinite(profile).all() or profile.max() <= 0:
+        with warnings.catch_warnings():  # depths with no data: NaN, left out
+            warnings.simplefilter("ignore", RuntimeWarning)
+            profile = np.nanmean(vol[:, y0:y1, x0:x1][:, region.image], axis=1) - background
+        depth = np.isfinite(profile)
+        if not depth.any():
+            continue
+        profile = np.where(depth, profile - profile[depth].min(), 0.0)
+        if profile.max() <= 0:
             continue  # the same at every depth: no z to measure
-        top = profile >= 0.5 * profile.max()
+        top = depth & (profile >= 0.5 * profile.max())
         z = float((np.arange(len(profile))[top] * profile[top]).sum() / profile[top].sum())
         points.append((z, *region.centroid))
     return Landmarks(np.array(points, dtype=float).reshape(-1, 3), tuple(voxel_um), "nuclei")

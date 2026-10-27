@@ -138,3 +138,15 @@ def test_nuclei_on_a_single_slice():
     probe = np.array([[0, 60, 60], [0, 450, 450], [0, 256, 256]])
     err = (found.apply_points(probe) - truth.apply_points(probe))[:, 1:] * np.asarray(UM[1:])
     assert np.abs(err).max() < 0.3
+
+
+def test_the_seeds_padding_does_not_hide_the_moving_nuclei():
+    # DragonFly DAPI sits on a camera offset (~250); warped by a seed that moves it ~40 px,
+    # the zero padding pulled the detection threshold below the background, every nucleus
+    # merged into one object, and 0 moving nuclei were found.
+    truth = _forward(shift_vox=(2.0, 40.0, -35.0))
+    mov, ref = _pair(truth)
+    found = _estimator().estimate(mov + 250.0, ref, seed=truth)
+    np.testing.assert_allclose(
+        found.apply_points(PROBE), truth.apply_points(PROBE), atol=1.0
+    )
