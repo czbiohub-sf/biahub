@@ -4,12 +4,9 @@ import pytest
 from scipy.ndimage import shift as ndi_shift
 from scipy.spatial.transform import Rotation
 
-from biahub.core.graph_matching import (
-    Graph,
-    GraphMatcher,
-    MatchingTooLargeError,
-    spectral_affinity,
-)
+from biahub.core.nodes.costs import MatchingTooLargeError, spectral_affinity
+from biahub.core.nodes.graph import Graph
+from biahub.core.nodes.matching import GraphMatcher
 from biahub.core.transform import Transform
 from biahub.registration.engine import build_beads_estimator
 from biahub.registration.estimators import (

@@ -38,7 +38,9 @@ from scipy.spatial import cKDTree
 from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
 from biahub.characterize_psf import detect_peaks
-from biahub.core.graph_matching import Graph, GraphMatcher, MatchingTooLargeError
+from biahub.core.nodes.costs import MatchingTooLargeError
+from biahub.core.nodes.graph import Graph
+from biahub.core.nodes.matching import GraphMatcher
 from biahub.core.nodes.point_set import vote_drift, vote_icp_register
 from biahub.core.transform import Transform
 from biahub.registration.estimators import (
