@@ -28,7 +28,7 @@ def _plate(tmp_path):
 
 
 def test_candidates_on_positions_make_one_table_with_the_unregistered_pair(tmp_path):
-    from biahub.registration.evaluate import evaluate_candidates
+    from biahub.registration.benchmark import evaluate_candidates
 
     positions = _plate(tmp_path)
     exact = Transform.from_translation([-s for s in SHIFT])
@@ -51,7 +51,7 @@ def test_candidates_on_positions_make_one_table_with_the_unregistered_pair(tmp_p
 def test_each_block_of_a_stack_run_is_a_candidate(tmp_path):
     import json
 
-    from biahub.registration.evaluate import block_candidates
+    from biahub.registration.benchmark import block_candidates
     from biahub.utils.config import model_to_yaml
     from tests.test_estimate_transform import (
         APPLIED_SHIFT_ZYX,
@@ -80,7 +80,7 @@ def test_each_block_of_a_stack_run_is_a_candidate(tmp_path):
 
 def test_a_blank_position_gets_one_row_saying_which_side_is_empty(tmp_path):
     # A FOV whose moving channel is all zeros gave empty rows without a word.
-    from biahub.registration.evaluate import evaluate_candidates
+    from biahub.registration.benchmark import evaluate_candidates
 
     positions = _plate(tmp_path)
     with open_ome_zarr(positions[1], mode="r+") as position:

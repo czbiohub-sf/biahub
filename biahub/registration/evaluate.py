@@ -9,10 +9,7 @@ stores' voxel sizes (z, y, x); voxel values are reported alongside where useful.
 
 from __future__ import annotations
 
-import warnings
-
 from dataclasses import dataclass, field, fields
-from pathlib import Path
 
 import numpy as np
 
@@ -20,7 +17,6 @@ from numpy.typing import ArrayLike
 from scipy.ndimage import shift as ndi_shift
 from skimage import filters
 
-from biahub.cli.parsing import position_key
 from biahub.core.nodes.solvers import mutual_nearest
 from biahub.core.transform import Transform, polar, rotation_angles
 from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
@@ -425,7 +421,12 @@ def _detect(source: str, volume, voxel_um, **kwargs) -> Landmarks:
     return Landmarks(points, tuple(voxel_um), source)
 
 
-def _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs) -> tuple | None:
+def detect_landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs) -> tuple | None:
+    """Return (moving, reference) `Landmarks`: detected for "beads" / "nuclei", or as given.
+
+    `detect_kwargs` hold one set of detector settings for both, or {"moving": {...},
+    "reference": {...}}. None (no landmarks) and a ready pair pass through.
+    """
     if landmarks is None or isinstance(landmarks, tuple):
         return landmarks
     if landmarks not in LANDMARK_DETECTORS:
@@ -499,7 +500,7 @@ def evaluate(
     the moving volume per transform. Thresholds for a verdict are left to the caller.
     `baseline=False` skips the unregistered pair (one warp less).
     """
-    marks = _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs)
+    marks = detect_landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs)
     measures = _measures(transform, mov, ref, ref_um, marks, images, compare, image_kwargs)
     # the unregistered pair; `baseline=False` leaves it out (e.g. measured once, apart)
     baseline = (
@@ -515,179 +516,3 @@ def evaluate(
         projections={**display_projections(transform, mov, ref), "ref_um": tuple(ref_um)},
         **measures,
     )
-
-
-# --- many candidates on many positions (the benchmark's core) ------------------------------
-
-
-def _row(record: Evaluation, candidate: str, position: str, t: int) -> dict:
-    """Flatten one evaluation into a table row."""
-    points, tiles = record.points or {}, record.tiles or {}
-    affine = points.get("affine") or {}
-    scale = affine.get("scale_zyx")
-    return {
-        "candidate": candidate,
-        "position": position,
-        "t": t,
-        "tiles_n": tiles.get("n_tiles"),
-        "tiles_median_um": (tiles.get("stats") or {}).get("median_um"),
-        "points_n": points.get("n_matched"),
-        "points_median_um": (points.get("stats") or {}).get("median_um"),
-        "scale_yx": None if scale is None else list(scale[1:]),
-        "rotation_yx_deg": affine.get("rotation_yx_deg"),
-        "z_um": record.z_um,
-        "z_from": record.z_from,
-        "transform_scale_zyx": record.geometry["scale_zyx"],
-        "transform_rotation_yx_deg": record.geometry["rotation_yx_deg"],
-        "empty": None,
-    }
-
-
-def _blank(volume: np.ndarray) -> bool:
-    """Whether a volume holds no signal: never written, all NaN, or one constant value."""
-    finite = volume[np.isfinite(volume)]
-    return finite.size == 0 or finite.min() == finite.max()
-
-
-_MEASURED = (
-    "tiles_n",
-    "tiles_median_um",
-    "points_n",
-    "points_median_um",
-    "scale_yx",
-    "rotation_yx_deg",
-    "z_um",
-    "z_from",
-    "transform_scale_zyx",
-    "transform_rotation_yx_deg",
-)
-
-
-def _empty_row(position: str, t: int, empty: str) -> dict:
-    """Return the one row of a position with nothing to compare: `_row`'s columns, empty."""
-    row = {"candidate": "unregistered", "position": position, "t": t}
-    return {**row, **dict.fromkeys(_MEASURED), "empty": empty}
-
-
-def evaluate_candidates(
-    candidates: dict,
-    position_pairs: list,
-    moving_channel: str,
-    reference_channel: str,
-    t: int = 0,
-    landmarks: str | None = None,
-    images: bool = True,
-    compare: str = "edges",
-    detect_kwargs: dict | None = None,
-    figures_dir=None,
-    reference_t: int | None = None,
-    **image_kwargs,
-) -> list[dict]:
-    """Evaluate every candidate on every position at `t`: one row each (`_row`).
-
-    `candidates` maps a name to a forward `Transform` for every position, or to a dict
-    keyed by `t` or by (position, t) (e.g. `block_candidates`); a candidate with no
-    transform for a position is left out there. `position_pairs` are (moving, reference)
-    position paths. Each position also gets an "unregistered" row (identity), measured
-    once; landmarks are detected once per position. A position whose moving or reference
-    image is blank (no signal) gets one row instead, its `empty` saying which, and a warning.
-    With `figures_dir`, each candidate's
-    figure (`plot_evaluation`, against that unregistered pair) is saved there.
-    `reference_t` reads the reference at another timepoint than `t` (a stabilization's
-    reference frame); by default the same.
-    """
-    from iohub import open_ome_zarr
-
-    rows = []
-    for mov_path, ref_path in position_pairs:
-        key = position_key(mov_path)
-        with open_ome_zarr(mov_path, mode="r") as m, open_ome_zarr(ref_path, mode="r") as r:
-            mov = np.asarray(m.data[t, m.channel_names.index(moving_channel)], np.float32)
-            t_ref = t if reference_t is None else reference_t
-            ref = np.asarray(
-                r.data[t_ref, r.channel_names.index(reference_channel)], np.float32
-            )
-            mov_um, ref_um = tuple(m.scale[-3:]), tuple(r.scale[-3:])
-        sides = [side for side, v in (("moving", mov), ("reference", ref)) if _blank(v)]
-        if sides:  # nothing to compare: one row says so, instead of a row per candidate
-            empty = "both" if len(sides) == 2 else sides[0]
-            warnings.warn(
-                f"{key} t={t}: the {empty} image is blank; not evaluated", stacklevel=2
-            )
-            rows.append(_empty_row(key, t, empty))
-            continue
-        marks = _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs)
-        named = {"unregistered": Transform.identity(3), **candidates}
-        for name, candidate in named.items():
-            transform = (
-                candidate
-                if isinstance(candidate, Transform)
-                else candidate.get((key, t), candidate.get(t))
-            )
-            if transform is None:
-                continue
-            record = evaluate(
-                transform,
-                mov,
-                ref,
-                mov_um,
-                ref_um,
-                landmarks=marks,
-                images=images,
-                compare=compare,
-                baseline=False,
-                **image_kwargs,
-            )
-            rows.append(_row(record, name, key, t))
-            if name == "unregistered":
-                unregistered = {
-                    k: getattr(record, k)
-                    for k in ("points", "tiles", "z_crops", "z_um", "z_from")
-                }
-            elif figures_dir is not None:
-                from biahub.registration.evaluate_view import plot_evaluation
-
-                record.baseline = unregistered  # measured once for the position
-                Path(figures_dir).mkdir(parents=True, exist_ok=True)
-                name_safe = f"{name}_{key}_t{t}".replace("/", "_").replace(":", "-")
-                plot_evaluation(
-                    record,
-                    path=Path(figures_dir) / f"{name_safe}.png",
-                    title=f"{name} {key} t={t}",
-                )
-    return rows
-
-
-def block_candidates(run_dir) -> dict:
-    """Return each block of a stack run as a candidate: {block: {t or (position, t): T}}.
-
-    From the per-timepoint records the run wrote (`blocks`: every block's transform),
-    under `<run>/timepoints/` or, one list per position, `<run>/positions/<r/c/f>/...` --
-    only the layout of the positions in the run's `run.json`, not an earlier run's.
-    """
-    import json
-
-    run_dir = Path(run_dir)
-    run_file = run_dir / "run.json"  # the run's positions: only its own layout is read
-    positions = json.loads(run_file.read_text())["positions"] if run_file.exists() else None
-    if positions is None:
-        record_dirs = [(None, run_dir / "timepoints")] + [
-            ("/".join(d.parent.relative_to(run_dir / "positions").parts), d)
-            for d in sorted((run_dir / "positions").glob("*/*/*/timepoints"))
-        ]
-    elif len(positions) == 1:
-        record_dirs = [(None, run_dir / "timepoints")]
-    else:
-        record_dirs = [(key, run_dir / "positions" / key / "timepoints") for key in positions]
-    candidates: dict = {}
-    for position, directory in record_dirs:
-        for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
-            record = json.loads(path.read_text())
-            for block in record.get("blocks") or []:
-                if block["matrix"] is None:
-                    continue
-                key = record["t"] if position is None else (position, record["t"])
-                candidates.setdefault(block["block"], {})[key] = Transform(
-                    np.asarray(block["matrix"], dtype=float)
-                )
-    return candidates

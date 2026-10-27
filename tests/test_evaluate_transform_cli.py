@@ -113,7 +113,7 @@ def test_a_per_position_file_is_evaluated_on_held_out_positions(tmp_path):
 def test_block_candidates_read_only_the_current_runs_layout(tmp_path):
     import json
 
-    from biahub.registration.evaluate import block_candidates
+    from biahub.registration.benchmark import block_candidates
 
     run = tmp_path / "run"
     record = {"t": 0, "blocks": [{"block": "1:a", "matrix": np.eye(4).tolist()}]}

@@ -20,7 +20,7 @@ from biahub.cli.parsing import (
     position_key,
     reference_position_dirpaths,
 )
-from biahub.registration.evaluate import block_candidates, evaluate_candidates
+from biahub.registration.benchmark import block_candidates, evaluate_candidates
 from biahub.settings import load_transform_settings
 
 
