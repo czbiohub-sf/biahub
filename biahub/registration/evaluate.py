@@ -770,6 +770,65 @@ def transform_spread(
     }
 
 
+def pool_transforms(
+    estimates: dict,
+    shape_zyx: tuple,
+    voxel_um: tuple,
+    z: str = "medoid",
+    tolerance_um: float = 0.5,
+) -> dict:
+    """Return one shared transform from per-position estimates (position -> `Transform`).
+
+    The medoid: the estimate with the smallest summed gap (`displacement_to`, max over
+    the volume) to all the others -- a real estimate, not an average of matrices. With
+    `z="median"`, its z is moved so the volume's centre lands at the median depth of all
+    estimates (when yx agrees across positions and z does not). Returns the `transform`,
+    the `medoid` position, the `z_shift_um` applied, `gap_to_medoid_um` (the median
+    over the other estimates of their largest yx and z gap to the medoid: robust to one
+    noisy estimate, unlike the widest pair) and the estimates' `spread`
+    (`transform_spread`, the widest pair).
+    """
+    if z not in ("medoid", "median"):
+        raise ValueError(f"z must be 'medoid' or 'median', not {z!r}")
+    keys = sorted(estimates)
+    if not keys:
+        raise ValueError("no estimates to pool")
+    total = {
+        a: sum(
+            estimates[a].displacement_to(estimates[b], shape_zyx, voxel_um)["max_um"]
+            for b in keys
+            if b != a
+        )
+        for a in keys
+    }
+    medoid = min(keys, key=lambda k: (total[k], k))
+    matrix = np.array(estimates[medoid].matrix, dtype=float)
+    z_shift = 0.0
+    if z == "median":
+        centre = (np.asarray(shape_zyx, dtype=float) - 1) / 2
+        depths = [estimates[k].apply_points(centre[None])[0, 0] for k in keys]
+        z_shift = float(np.median(depths) - estimates[medoid].apply_points(centre[None])[0, 0])
+        matrix[0, 3] += z_shift
+    spread = transform_spread(
+        {(k, 0): estimates[k] for k in keys}, shape_zyx, voxel_um, tolerance_um
+    )
+    gaps = [
+        estimates[medoid].displacement_to(estimates[k], shape_zyx, voxel_um)
+        for k in keys
+        if k != medoid
+    ]
+    return {
+        "transform": Transform(matrix),
+        "medoid": medoid,
+        "gap_to_medoid_um": {
+            axis: float(np.median([g[f"max_{axis}_um"] for g in gaps])) if gaps else None
+            for axis in ("yx", "z")
+        },
+        "z_shift_um": z_shift * voxel_um[0],
+        "spread": spread,
+    }
+
+
 # --- survey before registering ------------------------------------------------------------
 
 
