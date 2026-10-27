@@ -987,7 +987,7 @@ class TransformFitSettings(MyBaseModel):
     the previous timepoint's result, with the input seed competing on the first pass
     (sequential, as the legacy `use_prev_t_transform`).
 
-    `seed_file`: a transforms file (an earlier result, e.g. a plate transform)
+    `seed_file`: a transforms file (an earlier result, e.g. a pooled plate transform)
     whose transform for each position and timepoint is the seed there. The estimate from
     it competes with it as it is: the file's transform is kept unless the estimate scores
     strictly better (or fails), and the entry records `seeded_from`. It replaces `seed`.
@@ -1292,6 +1292,16 @@ class ReferenceSettings(MyBaseModel):
         return self
 
 
+class PoolSettings(MyBaseModel):
+    """One shared transform from the positions' estimates: the medoid (closest to all).
+
+    `z: median` keeps the medoid's yx and moves z to the positions' median depth, for a
+    plate whose yx agrees across positions and whose z does not.
+    """
+
+    z: Literal["medoid", "median"] = "medoid"
+
+
 class EstimateTransformSettings(MyBaseModel):
     """Everything `estimate-transform` needs.
 
@@ -1319,6 +1329,9 @@ class EstimateTransformSettings(MyBaseModel):
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     score: ScoreSettings = ScoreSettings()
     fallback: FallbackSettings = FallbackSettings()
+    # Estimate on several positions, write one shared transform (their medoid); each
+    # position's own estimate is kept in the run folder (per_position.yml).
+    pool: PoolSettings | None = None
     verbose: bool = False
 
     @field_validator("method", mode="wrap")
@@ -1344,6 +1357,15 @@ class EstimateTransformSettings(MyBaseModel):
                 f"score: {{metric: {data['score_metric']}}}"
             )
         return data
+
+    @model_validator(mode="after")
+    def check_pool_has_a_shared_frame(self) -> "EstimateTransformSettings":
+        if self.pool is not None and self.reference.frame == "previous":
+            raise ValueError(
+                "pool needs one frame for every position; reference frame 'previous' "
+                "chains each position's matrices onto its own first frame"
+            )
+        return self
 
     @model_validator(mode="after")
     def check_score_blocks_have_an_intensity_metric(self) -> "EstimateTransformSettings":

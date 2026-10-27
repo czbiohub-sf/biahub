@@ -60,6 +60,35 @@ def _config(tmp_path, name="config.yml", **changes):
     return out
 
 
+def test_pool_writes_one_shared_transform_and_keeps_each_positions(three_positions, tmp_path):
+    output = tmp_path / "plate" / "transforms.yml"
+    config = _config(tmp_path, pool={"z": "median"})
+    estimate_transform(
+        three_positions, config, output, reference_position_dirpaths=three_positions,
+        cluster="debug",
+    )  # fmt: skip
+    pooled = load_transform_settings(output)
+    assert not pooled.per_position and len(pooled.transforms) == 1
+    entry = pooled.transforms[0]
+    assert entry.status == "accepted"
+    assert "medoid A/1/1 of 3 positions" in entry.note
+    # inverse z at the median of 2, 3, 6; yx as every position measured
+    inverse = np.asarray(pooled.matrix_for(0, "inverse"))[:3, 3]
+    np.testing.assert_allclose(inverse, (3.0, -3.0, 4.0), atol=0.5)
+    # each position's own estimate stays next to it, for evaluation
+    per_position = load_transform_settings(output.with_suffix("") / "per_position.yml")
+    assert sorted(per_position.positions) == ["A/1/0", "A/1/1", "A/1/2"]
+
+
+def test_pool_needs_two_positions(three_positions, tmp_path):
+    config = _config(tmp_path, pool={"z": "medoid"})
+    with pytest.raises(Exception, match="pool needs estimates on two or more positions"):
+        estimate_transform(
+            three_positions[:1], config, tmp_path / "o.yml",
+            reference_position_dirpaths=three_positions[:1], cluster="debug",
+        )  # fmt: skip
+
+
 def _plate_file(tmp_path, inverse_shift):
     path = tmp_path / "plate_transforms.yml"
     model_to_yaml(
@@ -145,3 +174,15 @@ def test_a_changed_seed_file_is_a_different_run(three_positions, tmp_path):
     _plate_file(tmp_path, SHIFTS["2"])  # same name, other content
     with pytest.raises(click.UsageError, match="changed"):
         estimate_transform(three_positions[:1], config, output, resume=True, **run)
+
+
+def test_pool_refuses_a_chained_stabilization():
+    from biahub.settings import EstimateTransformSettings
+
+    with pytest.raises(ValidationError, match="pool needs one frame"):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "previous"},
+            method="phase_cross_corr",
+            pool={"z": "medoid"},
+        )

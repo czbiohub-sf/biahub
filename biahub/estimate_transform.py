@@ -46,6 +46,7 @@ from biahub.registration.engine import (
     init_run,
     run_timepoint_jobs,
 )
+from biahub.registration.evaluate import pool_transforms
 from biahub.settings import (
     TransformEntry,
     TransformSettings,
@@ -99,6 +100,76 @@ def transform_entries(
             )
         )
     return entries
+
+
+def _pooled_entry(
+    source: TransformSettings,
+    t: int | None,
+    shape_zyx: tuple,
+    voxel_um: tuple,
+    z: str,
+    tolerance_um: float,
+    log: list[str],
+) -> TransformEntry:
+    """Pool the positions' entries at timepoint `t` (None: their one series-wide entry)."""
+    where = "" if t is None else f"t={t}: "
+    estimates, entries = {}, {}
+    for key, position_entries in source.positions.items():
+        match = [e for e in position_entries if e.t == t]
+        if not match:
+            continue
+        entry = match[0]
+        if entry.status != "accepted":
+            log.append(f"{where}left out {key} ({entry.status}: {entry.note or 'no note'})")
+            continue
+        entries[key] = entry
+        estimates[key] = source.transform_for(0 if t is None else t, key)
+    if not estimates:
+        raise click.UsageError(f"{where}no accepted estimate to pool")
+    pooled = pool_transforms(estimates, shape_zyx, voxel_um, z=z, tolerance_um=tolerance_um)
+    spread = pooled["spread"]
+    yx, z_gap = spread["across_positions_yx_um"], spread["across_positions_z_um"]
+    note = f"medoid {pooled['medoid']} of {len(estimates)} positions ({', '.join(sorted(estimates))})"
+    if z == "median":
+        note += f"; z at their median depth ({pooled['z_shift_um']:+.2f} µm)"
+    gap = pooled["gap_to_medoid_um"]
+    if gap["yx"] is not None:
+        note += (
+            f"; median gap to the medoid yx {gap['yx']:.2f} µm, z {gap['z']:.2f} µm"
+            f"; widest pair yx {yx:.2f} µm, z {z_gap:.2f} µm"
+        )
+    log.append(where + note)
+    return TransformEntry(
+        t=t,
+        estimated_at=entries[pooled["medoid"]].estimated_at if t is None else None,
+        matrix=pooled["transform"].to_list(),
+        note=note,
+    )
+
+
+def pool_positions(
+    source: TransformSettings,
+    shape_zyx: tuple,
+    voxel_um: tuple,
+    z: str = "medoid",
+    tolerance_um: float = 0.5,
+) -> tuple[TransformSettings, list[str]]:
+    """Return one shared list pooled from a per-position file, and one log line per entry.
+
+    Each timepoint is pooled over the positions that have it; an entry that is not
+    `accepted` (a stand-in, a failed stack block) is left out. Matrices are written
+    forward, as the engine estimates them.
+    """
+    timepoints = sorted(
+        {e.t for entries in source.positions.values() for e in entries},
+        key=lambda t: -1 if t is None else t,
+    )
+    log: list[str] = []
+    entries = [
+        _pooled_entry(source, t, shape_zyx, voxel_um, z, tolerance_um, log) for t in timepoints
+    ]
+    fields = source.model_dump(exclude={"transforms", "positions", "direction"})
+    return TransformSettings(**fields, direction="forward", transforms=entries), log
 
 
 # Positions estimated at once; each driver fans its own timepoints out to SLURM.
@@ -155,6 +226,10 @@ class _Run:
 
     def start(self) -> None:
         """Record the run's positions and config (what later steps check against)."""
+        if self.settings.pool is not None and len(self.keys) < 2:
+            raise click.UsageError(
+                f"pool needs estimates on two or more positions; got {len(self.keys)}"
+            )
         self.output_dir.mkdir(parents=True, exist_ok=True)
         (self.output_dir / RUN_FILENAME).write_text(
             json.dumps({"positions": self.keys, "config_sha256": self.config_sha256}, indent=2)
@@ -204,6 +279,18 @@ class _Run:
             model = TransformSettings(**common, transforms=entries_by_key[self.keys[0]])
         else:
             model = TransformSettings(**common, positions=entries_by_key)
+        if self.settings.pool is not None:
+            # each position's own estimate stays beside the run, for evaluation
+            per_position = self.output_dir / "per_position.yml"
+            model_to_yaml(model, per_position)
+            click.echo(f"Each position's transforms saved to {per_position.resolve()}")
+            with open_ome_zarr(self.movings[0], mode="r") as position:
+                shape_zyx = tuple(position.data.shape[-3:])
+            model, log = pool_positions(
+                model, shape_zyx, tuple(voxel_size[-3:]), self.settings.pool.z
+            )
+            for line in log:
+                click.echo(f"pool: {line}")
         model_to_yaml(model, self.output_filepath)
         click.echo(f"Transform settings saved to {self.output_filepath.resolve()}")
 
