@@ -49,9 +49,12 @@ from biahub.registration.methods.intensity.phase_cross_corr import (
     PCCEstimator,
 )
 from biahub.registration.methods.interactive.manual import ManualEstimator
-from biahub.registration.methods.landmark.bead_matching import NodeGraphEstimator
+from biahub.registration.methods.landmark.bead_matching import (
+    NodeGraphEstimator,
+    VoteIcpEstimator,
+    VoteSeedCorrection,
+)
 from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimator
-from biahub.registration.methods.landmark.vote_icp import VoteIcpEstimator, VoteSeedCorrection
 from biahub.registration.metrics import (
     PREWARPED,
     bead_alignment_metrics,
