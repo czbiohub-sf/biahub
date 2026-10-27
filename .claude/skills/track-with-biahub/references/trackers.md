@@ -12,6 +12,12 @@ three no GEFF yet (follow-up issue). The tracked label is `tracks_<labels>` and 
 `tracks`, or with `output_label: X`, `X` and `tracks_X` (the templates set
 `nuclei_<tracker>`).
 
+The tracked labels are the final segmentation: downstream, prefer them over the label image
+segment wrote. Only ultrack changes the masks (it picks among segmentation hypotheses built
+from the labels' contours, so it can merge an over-split nucleus or split two touching
+ones); tracksdata, HOCT and Trackastra keep the segment labels unchanged. When comparing
+trackers, differences in detections come from ultrack's re-segmentation, not the linking.
+
 | tracker | how it links | settings block | runs on | needs |
 |---|---|---|---|---|
 | `ultrack` (default) | re-segments a hierarchy from the labels, then an ILP picks segments and links | `tracking_config` (ultrack's MainConfig) | CPU | nothing extra |
@@ -72,12 +78,17 @@ precision / recall). 2026_04_21: 5 DENV FOVs, 38 divisions from mitosis labels.
 ## Known pitfalls
 
 - **ILP solver**: Gurobi is optional; nothing fails without a licence. ultrack uses Gurobi
-  when licensed (Biohub users: `~/gurobi.lic` with `TOKENSERVER=license01.czbiohub.org`),
-  otherwise CBC. tracksdata, HOCT and Trackastra's `ilp` mode solve through ilpy, which uses
+  when licensed, otherwise CBC. Biohub HPC has a Gurobi token-server licence, but each user
+  must be added to it (ask HPC); then `~/gurobi.lic` with
+  `TOKENSERVER=license01.czbiohub.org` enables it. tracksdata, HOCT and Trackastra's `ilp` mode solve through ilpy, which uses
   SCIP even with the Biohub token-server licence: ilpy reads `LicenseID == 0` as gurobipy's
   size-limited pip licence, and token-server licences also report 0. The log then shows
-  `Solver failed with Gurobi, trying Scip.` That is expected, not an error; SCIP is slower
-  (tracksdata: ~14 min for 4 A549 FOVs). Trackastra's default `greedy` mode needs no solver.
+  `Solver failed with Gurobi, trying Scip.` That is expected, not an error. Gurobi is faster
+  and uses less memory; solved to the same gap, all solvers give similar solutions. SCIP can
+  take very long on larger problems: on A549 a tracksdata solve takes seconds per FOV, but
+  Trackastra's `ilp` mode took 8-35 min per run over ~50 FOVs. NVIDIA cuOpt (GPU, open
+  source; used by the OPS project, royerlab/hoct#9) is an alternative, not wired into
+  biahub. Trackastra's default `greedy` mode needs no solver.
 - **Model weights** download on first use: `--init` fetches them once (HOCT to its pooch
   cache, Trackastra to `~/.local/share/trackastra/models`). A worker without network needs
   them cached first.

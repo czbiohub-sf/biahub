@@ -42,6 +42,9 @@ labels_sigma: 5.0
 # A549 benchmark's. hoct and trackastra also read the image the labels were segmented
 # from: the first channel `biahub segment` recorded for the label image, or
 # image_channel when set (needed for a label image segment did not write).
+# The tracked labels are the final segmentation: downstream steps should prefer
+# labels/tracks_<labels> over labels/<labels>. Only ultrack changes the masks (merging
+# or splitting segments where that tracks better); the other three keep them as they are.
 # tracker: ultrack
 # tracksdata_config:
 #   distance_threshold_um: 22.66   # candidate edges to the next frame

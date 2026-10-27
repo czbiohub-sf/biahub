@@ -220,7 +220,9 @@ class TrackingSettings(MyBaseModel):
     # The linker. ultrack (default) builds its own segmentation hypotheses from the
     # labels' contours (or a foreground/contour map) and links them, configured by
     # tracking_config; tracksdata, hoct and trackastra link the instance labels of
-    # `labels` as they are, in 2D.
+    # `labels` as they are, in 2D. Either way the tracked labels (`labels/tracks_<labels>`)
+    # are the final segmentation and are preferred downstream over `labels/<labels>`;
+    # only ultrack can change the masks (it picks among its own hypotheses).
     tracker: Literal["ultrack", "tracksdata", "hoct", "trackastra"] = "ultrack"
     tracksdata_config: TracksdataConfig = TracksdataConfig()
     hoct_config: HoctConfig = HoctConfig()

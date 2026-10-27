@@ -27,7 +27,9 @@ skill runs the trackers. Track neither projects nor segments: every tracker read
 config's `output_label` (`nuclei_<tracker>`): `labels/nuclei_<tracker>` (value = track id)
 and `tracks_nuclei_<tracker>_<fov>.csv` per position; ultrack also writes
 `tracks_nuclei_ultrack.geff`, the other three no GEFF yet. All go through the sibling
-filter (`min_sibling_length`), so outputs compare directly.
+filter (`min_sibling_length`), so outputs compare directly. The tracked labels are the final
+segmentation (prefer them over `labels/nuclei` downstream); only ultrack changes the masks,
+so its detections can differ from the other trackers' even on the same input.
 
 ## 0. Load context
 
