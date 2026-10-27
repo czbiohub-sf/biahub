@@ -24,7 +24,7 @@ from skimage import filters
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import position_key
 from biahub.core.nodes.solvers import medoid as _medoid
-from biahub.core.transform import Transform
+from biahub.core.transform import Transform, polar, rotation_angles
 from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
 from biahub.utils.ngff import is_unwritten
 
@@ -34,47 +34,6 @@ MIN_POINTS_FOR_AFFINE = 10
 
 # Fewer matched points than this give no z residual (one nucleus read -1.98 µm).
 MIN_POINTS_FOR_Z = 5
-
-
-def _polar(linear: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Split a linear map into rotation @ symmetric stretch (polar decomposition)."""
-    u, sigma, vt = np.linalg.svd(linear)
-    rotation = u @ vt
-    if np.linalg.det(rotation) < 0:  # keep a proper rotation; the reflection goes in stretch
-        u[:, -1] *= -1
-        rotation = u @ vt
-    stretch = rotation.T @ linear
-    return rotation, stretch
-
-
-def _rotation_angles(rotation: np.ndarray) -> tuple[float, float]:
-    """Return (total rotation angle, in-plane yx angle), in degrees, of a ZYX rotation."""
-    total = np.degrees(np.arccos(np.clip((np.trace(rotation) - 1) / 2, -1.0, 1.0)))
-    yx = np.degrees(np.arctan2(rotation[2, 1], rotation[1, 1]))
-    return float(total), float(yx)
-
-
-def decompose(transform: Transform, mov_um: ArrayLike, ref_um: ArrayLike) -> dict:
-    """Return a forward transform's geometry in physical units, to judge its plausibility.
-
-    The voxel matrix is first expressed in µm (`diag(ref_um) @ L @ diag(mov_um)^-1`), so a
-    scale of 1 means the same physical size; then split into rotation, per-axis scale and
-    shear. Translation is the reference-side offset in µm.
-    """
-    matrix = np.asarray(transform.matrix, dtype=float)
-    mov_um, ref_um = np.asarray(mov_um, float), np.asarray(ref_um, float)
-    linear = np.diag(ref_um) @ matrix[:3, :3] @ np.diag(1.0 / mov_um)
-    rotation, stretch = _polar(linear)
-    total, yx = _rotation_angles(rotation)
-    scale = np.diag(stretch).copy()
-    shear = stretch - np.diag(scale)
-    return {
-        "scale_zyx": scale.tolist(),
-        "rotation_deg": total,
-        "rotation_yx_deg": yx,
-        "shear": float(np.abs(shear).max()),
-        "translation_um": (matrix[:3, 3] * ref_um).tolist(),
-    }
 
 
 def displacement_stats(diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
@@ -119,8 +78,8 @@ def residual_affine(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayL
     coef, *_ = np.linalg.lstsq(design, diff, rcond=None)
     gradient = coef[1:].T  # diff ~ shift + gradient @ pos
     shift = coef[0] - gradient @ centre
-    rotation, stretch = _polar(np.eye(3) + gradient)
-    _total, yx = _rotation_angles(rotation)
+    rotation, stretch = polar(np.eye(3) + gradient)
+    _total, yx = rotation_angles(rotation)
     extent = pts.max(axis=0) - pts.min(axis=0)
     return {
         "n": n,
@@ -501,7 +460,7 @@ def z_residuals(
 class Evaluation:
     """How well one transform registers one position and timepoint, in µm.
 
-    `geometry` is layer 1 (`decompose`); `points` layer 2 (`point_residuals`, None without
+    `geometry` is layer 1 (`Transform.decompose`); `points` layer 2 (`point_residuals`, None without
     landmarks); `tiles` and `z_crops` layer 3 (None when images are skipped). `baseline`
     holds the same measures for the unregistered pair (identity), so each number reads
     against doing nothing. `z_um` is the residual z shift (reference minus mapped moving)
@@ -663,7 +622,7 @@ def evaluate(
         else {}
     )
     return Evaluation(
-        geometry=decompose(transform, mov_um, ref_um),
+        geometry=transform.decompose(mov_um, ref_um),
         baseline=baseline,
         projections={**display_projections(transform, mov, ref), "ref_um": tuple(ref_um)},
         **measures,

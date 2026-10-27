@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.evaluate import decompose, displacement_stats, residual_affine
+from biahub.registration.evaluate import displacement_stats, residual_affine
 
 VOX = (0.2, 0.103, 0.103)  # z, y, x in µm (DragonFly)
 
@@ -20,7 +20,7 @@ def _similarity(scale_zyx, angle_deg, shift_zyx):
 
 def test_decompose_recovers_scale_rotation_and_translation():
     t = _similarity((1.0, 0.95, 0.95), 0.5, (6.0, 50.0, 37.0))
-    d = decompose(t, VOX, VOX)
+    d = t.decompose(VOX, VOX)
     np.testing.assert_allclose(d["scale_zyx"], [1.0, 0.95, 0.95], atol=1e-9)
     assert d["rotation_yx_deg"] == pytest.approx(0.5, abs=1e-9)
     assert d["rotation_deg"] == pytest.approx(0.5, abs=1e-9)
@@ -31,7 +31,7 @@ def test_decompose_recovers_scale_rotation_and_translation():
 def test_decompose_reads_scale_in_physical_units():
     # Equal voxel matrices mean different physical scales when the voxel sizes differ: a
     # moving voxel of 0.116 µm mapped 1:1 onto a reference voxel of 0.1494 µm enlarges.
-    d = decompose(Transform.identity(3), (0.174, 0.116, 0.116), (0.174, 0.1494, 0.1494))
+    d = Transform.identity(3).decompose((0.174, 0.116, 0.116), (0.174, 0.1494, 0.1494))
     np.testing.assert_allclose(d["scale_zyx"], [1.0, 0.1494 / 0.116, 0.1494 / 0.116])
 
 

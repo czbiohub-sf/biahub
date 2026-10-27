@@ -21,6 +21,24 @@ TransformType = Literal["affine", "similarity", "euclidean", "rigid"]
 Backend = Literal["scipy", "ants"]
 
 
+def polar(linear: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Split a linear map into rotation @ symmetric stretch (polar decomposition)."""
+    u, sigma, vt = np.linalg.svd(linear)
+    rotation = u @ vt
+    if np.linalg.det(rotation) < 0:  # keep a proper rotation; the reflection goes in stretch
+        u[:, -1] *= -1
+        rotation = u @ vt
+    stretch = rotation.T @ linear
+    return rotation, stretch
+
+
+def rotation_angles(rotation: np.ndarray) -> tuple[float, float]:
+    """Return (total rotation angle, in-plane yx angle), in degrees, of a ZYX rotation."""
+    total = np.degrees(np.arccos(np.clip((np.trace(rotation) - 1) / 2, -1.0, 1.0)))
+    yx = np.degrees(np.arctan2(rotation[2, 1], rotation[1, 1]))
+    return float(total), float(yx)
+
+
 class Transform:
     """
     Geometric transform for 2D/3D volumes.
@@ -393,6 +411,28 @@ class Transform:
             "mean_um": float(np.linalg.norm(gaps(grid), axis=1).mean()),
             "max_z_um": float(np.abs(corner_gaps[:, 0]).max()),
             "max_yx_um": float(np.linalg.norm(corner_gaps[:, 1:], axis=1).max()),
+        }
+
+    def decompose(self, mov_um, ref_um) -> dict:
+        """Return this (forward, 3D) transform's geometry in physical units, to judge it.
+
+        The voxel matrix is first expressed in µm (`diag(ref_um) @ L @ diag(mov_um)^-1`), so a
+        scale of 1 means the same physical size; then split into rotation, per-axis scale and
+        shear. Translation is the reference-side offset in µm.
+        """
+        matrix = np.asarray(self._matrix, dtype=float)
+        mov_um, ref_um = np.asarray(mov_um, float), np.asarray(ref_um, float)
+        linear = np.diag(ref_um) @ matrix[:3, :3] @ np.diag(1.0 / mov_um)
+        rotation, stretch = polar(linear)
+        total, yx = rotation_angles(rotation)
+        scale = np.diag(stretch).copy()
+        shear = stretch - np.diag(scale)
+        return {
+            "scale_zyx": scale.tolist(),
+            "rotation_deg": total,
+            "rotation_yx_deg": yx,
+            "shear": float(np.abs(shear).max()),
+            "translation_um": (matrix[:3, 3] * ref_um).tolist(),
         }
 
     def coverage(self, mov_shape: tuple, ref_shape: tuple) -> NDArray[np.bool_]:
