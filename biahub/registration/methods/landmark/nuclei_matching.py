@@ -18,10 +18,9 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
-from biahub.registration.estimators import ScoreFn
+from biahub.registration.estimators import ScoreFn, fit_pairs
 from biahub.registration.evaluate import detect_nuclei
 from biahub.registration.methods.landmark.bead_matching import NodeGraphEstimator
-from biahub.registration.methods.landmark.vote_icp import fit_model
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, NucleiSettings
 
 
@@ -51,7 +50,7 @@ def yx_and_z_shift_fit(transform_type: str, voxel_um: tuple[float, float, float]
     def fit(matches, mov_nodes, ref_nodes) -> Transform:
         src = np.asarray(mov_nodes)[matches[:, 0]] * um
         dst = np.asarray(ref_nodes)[matches[:, 1]] * um
-        yx = fit_model(src[:, 1:], dst[:, 1:], transform_type)
+        yx = fit_pairs(src[:, 1:], dst[:, 1:], transform_type)
         in_um = np.eye(4)
         in_um[1:3, 1:3] = yx[:2, :2]
         in_um[1:3, 3] = yx[:2, 2]

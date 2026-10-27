@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from scipy.ndimage import shift as ndi_shift
 
@@ -66,3 +67,29 @@ def test_non_default_resampling_options_are_honoured_by_the_default_backend():
     assert set(np.unique(out)) <= {0.0, 3.0, 7.0}  # no blended label values
     filled = shift.apply(labels, cval=-1.0)
     assert filled.min() == -1.0  # the fill value outside the moved volume
+
+
+@pytest.mark.parametrize("ndim", [2, 3])
+@pytest.mark.parametrize("transform_type", ["affine", "similarity", "euclidean"])
+def test_fit_recovers_a_transform_from_matched_points(ndim, transform_type):
+    rng = np.random.default_rng(0)
+    src = rng.uniform(0, 100, (20, ndim))
+    angle = np.deg2rad(5.0)
+    linear = np.eye(ndim)
+    linear[-2:, -2:] = [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
+    if transform_type == "similarity":
+        linear = 0.95 * linear
+    elif transform_type == "affine":
+        linear = linear @ np.diag(np.linspace(0.9, 1.05, ndim))
+    truth = np.eye(ndim + 1)
+    truth[:ndim, :ndim] = linear
+    truth[:ndim, ndim] = rng.uniform(-5, 5, ndim)
+    dst = Transform(truth).apply_points(src)
+    fitted = Transform.fit(src, dst, transform_type)
+    np.testing.assert_allclose(fitted.matrix, truth, atol=1e-8)
+    assert fitted.ndim == ndim
+
+
+def test_fit_says_when_it_cannot():
+    with pytest.raises(ValueError, match="similarity fit failed on 1 pairs"):
+        Transform.fit(np.zeros((1, 3)), np.ones((1, 3)), "similarity")

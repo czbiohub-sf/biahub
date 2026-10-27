@@ -12,54 +12,16 @@ import numpy as np
 
 from numpy.typing import ArrayLike
 from scipy.spatial import cKDTree
-from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import (
     EstimationError,
     NodeDetector,
     ScoreFn,
+    fit_pairs,
 )
 from biahub.registration.methods.landmark.bead_matching import BeadNodeDetector
 from biahub.settings import BeadsMatchSettings, SeedCorrectionSettings, VoteIcpSettings
-
-
-def translation_matrix(displacement: ArrayLike) -> np.ndarray:
-    matrix = np.eye(len(displacement) + 1)
-    matrix[:-1, -1] = displacement
-    return matrix
-
-
-def fit_affine(src: ArrayLike, dst: ArrayLike) -> np.ndarray:
-    """Least-squares affine C with C(src_i) ~ dst_i, as a homogeneous matrix (N >= D + 1)."""
-    src = np.asarray(src, dtype=float)
-    dst = np.asarray(dst, dtype=float)
-    ndim = src.shape[1]
-    design = np.hstack([src, np.ones((len(src), 1))])
-    coeffs, *_ = np.linalg.lstsq(design, dst, rcond=None)
-    matrix = np.eye(ndim + 1)
-    matrix[:ndim, :ndim] = coeffs[:ndim].T
-    matrix[:ndim, ndim] = coeffs[ndim]
-    return matrix
-
-
-_MODELS = {
-    "affine": AffineTransform,
-    "similarity": SimilarityTransform,
-    "euclidean": EuclideanTransform,
-    "rigid": EuclideanTransform,
-}
-
-
-def fit_model(src: ArrayLike, dst: ArrayLike, transform_type: str = "affine") -> np.ndarray:
-    """Least-squares fit of `transform_type` with C(src_i) ~ dst_i, as a homogeneous matrix."""
-    if transform_type == "affine":
-        return fit_affine(src, dst)
-    src = np.asarray(src, dtype=float)
-    model = _MODELS[transform_type].from_estimate(src, np.asarray(dst, dtype=float))
-    if not model:
-        raise EstimationError(f"vote_icp: {transform_type} fit failed on {len(src)} pairs")
-    return np.asarray(model.params, dtype=float)
 
 
 def vote_icp_register(
@@ -125,12 +87,12 @@ def vote_icp_register(
         # A full affine needs a margin over its degrees of freedom; with fewer inliers the
         # translation update is the only fit that cannot hallucinate.
         if len(members) >= ndim + 3:
-            new_matrix = fit_model(
+            new_matrix = fit_pairs(
                 ref_peaks[inlier_ref], mov_peaks[inlier_mov], transform_type
             )
         else:
             drift = votes[members].mean(axis=0)
-            new_matrix = matrix @ translation_matrix(-drift)
+            new_matrix = matrix @ Transform.from_translation(-drift).matrix
         new_mapped = map_to_ref(new_matrix)
         step = float(np.mean(np.linalg.norm(new_mapped - mapped, axis=1)))
         matrix, mapped, fitted_once = new_matrix, new_mapped, True
@@ -346,8 +308,8 @@ class VoteSeedCorrection:
         inverse = seed.invert().matrix
         candidates = {
             "keep": seed,
-            "minus": Transform(inverse @ translation_matrix(-drift)).invert(),
-            "plus": Transform(inverse @ translation_matrix(drift)).invert(),
+            "minus": Transform(inverse @ Transform.from_translation(-drift).matrix).invert(),
+            "plus": Transform(inverse @ Transform.from_translation(drift).matrix).invert(),
         }
         nn = {name: nn_median(t) for name, t in candidates.items()}
         best = min(nn, key=nn.get)
@@ -360,9 +322,9 @@ class VoteSeedCorrection:
             p = np.asarray([a for a, _ in pairs], dtype=float)
             q = np.asarray([b for _, b in pairs], dtype=float)
             correction = (
-                fit_affine(q, p)
+                Transform.fit(q, p).matrix
                 if len(pairs) >= 6
-                else translation_matrix((p - q).mean(axis=0))
+                else Transform.from_translation((p - q).mean(axis=0)).matrix
             )
             fitted = Transform(inverse @ correction).invert()
             nn_fitted = nn_median(fitted)

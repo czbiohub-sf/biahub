@@ -13,8 +13,7 @@ from numpy.typing import ArrayLike
 from scipy.fftpack import next_fast_len
 
 from biahub.core.transform import Transform
-from biahub.registration.estimators import EstimationError
-from biahub.registration.methods.landmark.vote_icp import fit_model
+from biahub.registration.estimators import EstimationError, fit_pairs
 from biahub.registration.utils import match_shape, match_shape_origin
 from biahub.settings import LocalPhaseCrossCorrSettings, PhaseCrossCorrSettings
 
@@ -386,7 +385,7 @@ class LocalPCCEstimator:
         """Return `current` corrected by the yx fit of the tile shifts."""
         reference = np.asarray(residuals["position_um"])[:, 1:]
         mapped = reference - np.asarray(residuals["diff_um"])[:, 1:]  # where content landed
-        yx = fit_model(mapped, reference, self.transform_type)  # 3 x 3, in µm
+        yx = fit_pairs(mapped, reference, self.transform_type)  # 3 x 3, in µm
         correction_um = np.eye(4)
         correction_um[1:3, 1:3] = yx[:2, :2]
         correction_um[1:3, 3] = yx[:2, 2]

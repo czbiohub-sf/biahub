@@ -229,6 +229,40 @@ class Transform:
     # ==================== Algebraic Operations ====================
 
     @classmethod
+    def fit(
+        cls,
+        src: NDArray[np.floating],
+        dst: NDArray[np.floating],
+        transform_type: TransformType = "affine",
+    ) -> Transform:
+        """Return the least-squares transform of `transform_type` with T(src_i) ~ dst_i.
+
+        `src` and `dst` are matched (N, D) points, D 2 or 3. "affine" is a plain least
+        squares (N >= D + 1); "similarity" and "euclidean" / "rigid" use scikit-image's
+        estimators. Raises ValueError when the fit fails (too few or degenerate pairs).
+        """
+        src = np.asarray(src, dtype=float)
+        dst = np.asarray(dst, dtype=float)
+        if transform_type == "affine":
+            ndim = src.shape[1]
+            design = np.hstack([src, np.ones((len(src), 1))])
+            coeffs, *_ = np.linalg.lstsq(design, dst, rcond=None)
+            matrix = np.eye(ndim + 1)
+            matrix[:ndim, :ndim] = coeffs[:ndim].T
+            matrix[:ndim, ndim] = coeffs[ndim]
+        else:
+            from skimage.transform import EuclideanTransform, SimilarityTransform
+
+            model_class = (
+                SimilarityTransform if transform_type == "similarity" else EuclideanTransform
+            )
+            model = model_class.from_estimate(src, dst)
+            if not model:
+                raise ValueError(f"{transform_type} fit failed on {len(src)} pairs")
+            matrix = np.asarray(model.params, dtype=float)
+        return cls(matrix, transform_type=transform_type)
+
+    @classmethod
     def from_inverse(cls, matrix, transform_type: TransformType = "affine") -> Transform:
         """Forward Transform from a legacy inverse-direction (reference -> moving) matrix.
 
