@@ -986,6 +986,11 @@ class TransformFitSettings(MyBaseModel):
     timepoint (independent estimates, fanned out per timepoint); `previous_timepoint` --
     the previous timepoint's result, with the input seed competing on the first pass
     (sequential, as the legacy `use_prev_t_transform`).
+
+    `seed_file`: a transforms file (an earlier result, e.g. a plate transform)
+    whose transform for each position and timepoint is the seed there. The estimate from
+    it competes with it as it is: the file's transform is kept unless the estimate scores
+    strictly better (or fails), and the entry records `seeded_from`. It replaces `seed`.
     """
 
     type: Literal["euclidean", "similarity", "affine"] = "euclidean"
@@ -993,6 +998,7 @@ class TransformFitSettings(MyBaseModel):
     seed_direction: TransformDirection = "inverse"
     seed_from_shapes: bool = False
     seed_from: Literal["input", "previous_timepoint"] = "input"
+    seed_file: str | None = None
 
     @field_validator("seed")
     @classmethod
@@ -1000,6 +1006,21 @@ class TransformFitSettings(MyBaseModel):
         if np.asarray(v, dtype=float).shape != (4, 4):
             raise ValueError("seed must be a 4x4 matrix")
         return v
+
+    @model_validator(mode="after")
+    def check_seed_file(self) -> "TransformFitSettings":
+        if self.seed_file is None:
+            return self
+        if self.seed_from_shapes or not np.allclose(self.seed, np.eye(4)):
+            raise ValueError(
+                "give one seed: seed_file or a seed matrix / seed_from_shapes, not both"
+            )
+        if self.seed_from == "previous_timepoint":
+            raise ValueError(
+                "seed_file seeds every timepoint from the file; it does not combine with "
+                "seed_from: previous_timepoint"
+            )
+        return self
 
 
 class FlagSettings(MyBaseModel):
@@ -1573,6 +1594,9 @@ class TransformEntry(MyBaseModel):
     status: EntryStatus = "accepted"
     # Where a stand-in matrix came from, e.g. "t=81", "seed", "identity".
     filled_from: str | None = None
+    # With transform.seed_file: "seed_file" (its transform, kept as it is) or
+    # "seed_file+refined" (the estimate from it, which scored better).
+    seeded_from: Literal["seed_file", "seed_file+refined"] | None = None
     note: str | None = None
 
     @field_validator("matrix")

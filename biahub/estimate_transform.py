@@ -90,6 +90,7 @@ def transform_entries(
                 score=float(score) if finite else None,
                 report=result.reports.get(t) if filled_from is None else None,
                 repaired_from=result.provenance.get(t),
+                seeded_from=None if replaced else result.seeded_from.get(t),
                 status="unreliable" if unreliable else "accepted",
                 filled_from=filled_from,
                 # why there is no transform of its own (estimate error, job cancelled, ...),
@@ -129,9 +130,16 @@ class _Run:
         # reg/transforms/), so estimates written to one folder never share or clear them.
         self.output_dir = self.output_filepath.with_suffix("")
         self.settings = load_estimate_transform_settings(config_filepath)
-        self.config_sha256 = hashlib.sha256(
-            self.settings.model_dump_json().encode()
-        ).hexdigest()
+        seed_file = self.settings.transform.seed_file
+        if seed_file is not None:  # relative to the config, wherever the run starts from
+            seed_file = (Path(config_filepath).parent / seed_file).resolve()
+            if not seed_file.is_file():
+                raise click.UsageError(f"seed_file {seed_file} does not exist")
+            self.settings.transform.seed_file = str(seed_file)
+        digest = hashlib.sha256(self.settings.model_dump_json().encode())
+        if seed_file is not None:  # its content too: a changed file is a different run
+            digest.update(seed_file.read_bytes())
+        self.config_sha256 = digest.hexdigest()
         self.movings = [Path(p) for p in moving_position_dirpaths]
         self.keys = [position_key(p) for p in self.movings]
         if self.settings.reference.frame == "cross":

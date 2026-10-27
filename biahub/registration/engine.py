@@ -33,7 +33,7 @@ from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 
 from biahub.cli.monitor import monitor_jobs
-from biahub.cli.parsing import sbatch_to_submitit
+from biahub.cli.parsing import position_key, sbatch_to_submitit
 from biahub.core.transform import Transform
 from biahub.registration.estimators import (
     ChainedEstimator,
@@ -86,6 +86,8 @@ from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
 
 ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
+# A seed file's transform for each timepoint of the run's position, read by every job.
+SEEDS_FILENAME = "seeds.json"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 
 
@@ -528,6 +530,8 @@ class SeriesResult:
     stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
     # A stack's blocks at each estimated t, from its record (see ChainedEstimator).
     blocks: dict[int, list[dict]] = field(default_factory=dict)
+    # With a seed file: "seed_file" (its transform kept as it is) or "seed_file+refined".
+    seeded_from: dict[int, str] = field(default_factory=dict)
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -544,13 +548,15 @@ def estimate_series(
     history: dict[int, Transform] | None = None,
     journal: RunJournal | None = None,
     on_timepoint: OnTimepoint | None = None,
+    keep_seed: bool = False,
 ) -> SeriesResult:
     """One estimate per timepoint, in the given order.
 
     `history` is the caller-owned mapping a `PreviousSeed` reads from. It is filled here
     as timepoints are accepted, so handing the same dict to the seed policy is what makes
     propagation work; the result's `transforms` IS that dict. An `EstimationError` records
-    nan plus the message for that timepoint and moves on.
+    nan plus the message for that timepoint and moves on. With `keep_seed` (a seed file:
+    the seed is an earlier result) the seed competes as it is (`_keep_seed`).
     """
     result = SeriesResult(
         transforms=history if history is not None else {},
@@ -568,18 +574,41 @@ def estimate_series(
                 on_timepoint(t, result)
             continue
         seed = seed_policy.seed_for(t)
+        estimate, error = None, None
         try:
             transform = estimator.estimate(mov_t, ref_t, seed=seed)
         except EstimationError as e:
-            result.scores[t] = float("nan")
-            result.errors[t] = f"{type(e).__name__}: {e}"
+            error = f"{type(e).__name__}: {e}"
         else:
             transform = _gap_rule(estimator, reference_policy, mov, t, transform)
-            result.transforms[t] = transform
-            result.scores[t] = float(score_fn(transform, mov_t, ref_t))
+            estimate = (transform, float(score_fn(transform, mov_t, ref_t)))
+        if keep_seed:
+            estimate, result.seeded_from[t] = _keep_seed(
+                estimator, estimate, seed, score_fn, mov_t, ref_t
+            )
+        if estimate is None:
+            result.scores[t] = float("nan")
+            result.errors[t] = error
+        else:
+            result.transforms[t], result.scores[t] = estimate
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
+
+
+def _keep_seed(estimator, estimate, seed, score_fn, mov, ref) -> tuple[tuple, str]:
+    """Return the estimate if it scores strictly better than the seed as it is, else the seed.
+
+    The seed is an earlier result (a seed file), so a run from it never ends worse than
+    it: a failed or no better estimate keeps it. Returns ((transform, score), source),
+    source "seed_file+refined" or "seed_file". A kept seed was not produced by the stack,
+    so its blocks are forgotten.
+    """
+    kept = (seed, float(score_fn(seed, mov, ref)))
+    if estimate is not None and _beats(estimate[1], kept[1]):
+        return estimate, "seed_file+refined"
+    _forget_blocks(estimator)
+    return kept, "seed_file"
 
 
 def _across_gap(reference_policy: ReferencePolicy, mov, t: int) -> bool:
@@ -1149,6 +1178,12 @@ class _JobInputs(NamedTuple):
     estimator: TransformEstimator
     score_fn: ScoreFn
     seed: Transform
+    # With a seed file: each timepoint's seed from it (forward), else None.
+    seeds: dict[int, Transform] | None = None
+
+    def seed_at(self, t: int) -> Transform:
+        """Return timepoint `t`'s seed: the seed file's, else the config seed."""
+        return self.seed if self.seeds is None else self.seeds.get(t, self.seed)
 
 
 def _job_inputs(
@@ -1162,8 +1197,18 @@ def _job_inputs(
     estimator, score_fn, seed = build_estimator(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
+    seeds = None
+    if settings.transform.seed_file is not None:  # resolved by init_run, beside the settings
+        seeds = {
+            int(t): Transform(
+                np.asarray(m, dtype=float), transform_type=settings.transform.type
+            )
+            for t, m in json.loads(
+                (Path(settings_path).parent / SEEDS_FILENAME).read_text()
+            ).items()
+        }
     return _JobInputs(
-        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, seed
+        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, seed, seeds
     )
 
 
@@ -1177,16 +1222,23 @@ def _estimate_timepoint_job(
     """One independent estimate, from the config seed, written as a JSON record."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
-    estimator, score_fn, seed = job.estimator, job.score_fn, job.seed
+    estimator, score_fn = job.estimator, job.score_fn
 
     result = estimate_series(
-        mov, _reference_policy(settings, ref), estimator, FixedSeed(seed), score_fn, [t]
+        mov,
+        _reference_policy(settings, ref),
+        estimator,
+        FixedSeed(job.seed_at(t)),
+        score_fn,
+        [t],
+        keep_seed=job.seeds is not None,
     )
     record = {
         "t": t,
         "matrix": result.transforms[t].to_list() if t in result.transforms else None,
         "score": _finite_or_none(result.scores.get(t)),
         "error": result.errors.get(t),
+        "seeded_from": result.seeded_from.get(t),
         "arm": getattr(estimator, "last_winner", None),
         # a stack: what each block did (its transform, score, error) and which won
         "blocks": getattr(estimator, "last_stages", None),
@@ -1266,10 +1318,17 @@ def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: 
     def resolved(path):
         return None if path is None else str(Path(path).resolve())
 
+    seed_file = settings.transform.seed_file
     return {
         "settings_sha256": digest,
         "moving": resolved(source),
         "reference": resolved(target),
+        # the seed file's content, not only its name: a resumed run must start from the same
+        **(
+            {"seed_file_sha256": hashlib.sha256(Path(seed_file).read_bytes()).hexdigest()}
+            if seed_file is not None
+            else {}
+        ),
     }
 
 
@@ -1352,6 +1411,8 @@ def _load_series(
         result.scores[t] = float("nan") if record["score"] is None else record["score"]
         if record.get("blocks"):
             result.blocks[t] = record["blocks"]
+        if record.get("seeded_from"):
+            result.seeded_from[t] = record["seeded_from"]
         if record["error"]:
             result.errors[t] = record["error"]
     return result
@@ -1370,7 +1431,7 @@ def _repair_timepoint_job(
     """Repair one flagged timepoint against the frozen whole-run history."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
-    estimator, score_fn, seed = job.estimator, job.score_fn, job.seed
+    estimator, score_fn, seed = job.estimator, job.score_fn, job.seed_at(t)
     repair_settings = settings.fallback.repair
 
     # This run's estimate records (the driver cleared any earlier run's).
@@ -1428,7 +1489,7 @@ def _sweep_timepoint_job(
     """Sweep one flagged timepoint against its own pre-fallback estimate."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
-    score_fn, seed = job.score_fn, job.seed
+    score_fn, seed = job.score_fn, job.seed_at(t)
     trials = {
         name: build_estimator(
             trial, tuple(mov.shape[-3:]), job.mov_voxel_size, job.ref_voxel_size
@@ -1746,6 +1807,19 @@ def _estimate_job_resources(method: str, zyx_shape: tuple[int, int, int]) -> tup
     return num_cpus, int(max(min_gb_per_cpu, np.ceil(job_gb / num_cpus)))
 
 
+def _seeds_from_file(seed_file, key: str, time_indices: list[int]) -> dict[str, list]:
+    """Return a seed file's forward transform at each timepoint of position `key`."""
+    from biahub.settings import load_transform_settings
+
+    transforms = load_transform_settings(seed_file)
+    if transforms.per_position and key not in transforms.positions:
+        raise click.UsageError(
+            f"seed_file {seed_file} has no transforms for position {key} (it has "
+            f"{sorted(transforms.positions)})"
+        )
+    return {str(t): transforms.transform_for(t, key).to_list() for t in time_indices}
+
+
 def init_run(
     moving_position_dirpath: Path,
     reference_position_dirpath: Path,
@@ -1798,8 +1872,15 @@ def init_run(
     estimator, _score_fn, _seed_transform = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
     )
+    seeds = (
+        None
+        if settings.transform.seed_file is None
+        else _seeds_from_file(settings.transform.seed_file, position_key(source), time_indices)
+    )
     _start_run(output_dir, settings, source, target, resume)
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
+    if seeds is not None:
+        _write_json(output_dir / SEEDS_FILENAME, seeds, indent=2)
 
     propagated = settings.transform.seed_from == "previous_timepoint"
     # a stack's jobs run every block: plan for the heaviest
