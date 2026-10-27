@@ -1107,7 +1107,7 @@ class FallbackSettings(MyBaseModel):
 class NucleiSettings(MyBaseModel):
     """Settings for the nuclei method: landmark-based, as beads, with nuclei for landmarks.
 
-    Detection as `biahub.registration.evaluate.detect_nuclei` (areas in µm², so they hold
+    Detection as `nuclei_matching.detect_nuclei` (areas in µm², so they hold
     across instruments); matching with the same graph matchers as beads (`algorithm` and
     its settings, and the match filters); `iterations` passes, each re-detecting on the
     moving volume warped by the current transform. The fit is yx plus a z shift: a cell

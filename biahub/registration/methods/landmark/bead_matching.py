@@ -487,6 +487,46 @@ def optimize_transform(
         return transform, quality_score_approx
 
 
+def detect_beads(
+    volume: ArrayLike,
+    voxel_um: tuple,
+    threshold_abs: float,
+    block_size: tuple = (8, 8, 8),
+    nms_distance: int = 16,
+    refine_halfwidth: tuple = (2, 4, 4),
+) -> np.ndarray:
+    """Return bead centres (N x 3 voxels, z y x) to a fraction of a voxel: refined peaks.
+
+    Peaks sit on whole voxels; each is refined to the intensity centroid of a small box
+    around it (background-subtracted), which a residual of a voxel or less needs.
+    """
+    vol = np.asarray(volume, dtype=np.float32)
+    peaks = np.asarray(
+        detect_peaks(
+            vol,
+            block_size=block_size,
+            threshold_abs=threshold_abs,
+            nms_distance=nms_distance,
+            min_distance=0,
+        ),
+        dtype=int,
+    ).reshape(-1, 3)
+    background = float(np.median(vol))
+    refined = []
+    for z, y, x in peaks:
+        box = tuple(
+            slice(max(c - h, 0), min(c + h + 1, n))
+            for c, h, n in zip((z, y, x), refine_halfwidth, vol.shape, strict=True)
+        )
+        weights = np.clip(vol[box] - background, 0, None)
+        if weights.sum() <= 0:
+            refined.append([z, y, x])
+            continue
+        grids = np.meshgrid(*[np.arange(s.start, s.stop) for s in box], indexing="ij")
+        refined.append([(g * weights).sum() / weights.sum() for g in grids])
+    return np.array(refined, dtype=float).reshape(-1, 3)
+
+
 class BeadNodeDetector:
     """Detects bead centroids as local-maxima peaks -- today's only node source."""
 

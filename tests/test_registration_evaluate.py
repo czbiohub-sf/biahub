@@ -77,10 +77,10 @@ def test_residual_affine_needs_enough_points():
 
 from biahub.registration.evaluate import (  # noqa: E402
     Landmarks,
-    detect_beads,
-    detect_nuclei,
     point_residuals,
 )
+from biahub.registration.methods.landmark.bead_matching import detect_beads  # noqa: E402
+from biahub.registration.methods.landmark.nuclei_matching import detect_nuclei  # noqa: E402
 
 
 def test_clicked_pairs_are_matched_by_their_ids_not_by_distance():
@@ -132,12 +132,8 @@ def test_beads_are_located_to_a_fraction_of_a_voxel():
         )
     vol = gaussian_filter(vol, 0.3) + rng.normal(0, 5, vol.shape).astype(np.float32)
     found = detect_beads(vol, VOX, threshold_abs=200)
-    d, _ = (
-        __import__("scipy.spatial", fromlist=["cKDTree"])
-        .cKDTree(found.points_vox)
-        .query(centres)
-    )
-    assert len(found.points_vox) == 12 and np.max(d) < 0.25  # sub-voxel
+    d, _ = __import__("scipy.spatial", fromlist=["cKDTree"]).cKDTree(found).query(centres)
+    assert len(found) == 12 and np.max(d) < 0.25  # sub-voxel
 
 
 def test_nuclei_centroids_skip_objects_cut_by_the_frame():
@@ -149,10 +145,8 @@ def test_nuclei_centroids_skip_objects_cut_by_the_frame():
             ((zz - cz) / 6) ** 2 + ((yy - cy) / 18) ** 2 + ((xx - cx) / 18) ** 2 <= 1
         )
     found = detect_nuclei(vol, (0.2, 0.103, 0.103), min_area_um2=5, max_area_um2=300)
-    assert len(found.points_vox) == 2
-    d = np.linalg.norm(
-        np.sort(found.points_vox, axis=0) - np.sort(np.array(inside), axis=0), axis=1
-    )
+    assert len(found) == 2
+    d = np.linalg.norm(np.sort(found, axis=0) - np.sort(np.array(inside), axis=0), axis=1)
     assert np.max(d) < 1.0
 
 
@@ -552,8 +546,8 @@ def test_a_nucleus_with_a_flat_depth_profile_is_skipped_not_a_nan():
     profile = np.exp(-0.5 * ((np.arange(12) - 6) / 2.0) ** 2)[:, None]
     vol[:, disk(140, 140)] += 100.0 * profile
     marks = detect_nuclei(vol, VOX3)
-    assert np.isfinite(marks.points_vox).all()
-    assert len(marks.points_vox) == 1
+    assert np.isfinite(marks).all()
+    assert len(marks) == 1
 
 
 def test_arrows_use_each_axis_voxel_size():
