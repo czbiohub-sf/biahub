@@ -659,8 +659,6 @@ def verify_apply_transform(
     channel) and `input_empty`, as recorded. A cropped output (`--crop-to-overlap`) is not
     warp-compared.
     """
-    from biahub.registration.evaluate import coverage
-
     settings = load_transform_settings(transforms_filepath)
     key = position_key(moving_position)
     transform = settings.transform_for(t, key if settings.per_position else None)
@@ -680,7 +678,7 @@ def verify_apply_transform(
                 continue
             volume = np.asarray(moving.data[t, moving.channel_names.index(c)], np.float32)
             expected = transform.apply(volume, reference=written[c])
-            inside = coverage(transform, volume.shape, written[c].shape)
+            inside = transform.coverage(volume.shape, written[c].shape)
             gap = (written[c] - expected)[inside]
             signal = np.sqrt(np.mean(expected[inside] ** 2)) if inside.any() else 0.0
             result["transformed"][c] = {

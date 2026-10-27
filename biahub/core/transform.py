@@ -395,6 +395,37 @@ class Transform:
             "max_yx_um": float(np.linalg.norm(corner_gaps[:, 1:], axis=1).max()),
         }
 
+    def coverage(self, mov_shape: tuple, ref_shape: tuple) -> NDArray[np.bool_]:
+        """Return where `apply` has moving data on the reference grid (boolean).
+
+        The same as warping a volume of ones, without the warp: each reference voxel maps back
+        into the moving volume, and along a row (the last axis) an affine map is a line, so
+        the covered part of each row is one interval. The edge is the resampler's: ANTs (3D)
+        samples up to half a voxel beyond the outer centres, the upper edge excluded; scipy
+        (2D) up to the outer centres.
+        """
+        inverse = np.linalg.inv(self._matrix)
+        ndim = len(ref_shape)
+        starts = np.indices(ref_shape[:-1], dtype=float).reshape(ndim - 1, -1)  # each row's
+        first = np.full(starts.shape[1], -np.inf)
+        last = np.full(starts.shape[1], np.inf)
+        for axis in range(ndim):
+            at_zero = inverse[axis, : ndim - 1] @ starts + inverse[axis, ndim]  # moving coord
+            step = inverse[axis, ndim - 1]  # its change per voxel along the row
+            if ndim == 3:
+                lower, upper = -0.5, mov_shape[axis] - 0.5 - 1e-9
+            else:
+                lower, upper = 0.0, mov_shape[axis] - 1 + 1e-9
+            if step == 0:
+                outside = (at_zero < lower) | (at_zero > upper)
+                first[outside], last[outside] = np.inf, -np.inf
+                continue
+            a, b = (lower - at_zero) / step, (upper - at_zero) / step
+            first = np.maximum(first, np.minimum(a, b))
+            last = np.minimum(last, np.maximum(a, b))
+        x = np.arange(ref_shape[-1])
+        return ((x >= first[:, None]) & (x <= last[:, None])).reshape(ref_shape)
+
     def apply(
         self,
         moving: NDArray,

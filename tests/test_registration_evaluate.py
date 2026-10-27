@@ -238,7 +238,6 @@ def test_coverage_from_geometry_matches_warping_a_volume_of_ones(ndim):
     # Coverage used to be a second full warp (a volume of ones; ~190 s on a 2048 x 2048
     # stack); it is where the inverse-mapped reference grid falls inside the moving volume,
     # with the edge each backend uses (ANTs half a voxel beyond the centres, scipy at them).
-    from biahub.registration.evaluate import coverage
 
     rng = np.random.default_rng(4)
     for trial in range(12):
@@ -250,7 +249,7 @@ def test_coverage_from_geometry_matches_warping_a_volume_of_ones(ndim):
         ones = transform.apply(
             np.ones(mov_shape, np.float32), reference=np.zeros(ref_shape, np.float32)
         )
-        np.testing.assert_array_equal(coverage(transform, mov_shape, ref_shape), ones > 0.5)
+        np.testing.assert_array_equal(transform.coverage(mov_shape, ref_shape), ones > 0.5)
 
 
 def test_tiles_and_z_share_one_prepared_pair(monkeypatch):

@@ -657,10 +657,8 @@ class NodeGraphEstimator:
         mov_for_detection = seed.apply(mov, reference=ref) if seed is not None else mov
         if seed is not None and getattr(self.mov_detector, "missing_as_nan", False):
             # the warp's padding is no data, not dark: for a detector that leaves NaN out
-            from biahub.registration.evaluate import coverage
-
             mov_for_detection = np.asarray(mov_for_detection, dtype=np.float32).copy()
-            mov_for_detection[~coverage(seed, mov.shape, ref.shape)] = np.nan
+            mov_for_detection[~seed.coverage(mov.shape, ref.shape)] = np.nan
         mov_nodes = np.asarray(self.mov_detector.detect(mov_for_detection))
         ref_nodes = np.asarray(self.ref_detector.detect(ref))
         if len(mov_nodes) < 3 or len(ref_nodes) < 3:

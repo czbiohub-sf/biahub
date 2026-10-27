@@ -147,6 +147,4 @@ def test_the_seeds_padding_does_not_hide_the_moving_nuclei():
     truth = _forward(shift_vox=(2.0, 40.0, -35.0))
     mov, ref = _pair(truth)
     found = _estimator().estimate(mov + 250.0, ref, seed=truth)
-    np.testing.assert_allclose(
-        found.apply_points(PROBE), truth.apply_points(PROBE), atol=1.0
-    )
+    np.testing.assert_allclose(found.apply_points(PROBE), truth.apply_points(PROBE), atol=1.0)
