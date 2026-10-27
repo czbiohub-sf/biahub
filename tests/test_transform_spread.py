@@ -61,3 +61,28 @@ def test_the_worst_position_pair_says_when():
 
     spread = transform_spread(_estimates(per_position=3.0), SHAPE, UM)
     assert spread["worst_positions_t"] in TIMES
+
+
+def test_the_default_tolerance_is_in_um_not_voxels():
+    # Half a voxel (0.05 µm at DragonFly's 0.1 µm pixels) is exceeded by any two
+    # independent estimates, so "per position" came out almost every time.
+    from biahub.registration.evaluate import transform_spread
+
+    spread = transform_spread(_estimates(per_position=1.0), SHAPE, UM)  # 0.2 µm apart
+    assert spread["tolerance_um"] == 0.5
+    assert spread["choice"] == "one"
+
+
+def test_yx_and_z_are_judged_apart():
+    # DragonFly: yx agreed across positions to ~0.3 µm, z varied by ~1.4 µm.
+    from biahub.registration.evaluate import transform_spread
+
+    estimates = {
+        (p, 0): Transform.from_translation([8.0 + 5.0 * i, 3.0, 5.0 + 0.5 * i])
+        for i, p in enumerate(POSITIONS)
+    }
+    spread = transform_spread(estimates, SHAPE, UM)
+    assert spread["across_positions_z_um"] == pytest.approx(2.0)  # 2 x 5 voxels x 0.2
+    assert spread["across_positions_yx_um"] == pytest.approx(0.1)
+    assert (spread["choice_yx"], spread["choice_z"]) == ("one", "per position")
+    assert spread["choice"] == "per position"

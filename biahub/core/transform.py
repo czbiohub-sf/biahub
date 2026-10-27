@@ -340,7 +340,8 @@ class Transform:
         Points are sampled over the input volume (`shape_zyx`, where the transforms map
         from) and their two images compared, in output voxels scaled by `voxel_um` (the
         output's z, y, x). `max_um` is exact (the difference of two affine maps is largest
-        at a corner); `mean_um` is the mean over a `samples`-per-axis grid.
+        at a corner); `mean_um` is the mean over a `samples`-per-axis grid. `max_z_um` and
+        `max_yx_um` split the largest gap into its z part and its yx part.
         """
         axes = [np.linspace(0, n - 1, samples) for n in shape_zyx]
         grid = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(shape_zyx))
@@ -349,13 +350,15 @@ class Transform:
         ).reshape(-1, len(shape_zyx))
         um = np.asarray(voxel_um, dtype=float)
 
-        def distance(points):
-            gap = self.apply_points(points) - other.apply_points(points)
-            return np.linalg.norm(gap * um, axis=1)
+        def gaps(points):
+            return (self.apply_points(points) - other.apply_points(points)) * um
 
+        corner_gaps = gaps(corners)
         return {
-            "max_um": float(distance(corners).max()),
-            "mean_um": float(distance(grid).mean()),
+            "max_um": float(np.linalg.norm(corner_gaps, axis=1).max()),
+            "mean_um": float(np.linalg.norm(gaps(grid), axis=1).mean()),
+            "max_z_um": float(np.abs(corner_gaps[:, 0]).max()),
+            "max_yx_um": float(np.linalg.norm(corner_gaps[:, 1:], axis=1).max()),
         }
 
     def apply(
