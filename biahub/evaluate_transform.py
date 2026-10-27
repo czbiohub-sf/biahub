@@ -228,6 +228,11 @@ def evaluate_transform_cli(
         tile_px=tile_px,
     )
     for row in rows:
+        if row["empty"]:
+            click.echo(
+                f"{row['position']}: WARNING the {row['empty']} image is blank, skipped"
+            )
+            continue
         tiles = row["tiles_median_um"]
         click.echo(
             f"{row['position']} {row['candidate']:>20}: tiles "

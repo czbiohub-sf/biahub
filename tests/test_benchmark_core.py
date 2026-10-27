@@ -76,3 +76,25 @@ def test_each_block_of_a_stack_run_is_a_candidate(tmp_path):
     np.testing.assert_allclose(
         candidates["2:bead_matching"][1].matrix, record["blocks"][1]["matrix"]
     )
+
+
+def test_a_blank_position_gets_one_row_saying_which_side_is_empty(tmp_path):
+    # A FOV whose moving channel is all zeros gave empty rows without a word.
+    from biahub.registration.evaluate import evaluate_candidates
+
+    positions = _plate(tmp_path)
+    with open_ome_zarr(positions[1], mode="r+") as position:
+        position.data[0, 0] = 0  # DAPI written, but blank
+    rows = evaluate_candidates(
+        {"exact": Transform.from_translation([-s for s in SHIFT])},
+        [(p, p) for p in positions],
+        "DAPI",
+        "VS",
+        tile_px=64,
+        crop_px=96,
+    )
+    blank = [r for r in rows if r["position"] == "A/1/1"]
+    assert len(blank) == 1
+    assert (blank[0]["candidate"], blank[0]["empty"]) == ("unregistered", "moving")
+    assert blank[0]["tiles_median_um"] is None
+    assert {r["empty"] for r in rows if r["position"] == "A/1/0"} == {None}

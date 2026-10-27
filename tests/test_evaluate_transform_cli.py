@@ -203,3 +203,28 @@ def test_a_stabilization_is_evaluated_against_its_reference_frame(tmp_path):
     assert result.exit_code == 0, result.output
     tiles = {r["candidate"]: float(r["tiles_median_um"]) for r in _rows(output)}
     assert tiles["transforms"] < 0.05 < tiles["unregistered"]
+
+
+def test_a_blank_position_is_reported_not_left_as_empty_rows(tmp_path):
+    from iohub import open_ome_zarr
+
+    positions = _plate(tmp_path)
+    with open_ome_zarr(positions[1], mode="r+") as position:
+        position.data[0, 0] = 0
+    transforms = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["DAPI"],
+            reference_channel="VS",
+            transforms=[TransformEntry(matrix=Transform.identity(3).to_list())],
+        ),
+        transforms,
+    )
+    output = tmp_path / "evaluation.csv"
+    args = ["evaluate-transform", "-m", *map(str, positions), "-r", *map(str, positions)]
+    args += ["-c", str(transforms), "-o", str(output), "--tile-px", "64"]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    assert "A/1/1: WARNING the moving image is blank, skipped" in result.output
+    assert [r["empty"] for r in _rows(output) if r["position"] == "A/1/1"] == ["moving"]

@@ -9,6 +9,8 @@ stores' voxel sizes (z, y, x); voxel values are reported alongside where useful.
 
 from __future__ import annotations
 
+import warnings
+
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
@@ -837,7 +839,34 @@ def _row(record: Evaluation, candidate: str, position: str, t: int) -> dict:
         "z_from": record.z_from,
         "transform_scale_zyx": record.geometry["scale_zyx"],
         "transform_rotation_yx_deg": record.geometry["rotation_yx_deg"],
+        "empty": None,
     }
+
+
+def _blank(volume: np.ndarray) -> bool:
+    """Whether a volume holds no signal: never written, all NaN, or one constant value."""
+    finite = volume[np.isfinite(volume)]
+    return finite.size == 0 or finite.min() == finite.max()
+
+
+_MEASURED = (
+    "tiles_n",
+    "tiles_median_um",
+    "points_n",
+    "points_median_um",
+    "scale_yx",
+    "rotation_yx_deg",
+    "z_um",
+    "z_from",
+    "transform_scale_zyx",
+    "transform_rotation_yx_deg",
+)
+
+
+def _empty_row(position: str, t: int, empty: str) -> dict:
+    """Return the one row of a position with nothing to compare: `_row`'s columns, empty."""
+    row = {"candidate": "unregistered", "position": position, "t": t}
+    return {**row, **dict.fromkeys(_MEASURED), "empty": empty}
 
 
 def evaluate_candidates(
@@ -860,7 +889,9 @@ def evaluate_candidates(
     keyed by `t` or by (position, t) (e.g. `block_candidates`); a candidate with no
     transform for a position is left out there. `position_pairs` are (moving, reference)
     position paths. Each position also gets an "unregistered" row (identity), measured
-    once; landmarks are detected once per position. With `figures_dir`, each candidate's
+    once; landmarks are detected once per position. A position whose moving or reference
+    image is blank (no signal) gets one row instead, its `empty` saying which, and a warning.
+    With `figures_dir`, each candidate's
     figure (`plot_evaluation`, against that unregistered pair) is saved there.
     `reference_t` reads the reference at another timepoint than `t` (a stabilization's
     reference frame); by default the same.
@@ -877,6 +908,14 @@ def evaluate_candidates(
                 r.data[t_ref, r.channel_names.index(reference_channel)], np.float32
             )
             mov_um, ref_um = tuple(m.scale[-3:]), tuple(r.scale[-3:])
+        sides = [side for side, v in (("moving", mov), ("reference", ref)) if _blank(v)]
+        if sides:  # nothing to compare: one row says so, instead of a row per candidate
+            empty = "both" if len(sides) == 2 else sides[0]
+            warnings.warn(
+                f"{key} t={t}: the {empty} image is blank; not evaluated", stacklevel=2
+            )
+            rows.append(_empty_row(key, t, empty))
+            continue
         marks = _landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs)
         named = {"unregistered": Transform.identity(3), **candidates}
         for name, candidate in named.items():
