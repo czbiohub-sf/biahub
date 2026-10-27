@@ -18,12 +18,12 @@ import numpy as np
 
 from numpy.typing import ArrayLike
 from scipy.ndimage import shift as ndi_shift
-from scipy.spatial import cKDTree
 from skimage import filters
 
 from biahub.characterize_psf import detect_peaks
 from biahub.cli.parsing import position_key
 from biahub.core.nodes.solvers import medoid as _medoid
+from biahub.core.nodes.solvers import mutual_nearest
 from biahub.core.transform import Transform, polar, rotation_angles
 from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
 from biahub.utils.ngff import is_unwritten
@@ -125,18 +125,6 @@ class Landmarks:
 # Matching radius (µm) and the axes it is measured on, per landmark source. Nuclei are long
 # in z, so they pair up in yx and their z is compared afterwards.
 MATCHING = {"beads": (1.0, "zyx"), "nuclei": (3.0, "yx")}
-
-
-def mutual_nearest(
-    a_um: np.ndarray, b_um: np.ndarray, radius: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return indices (i, j) where a[i] and b[j] are each other's nearest, within `radius`."""
-    if len(a_um) == 0 or len(b_um) == 0:
-        return np.zeros(0, int), np.zeros(0, int)
-    d_ab, j = cKDTree(b_um).query(a_um)
-    _d_ba, i_back = cKDTree(a_um).query(b_um)
-    keep = (d_ab <= radius) & (i_back[j] == np.arange(len(a_um)))
-    return np.flatnonzero(keep), j[keep]
 
 
 def point_residuals(

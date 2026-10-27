@@ -1,8 +1,9 @@
 """Solvers: from costs to pairs (or a centre) -- how the best match is found.
 
 A linear assignment pairs nodes on unary costs (exact, Hungarian); the spectral solver
-relaxes the pairwise (quadratic) problem to an eigenvector and rounds it greedily; the
-medoid is the centre of one set of nodes.
+relaxes the pairwise (quadratic) problem to an eigenvector and rounds it greedily; mutual
+nearest neighbours pair nodes that are each other's closest; the medoid is the centre of
+one set of nodes.
 """
 
 import click
@@ -10,6 +11,7 @@ import numpy as np
 
 from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial import cKDTree
 
 
 def linear_assignment(
@@ -115,3 +117,18 @@ def medoid(distances: NDArray[np.floating]) -> int:
     """
     distances = np.asarray(distances, dtype=float)
     return int(np.argmin(distances.sum(axis=1)))
+
+
+def mutual_nearest(
+    a: np.ndarray, b: np.ndarray, radius: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return indices (i, j) where a[i] and b[j] are each other's nearest, within `radius`.
+
+    `a` and `b` are (N, D) and (M, D) positions in one unit, `radius` in that unit.
+    """
+    if len(a) == 0 or len(b) == 0:
+        return np.zeros(0, int), np.zeros(0, int)
+    d_ab, j = cKDTree(b).query(a)
+    _d_ba, i_back = cKDTree(a).query(b)
+    keep = (d_ab <= radius) & (i_back[j] == np.arange(len(a)))
+    return np.flatnonzero(keep), j[keep]

@@ -52,3 +52,12 @@ def test_the_medoid_is_the_node_closest_to_all_the_others():
 
     points = np.array([[0.0], [1.0], [2.0], [10.0]])
     assert medoid(cdist(points, points)) == 1  # 1 + 1 + 9 beats 1 + 2 + 10 and 2 + 1 + 8
+
+
+def test_mutual_nearest_pairs_nodes_that_are_each_others_closest():
+    from biahub.core.nodes.solvers import mutual_nearest
+
+    a = np.array([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]])
+    b = np.array([[0.5, 0.0], [10.4, 0.0], [10.8, 0.0], [50.0, 0.0]])
+    i, j = mutual_nearest(a, b, radius=1.0)
+    assert list(zip(i.tolist(), j.tolist(), strict=True)) == [(0, 0), (1, 1)]  # 2: none near
