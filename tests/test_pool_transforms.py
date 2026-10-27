@@ -27,7 +27,7 @@ WITHOUT_A = {k: v for k, v in ESTIMATES.items() if k != "A/1/0"}
 
 
 def test_the_medoid_is_the_estimate_closest_to_all_the_others():
-    from biahub.registration.planning import pool_transforms
+    from biahub.estimate_transform import pool_transforms
 
     pooled = pool_transforms(ESTIMATES, SHAPE, UM)
     assert pooled["medoid"] == "A/1/0"
@@ -39,7 +39,7 @@ def test_the_medoid_is_the_estimate_closest_to_all_the_others():
 
 
 def test_median_z_keeps_the_medoids_yx_and_takes_the_median_depth():
-    from biahub.registration.planning import pool_transforms
+    from biahub.estimate_transform import pool_transforms
 
     pooled = pool_transforms(WITHOUT_A, SHAPE, UM, z="median")
     assert pooled["medoid"] == "B/2/0"

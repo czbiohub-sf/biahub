@@ -86,7 +86,7 @@ def _survey():
 
 
 def test_positions_are_chosen_from_the_survey_held_out_in_other_wells_first():
-    from biahub.registration.planning import select_positions
+    from biahub.registration.benchmark import select_positions
 
     estimate, held_out = select_positions(_survey(), n_held_out=3)
     assert estimate == "A/1/1"  # the most spread out of the usable ones

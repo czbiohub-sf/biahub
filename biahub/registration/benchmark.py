@@ -1,4 +1,7 @@
-"""The benchmark: candidate transforms evaluated on positions, and choosing a pipeline.
+"""The benchmark: positions to test on, candidates evaluated there, choosing a pipeline.
+
+`survey_positions` says which positions are usable and how their structure lies;
+`select_positions` picks where to estimate and what to hold out.
 
 `evaluate_candidates` evaluates many candidates (a transforms file, each block of its
 stack) on many positions into one table, next to the unregistered pair. The registration
@@ -16,9 +19,13 @@ from pathlib import Path
 
 import numpy as np
 
+from skimage import filters
+
 from biahub.cli.parsing import position_key
 from biahub.core.transform import Transform
 from biahub.registration.evaluate import Evaluation, detect_landmarks, evaluate
+from biahub.registration.methods.landmark.nuclei_matching import detect_nuclei
+from biahub.utils.ngff import is_unwritten
 
 
 def _float(value) -> float | None:
@@ -97,6 +104,90 @@ def select_pipeline(
     if len(close) > 1 and blocks.get(winner, 1) < max(blocks.get(p, 1) for p in close):
         reason += f"; within {tie_um} µm of the best, the simpler pipeline"
     return {**base, "pipeline": winner, "median_um": scores[winner], "reason": reason}
+
+
+# --- survey before registering ------------------------------------------------------------
+
+
+def survey_positions(
+    position_dirpaths: list,
+    channels: list[str],
+    t: int = 0,
+    nuclei: bool = False,
+    cells: int = 4,
+) -> list[dict]:
+    """Return one row per position: whether it is usable, and how its structure lies.
+
+    `empty`: never written (no stored chunks, metadata only). From the first channel at
+    `t`: `nan_fraction`; `foreground`, the share of the max projection above Otsu; and
+    `spread`, the share of a `cells` x `cells` grid holding foreground (structure all over
+    the field constrains scale and rotation; a corner does not). `peak_z` per channel:
+    the slice of highest mean signal. `n_nuclei` when `nuclei` (detect_nuclei).
+    """
+    from iohub import open_ome_zarr
+
+    rows = []
+    for path in position_dirpaths:
+        row = {"position": position_key(path), "empty": False}
+        with open_ome_zarr(path, mode="r") as position:
+            if is_unwritten(position):
+                rows.append({**row, "empty": True})
+                continue
+            index = [position.channel_names.index(c) for c in channels]
+            volumes = [np.asarray(position.data[t, i], dtype=np.float32) for i in index]
+            voxel_um = tuple(position.scale[-3:])
+        first = volumes[0]
+        row["nan_fraction"] = float(np.isnan(first).mean())
+        row["peak_z"] = {
+            c: int(np.nanargmax(np.nanmean(v, axis=(1, 2)))) if np.isfinite(v).any() else None
+            for c, v in zip(channels, volumes, strict=True)
+        }
+        mip = np.nanmax(first, axis=0) if np.isfinite(first).any() else None
+        if mip is None or np.nanstd(mip) == 0:
+            rows.append({**row, "foreground": 0.0, "spread": 0.0})
+            continue
+        mip = np.nan_to_num(mip, nan=float(np.nanmin(mip)))
+        mask = mip > filters.threshold_otsu(mip)
+        ny, nx = mask.shape
+        filled = [
+            mask[
+                i * ny // cells : (i + 1) * ny // cells,
+                j * nx // cells : (j + 1) * nx // cells,
+            ].mean()
+            > 0.05
+            for i in range(cells)
+            for j in range(cells)
+        ]
+        row["foreground"] = float(mask.mean())
+        row["spread"] = float(np.mean(filled))
+        if nuclei:
+            row["n_nuclei"] = int(len(detect_nuclei(first, voxel_um)))
+        rows.append(row)
+    return rows
+
+
+def select_positions(survey_rows: list[dict], n_held_out: int = 3) -> tuple[str, list[str]]:
+    """Return (the position to estimate on, held-out positions) from `survey_positions`.
+
+    Usable positions are written and under half NaN. The estimate position has the most
+    spread-out structure (what constrains scale and rotation); held-out ones are the next
+    most spread, from other wells first, so the evaluation sees how the transform carries
+    across the plate.
+    """
+    usable = [
+        r for r in survey_rows if not r.get("empty") and (r.get("nan_fraction") or 0) < 0.5
+    ]
+    if not usable:
+        raise ValueError("no usable position: every one is empty or mostly NaN")
+    ranked = sorted(usable, key=lambda r: -(r.get("spread") or 0))
+    estimate = ranked[0]["position"]
+
+    def well(position):
+        return position.rsplit("/", 1)[0]
+
+    others = [r["position"] for r in ranked[1:] if well(r["position"]) != well(estimate)]
+    same = [r["position"] for r in ranked[1:] if well(r["position"]) == well(estimate)]
+    return estimate, (others + same)[:n_held_out]
 
 
 def write_benchmark_config(

@@ -26,7 +26,7 @@ def _plate(tmp_path):
 
 
 def test_the_survey_names_unusable_positions_and_how_structure_is_spread(tmp_path):
-    from biahub.registration.planning import survey_positions
+    from biahub.registration.benchmark import survey_positions
 
     rows = {r["position"]: r for r in survey_positions(_plate(tmp_path), ["DAPI", "VS"], t=0)}
     assert rows["A/1/2"]["empty"] and rows["A/1/3"]["nan_fraction"] == 1.0
