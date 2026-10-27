@@ -24,3 +24,4 @@ hoct_config:
   n_neighbors: 5
   max_delta_t: 3                   # frames an edge may skip
   solver: {}                       # HOCT ILPSolverConfig overrides
+  # downsample: 6                  # A549: HOCT tracked divisions better on labels shrunk 6x

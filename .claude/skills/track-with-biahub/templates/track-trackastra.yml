@@ -21,3 +21,4 @@ trackastra_config:
   model: general_2d                # pretrained name (general_2d, ctc) or a trained model folder
   mode: greedy                     # greedy | greedy_nodiv | ilp
   # image_channel: nuclei_prediction  # default: the first channel segment recorded
+  # downsample: 4                  # only for a model fine-tuned at 4x (pretrained: keep 1)

@@ -529,7 +529,68 @@ def warm_hoct_weights(model: str) -> None:
     click.echo(f"HOCT weights ready: {model}")
 
 
+def _downsample(
+    labels: np.ndarray, images: np.ndarray, factor: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Shrink (T, Y, X) labels and images by an integer factor.
+
+    Labels are strided (every ``factor``-th pixel), which keeps the label ids; images are
+    block-averaged. Objects smaller than the stride can vanish (they stay untracked).
+    """
+    T, Y, X = labels.shape
+    Yc, Xc = Y // factor * factor, X // factor * factor
+    small_images = (
+        np.asarray(images)[:, :Yc, :Xc]
+        .reshape(T, Yc // factor, factor, Xc // factor, factor)
+        .mean(axis=(2, 4))
+        .astype(np.float32)
+    )
+    return np.ascontiguousarray(labels[:, :Yc:factor, :Xc:factor]), small_images
+
+
+def _upsample_result(
+    tracked_small: np.ndarray,
+    tracks: pd.DataFrame,
+    labels_small: np.ndarray,
+    labels: np.ndarray,
+    factor: int,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Map tracks found on downsampled labels back to the full-resolution labels.
+
+    Each original label id takes the track id it got on the downsampled frame, so the
+    tracked labels keep the full-resolution masks; positions are rescaled by ``factor``.
+    """
+    tracked = np.zeros(labels.shape, dtype=np.int32)
+    for t in range(labels.shape[0]):
+        small, ids = labels_small[t].ravel(), tracked_small[t].ravel()
+        both = (small > 0) & (ids > 0)
+        if not both.any():
+            continue
+        pairs = np.unique(np.stack([small[both], ids[both]]), axis=1)
+        lut = np.zeros(int(labels[t].max()) + 1, dtype=np.int32)
+        lut[pairs[0]] = pairs[1]
+        tracked[t] = lut[labels[t]]
+    tracks = tracks.assign(y=tracks.y * factor, x=tracks.x * factor)
+    return tracked, tracks
+
+
 def run_hoct(
+    labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.
+
+    With ``config.downsample`` > 1 the labels and image are shrunk first (HOCT's models
+    were trained on small nuclei) and the result is mapped back to full resolution.
+    """
+    factor = config.downsample
+    if factor == 1:
+        return _run_hoct(labels, images, config, pixel_size)
+    labels_small, images_small = _downsample(labels, images, factor)
+    tracked, tracks = _run_hoct(labels_small, images_small, config, pixel_size * factor)
+    return _upsample_result(tracked, tracks, labels_small, labels, factor)
+
+
+def _run_hoct(
     labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.
@@ -588,6 +649,22 @@ def warm_trackastra_weights(model: str) -> None:
 
 
 def run_trackastra(
+    labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with Trackastra.
+
+    With ``config.downsample`` > 1 the labels and image are shrunk first and the result
+    is mapped back to full resolution (as :func:`run_hoct`).
+    """
+    factor = config.downsample
+    if factor == 1:
+        return _run_trackastra(labels, images, config)
+    labels_small, images_small = _downsample(labels, images, factor)
+    tracked, tracks = _run_trackastra(labels_small, images_small, config)
+    return _upsample_result(tracked, tracks, labels_small, labels, factor)
+
+
+def _run_trackastra(
     labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Link fixed (T, Y, X) instance labels with Trackastra.
