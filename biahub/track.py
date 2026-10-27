@@ -1,6 +1,7 @@
 import ast
 import json
 import logging
+import os
 import shutil
 import tempfile
 
@@ -30,7 +31,13 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.resolve_function import resolve_function
-from biahub.settings import ProcessingInputChannel, TrackingSettings
+from biahub.settings import (
+    HoctConfig,
+    ProcessingInputChannel,
+    TrackastraConfig,
+    TrackingSettings,
+    TracksdataConfig,
+)
 from biahub.utils.cluster import (
     apply_sbatch_overrides,
     echo_resources,
@@ -286,6 +293,351 @@ def filter_short_siblings(
         f"{tracks_df.track_id.nunique()} tracks"
     )
     return tracks_df, np.asarray(labels)
+
+
+TRACK_COLUMNS = ["track_id", "t", "y", "x", "parent_track_id"]
+
+
+def _empty_result(shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
+    """Zero labels and a tracks table with no rows, for movies with nothing to track."""
+    tracks = pd.DataFrame(
+        {
+            "track_id": pd.Series(dtype="int64"),
+            "t": pd.Series(dtype="int64"),
+            "y": pd.Series(dtype="float64"),
+            "x": pd.Series(dtype="float64"),
+            "parent_track_id": pd.Series(dtype="int64"),
+        }
+    )
+    return np.zeros(shape, dtype=np.int32), tracks
+
+
+def _num_threads() -> int:
+    """CPUs for the ILP solvers: the SLURM allocation, else this process's CPUs."""
+    if os.environ.get("SLURM_CPUS_PER_TASK"):
+        return int(os.environ["SLURM_CPUS_PER_TASK"])
+    if hasattr(os, "sched_getaffinity"):  # not on macOS or Windows
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def _select_every_detection(graph, keep_edges: bool = False):
+    """Mark every node selected: each detection becomes its own track.
+
+    Used when a candidate graph has no edges (one frame, or objects farther apart than
+    the distance threshold), which the ILP solvers refuse. ``keep_edges`` also selects
+    the edges, for a graph whose single edge is the only possible link.
+    """
+    import polars as pl
+    import tracksdata as td
+
+    solution = td.DEFAULT_ATTR_KEYS.SOLUTION
+    graph.add_node_attr_key(solution, pl.Boolean, default_value=True)
+    graph.add_edge_attr_key(solution, pl.Boolean, default_value=keep_edges)
+    return graph
+
+
+def _isolated_tracks(labels: np.ndarray) -> tuple[np.ndarray, pd.DataFrame]:
+    """Each detection of (T, Y, X) ``labels`` as its own track, without linking."""
+    import tracksdata as td
+
+    graph = td.graph.InMemoryGraph()
+    td.nodes.RegionPropsNodes().add_nodes(graph, labels=labels)
+    return _solution_to_tracks(_select_every_detection(graph), labels.shape)
+
+
+def _select_sparse_links(graph):
+    """Select every detection and its candidate links, one incoming link per detection.
+
+    For graphs where HOCT could score no inference window (each holds at most one
+    candidate link, so each link is the only option where it is): every node is kept,
+    and each node keeps one incoming edge (the first), so no detection gets two parents.
+    """
+    import polars as pl
+    import tracksdata as td
+
+    keys = td.DEFAULT_ATTR_KEYS
+    graph.add_node_attr_key(keys.SOLUTION, pl.Boolean, default_value=True)
+    graph.add_edge_attr_key(keys.SOLUTION, pl.Boolean, default_value=False)
+    edges = graph.edge_attrs(attr_keys=[keys.EDGE_ID, keys.EDGE_SOURCE, keys.EDGE_TARGET])
+    keep = edges.unique(subset=[keys.EDGE_TARGET], keep="first")[keys.EDGE_ID].to_list()
+    if keep:
+        graph.update_edge_attrs(attrs={keys.SOLUTION: True}, edge_ids=keep)
+    return graph
+
+
+def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: float):
+    """Build the tracksdata graph of (T, Y, X) ``labels`` and solve its ILP.
+
+    Returns the solved graph (nodes and edges carry the ``solution`` attribute).
+    """
+    import polars as pl
+    import tracksdata as td
+
+    _, Y, X = labels.shape
+    graph = td.graph.InMemoryGraph()
+    td.nodes.RegionPropsNodes().add_nodes(graph, labels=labels)
+    margin = config.border_margin_um / pixel_size
+    appearance = config.appearance_weight
+    if margin > 0:
+        nodes = graph.node_attrs(attr_keys=[td.DEFAULT_ATTR_KEYS.NODE_ID, "y", "x"])
+        y, x = nodes["y"].to_numpy(), nodes["x"].to_numpy()
+        is_border = ((y < margin) | (y > Y - margin) | (x < margin) | (x > X - margin)).astype(
+            float
+        )
+        graph.add_node_attr_key("is_border", pl.Float64, default_value=0.0)
+        graph.update_node_attrs(
+            attrs={"is_border": is_border.tolist()},
+            node_ids=nodes[td.DEFAULT_ATTR_KEYS.NODE_ID].to_list(),
+        )
+        border = td.NodeAttr("is_border")
+        appearance = appearance * (1 - border) + config.border_appearance_weight * border
+    td.edges.DistanceEdges(
+        distance_threshold=config.distance_threshold_um / pixel_size,
+        n_neighbors=config.n_neighbors,
+    ).add_edges(graph)
+    if graph.num_edges() == 0:
+        return _select_every_detection(graph)
+    td.edges.IoUEdgeAttr(output_key="iou").add_edge_attrs(graph)
+    edge_weight = (
+        -td.EdgeAttr("iou")
+        * (td.EdgeAttr("distance") * (pixel_size / config.distance_norm_um)).exp()
+    )
+    td.solvers.ILPSolver(
+        edge_weight=edge_weight,
+        node_weight=config.node_weight,
+        appearance_weight=appearance,
+        disappearance_weight=config.disappearance_weight,
+        division_weight=config.division_weight,
+        num_threads=_num_threads(),
+        return_solution=False,
+    ).solve(graph)
+    return graph
+
+
+def _merge_single_children(
+    tracks: pd.DataFrame, labels: np.ndarray
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Merge every track that is its parent's only child into the parent.
+
+    Linking across skipped frames (HOCT's ``max_delta_t``, CTC conversion at gaps)
+    splits one track into parent -> one child. ultrack's tables, and the sibling filter
+    built on them, allow only 0 or 2 children, so the child takes its parent's id in the
+    tracks and the labels; chains collapse to their first track.
+    """
+    linked = tracks[tracks.parent_track_id != -1]
+    kids = linked.groupby("parent_track_id").track_id.unique()
+    into = {int(k[0]): int(parent) for parent, k in kids.items() if len(k) == 1}
+    if not into:
+        return tracks, labels
+
+    def root(track_id: int) -> int:
+        while track_id in into:
+            track_id = into[track_id]
+        return track_id
+
+    original_parent = tracks.groupby("track_id").parent_track_id.first().astype(int)
+    tracks = tracks.copy()
+    tracks["track_id"] = tracks.track_id.map(lambda k: root(int(k)))
+    tracks["parent_track_id"] = tracks.track_id.map(
+        lambda k: -1 if original_parent[k] == -1 else root(int(original_parent[k]))
+    )
+    lut = np.arange(int(labels.max()) + 1, dtype=labels.dtype)
+    for child in into:
+        if child < len(lut):
+            lut[child] = root(child)
+    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
+    return tracks, lut[labels]
+
+
+def _solution_to_tracks(graph, shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
+    """Convert a solved tracksdata graph to labels (value = track_id) and ultrack-like tracks.
+
+    The tracks have ``track_id, t, y, x, parent_track_id`` (-1 for roots), the columns
+    the sibling filter and the tracks CSV use. HOCT promotes 2D movies to (T, 1, Y, X)
+    and records that shape in the graph metadata, so labels are rendered in the graph's
+    own shape and reshaped to ``shape``.
+    """
+    import tracksdata as td
+
+    solution_key = td.DEFAULT_ATTR_KEYS.SOLUTION
+    if graph.num_nodes() == 0 or (
+        solution_key in graph.node_attr_keys()
+        and not graph.node_attrs(attr_keys=[solution_key])[solution_key].any()
+    ):
+        # The solver selected nothing (an empty solution can be the cheapest one).
+        return _empty_result(shape)
+
+    metadata = getattr(graph, "metadata", None) or {}
+    render_shape = tuple(metadata.get("shape", shape))
+    tracks, parents, labels_view = td.functional.to_napari_format(
+        graph, shape=render_shape, mask_key=td.DEFAULT_ATTR_KEYS.MASK
+    )
+    tracks = tracks.to_pandas().rename(columns={"tracklet_id": "track_id"})
+    tracks = tracks[["track_id", "t", "y", "x"]].copy()
+
+    def parent_of(track_id):
+        parent = parents.get(int(track_id), -1)
+        return int(parent[0]) if isinstance(parent, (list, tuple)) else int(parent)
+
+    tracks["parent_track_id"] = tracks.track_id.map(parent_of)
+    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
+    labels = np.stack([np.asarray(labels_view[t]) for t in range(shape[0])])
+    tracks, labels = _merge_single_children(tracks, labels.reshape(shape).astype(np.int32))
+    return labels, tracks
+
+
+def run_tracksdata(
+    labels: np.ndarray, config: TracksdataConfig, pixel_size: float
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with tracksdata's ILP."""
+    if not labels.any():
+        return _empty_result(labels.shape)
+    graph = _solve_tracksdata(labels, config, pixel_size)
+    return _solution_to_tracks(graph, labels.shape)
+
+
+def _import_hoct():
+    try:
+        import hoct
+        import hoct.features
+    except ImportError as e:
+        raise ImportError(
+            "tracker: hoct needs HOCT, which biahub[track] installs on Python < 3.14 only "
+            "(its gurobipy pin has no Python 3.14 wheels)."
+        ) from e
+    return hoct
+
+
+def hoct_solver_config(config: HoctConfig):
+    """HOCT's ILPSolverConfig: ``config.solver`` overrides on HOCT's tracking defaults.
+
+    ILPSolverConfig needs every field when built directly, and refuses unknown keys.
+    """
+    _import_hoct()
+    from hoct.tracking import ILPSolverConfig
+
+    return ILPSolverConfig.model_validate(
+        {**ILPSolverConfig.default().model_dump(), **config.solver}
+    )
+
+
+def warm_hoct_weights(model: str) -> None:
+    """Download HOCT weights into the shared cache once (from --init, on the head node)."""
+    hoct = _import_hoct()
+    hoct.load_model(model, device="cpu")
+    click.echo(f"HOCT weights ready: {model}")
+
+
+def run_hoct(
+    labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.
+
+    ``images`` is the (T, Y, X) image the labels were segmented from. HOCT runs in pixel
+    space, as its models were trained, so distances are converted to pixels.
+    """
+    if not labels.any():
+        return _empty_result(labels.shape)
+
+    import torch
+
+    hoct = _import_hoct()
+
+    # Build HOCT's candidate graph first: inference fails on a graph without edges.
+    graph = hoct.features.create_graph(
+        labels,
+        images=images,
+        distance_threshold=config.distance_threshold_um / pixel_size,
+        n_neighbors=config.n_neighbors,
+        delta_t=config.max_delta_t,
+    )
+    # HOCT 0.3.0's inference skips batches with at most one edge and then fails on an
+    # empty prediction list, so sparse graphs are resolved here: no edge leaves each
+    # detection on its own, a single edge is the only possible link.
+    if graph.num_edges() <= 1:
+        selected = _select_every_detection(graph, keep_edges=graph.num_edges() == 1)
+        return _solution_to_tracks(selected, labels.shape)
+
+    solver_config = hoct_solver_config(config)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = hoct.load_model(config.model, device=device)
+    try:
+        solution = hoct.predict(
+            model, graph=graph, solver_config=solver_config, return_solution=True
+        )
+    except ValueError as e:
+        # Every inference window held at most one candidate link, so HOCT scored none
+        # (0.3.0 then fails on an empty prediction list); each link is the only option.
+        if "non-empty list of Tensors" not in str(e):
+            raise
+        click.echo(
+            "HOCT scored no inference window (each holds at most one candidate link); "
+            "keeping every detection and its candidate links."
+        )
+        return _solution_to_tracks(_select_sparse_links(graph), labels.shape)
+    return _solution_to_tracks(solution, labels.shape)
+
+
+def warm_trackastra_weights(model: str) -> None:
+    """Download Trackastra weights into the shared cache once (from --init)."""
+    from trackastra.model import Trackastra
+
+    Trackastra.from_pretrained(model, device="cpu")
+    click.echo(f"Trackastra weights ready: {model}")
+
+
+def run_trackastra(
+    labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with Trackastra.
+
+    ``images`` is the (T, Y, X) image the labels were segmented from. Trackastra's
+    ``graph_to_ctc`` relabels the masks by track and gives each track's parent; the
+    tracks table takes each track's centroid per frame.
+    """
+    if not labels.any():
+        return _empty_result(labels.shape)
+    if labels.shape[0] < 2:
+        # Trackastra needs two frames to link; one frame is its detections, unlinked.
+        return _isolated_tracks(labels)
+
+    import torch
+
+    from skimage.measure import regionprops_table
+    from trackastra.model import Trackastra
+    from trackastra.tracking import graph_to_ctc
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if Path(config.model).exists():
+        model = Trackastra.from_folder(Path(config.model), device=device)
+    else:
+        model = Trackastra.from_pretrained(config.model, device=device)
+    # track() also returns a rendered mask movie; keep only the graph so it is freed.
+    graph = model.track(images, labels, mode=config.mode)[0]
+    ctc, tracked = graph_to_ctc(graph, labels)
+    tracked = np.asarray(tracked).astype(np.int32)
+
+    rows = []
+    for t in range(tracked.shape[0]):
+        props = regionprops_table(tracked[t], properties=("label", "centroid"))
+        rows.append(
+            pd.DataFrame(
+                {
+                    "track_id": props["label"],
+                    "t": t,
+                    "y": props["centroid-0"],
+                    "x": props["centroid-1"],
+                }
+            )
+        )
+    tracks = pd.concat(rows, ignore_index=True)
+    # CTC marks roots with parent 0; ultrack's tables use -1.
+    # graph_to_ctc's table is CTC's res_track.txt: label, t1, t2, parent.
+    parent = dict(zip(ctc["label"].astype(int), ctc["parent"].astype(int), strict=True))
+    tracks["parent_track_id"] = tracks.track_id.map(lambda k: parent.get(int(k), 0) or -1)
+    tracks, tracked = _merge_single_children(tracks, tracked)
+    return tracked, tracks
 
 
 def run_ultrack(
@@ -634,6 +986,93 @@ def load_labels(
     return labels
 
 
+# The provenance key `biahub segment` records on its label images (biahub.segment).
+SEGMENT_PROVENANCE_KEY = "biahub-segment"
+
+
+def tracker_image_channel(
+    position_dirpath: Path, label_name: str, image_channel: str | None = None
+) -> str:
+    """Return the image channel a label-linking tracker (hoct, trackastra) reads.
+
+    ``image_channel`` when set; otherwise the first channel the model that wrote
+    ``labels/<label_name>`` segmented, from that label image's ``biahub-segment``
+    provenance, so the tracker sees what cellpose saw.
+    """
+    if image_channel is not None:
+        return image_channel
+    with open_ome_zarr(str(position_dirpath), mode="r") as position:
+        attrs = dict(position.get_label(label_name).zattrs)
+    model = attrs.get(SEGMENT_PROVENANCE_KEY, {}).get("models", {}).get(label_name) or {}
+    channels = model.get("channels")
+    if not channels:
+        raise ValueError(
+            f"labels/{label_name} records no `{SEGMENT_PROVENANCE_KEY}` channels (it was not "
+            "written by `biahub segment`); set image_channel in the tracker's config."
+        )
+    if len(channels) > 1:
+        click.echo(
+            f"labels/{label_name} was segmented from {channels}; the tracker reads the "
+            f"first, {channels[0]!r} (set image_channel to choose another)."
+        )
+    return channels[0]
+
+
+def load_tracker_image(
+    position_dirpath: Path, channel: str, blank_frames_path: Path | None = None
+) -> np.ndarray:
+    """Read the (T, Y, X) image of ``channel`` from a projected (Z=1) position.
+
+    Frames listed as blank for this FOV are filled like the labels (:func:`load_labels`),
+    so the image and the labels stay frame-aligned.
+    """
+    with open_ome_zarr(str(position_dirpath), mode="r") as position:
+        if channel not in position.channel_names:
+            raise ValueError(
+                f"{position_dirpath} has no channel {channel!r} (channels: "
+                f"{position.channel_names}); set image_channel to one of them."
+            )
+        image = np.asarray(position["0"][:, position.channel_names.index(channel), 0])
+    if blank_frames_path:
+        fov = "/".join(Path(position_dirpath).parts[-3:])
+        empty_frames_idx = get_empty_frames_idx_from_csv(pd.read_csv(blank_frames_path), fov)
+        if empty_frames_idx:
+            image = fill_empty_frames(image, empty_frames_idx)
+    return image
+
+
+def link_fixed_labels(
+    tracker: str,
+    position_dirpath: Path,
+    label_name: str,
+    blank_frames_path: Path | None,
+    pixel_size: float,
+    tracksdata_config: TracksdataConfig,
+    hoct_config: HoctConfig,
+    trackastra_config: TrackastraConfig,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link the (T, Y, X) instance labels of ``labels/<label_name>`` with ``tracker``.
+
+    tracksdata, hoct and trackastra link the labels as they are (2D only); hoct and
+    trackastra also read the image the labels were segmented from (see
+    :func:`tracker_image_channel`). Returns the labels painted with track ids and the
+    tracks table (``track_id, t, y, x, parent_track_id``).
+    """
+    labels = load_labels(position_dirpath, label_name, "2D", blank_frames_path)
+    if tracker == "tracksdata":
+        click.echo(f"Tracking the labels of labels/{label_name} with tracksdata...")
+        return run_tracksdata(labels, tracksdata_config, pixel_size)
+    config = hoct_config if tracker == "hoct" else trackastra_config
+    channel = tracker_image_channel(position_dirpath, label_name, config.image_channel)
+    images = load_tracker_image(position_dirpath, channel, blank_frames_path)
+    click.echo(
+        f"Tracking the labels of labels/{label_name} with {tracker} (image {channel!r})..."
+    )
+    if tracker == "hoct":
+        return run_hoct(labels, images, hoct_config, pixel_size)
+    return run_trackastra(labels, images, trackastra_config)
+
+
 def write_tracking_labels(label_array, labels: ArrayLike, output_mode: str) -> None:
     """Write tracked labels into the (T, 1, Z, Y, X) label array of the plate track read.
 
@@ -712,6 +1151,10 @@ def track_one_position(
     output_mode: str = "2D",
     min_sibling_length: int | None = None,
     tracks_stem: str = "tracks",
+    tracker: str = "ultrack",
+    tracksdata_config: TracksdataConfig | None = None,
+    hoct_config: HoctConfig | None = None,
+    trackastra_config: TrackastraConfig | None = None,
 ) -> None:
     """
     Run tracking on a single field of view.
@@ -764,6 +1207,13 @@ def track_one_position(
         come from the filtered tracks. Default None keeps every division.
     tracks_stem : str, optional
         Stem of the GEFF and CSV file names. Default ``"tracks"``.
+    tracker : str, optional
+        ``"ultrack"`` (default) or a tracker that links ``input_label``'s labels as they
+        are: ``"tracksdata"``, ``"hoct"`` or ``"trackastra"`` (see
+        :func:`link_fixed_labels`). Those write the labels and the CSV but no GEFF yet:
+        ultrack's export reads its own database.
+    tracksdata_config, hoct_config, trackastra_config : optional
+        The selected tracker's settings (defaults when None).
 
     Returns
     -------
@@ -782,6 +1232,35 @@ def track_one_position(
     position_dirpath = Path(position_dirpath)
     fov = "_".join(position_key)
     click.echo(f"Processing FOV: {fov.replace('_', '/')}")
+
+    if tracker != "ultrack":
+        tracking_labels, tracks_df = link_fixed_labels(
+            tracker,
+            position_dirpath,
+            input_label,
+            blank_frames_path,
+            pixel_size=scale[-1],
+            tracksdata_config=tracksdata_config or TracksdataConfig(),
+            hoct_config=hoct_config or HoctConfig(),
+            trackastra_config=trackastra_config or TrackastraConfig(),
+        )
+        if min_sibling_length is not None and len(tracks_df):
+            tracks_df, tracking_labels = filter_short_siblings(
+                tracks_df, tracking_labels, min_sibling_length
+            )
+        # No GEFF for these trackers yet (ultrack's export reads its own database):
+        # remove one an earlier ultrack run left, so it cannot disagree with the labels.
+        stale_geff = position_dirpath / f"{tracks_stem}.geff"
+        if stale_geff.exists():
+            shutil.rmtree(stale_geff)
+            click.echo(
+                f"Removed {stale_geff.name}, left by an earlier run: {tracker} writes none."
+            )
+        tracks_df.to_csv(position_dirpath / f"{tracks_stem}_{fov}.csv", index=False)
+        with open_ome_zarr(position_dirpath, mode="r+") as position:
+            write_tracking_labels(position.get_label(label_name)["0"], tracking_labels, "2D")
+        click.echo(f"Saved labels and tracks to: {position_dirpath}")
+        return
 
     with open_ome_zarr(position_dirpath, mode="r") as position:
         time_scale = position.scale[0]
@@ -978,16 +1457,43 @@ def track(
     echo_resources(num_cpus, mem_gb, time_minutes)
 
     if init_only:
+        if settings.tracker in ("hoct", "trackastra"):
+            # Fail here, once, rather than in every worker: the image channel resolves
+            # (segment provenance or image_channel) and exists in the plate.
+            config = getattr(settings, f"{settings.tracker}_config")
+            channel = tracker_image_channel(
+                input_position_dirpaths[0], settings.labels, config.image_channel
+            )
+            with open_ome_zarr(str(input_position_dirpaths[0]), mode="r") as dataset:
+                if channel not in dataset.channel_names:
+                    raise ValueError(
+                        f"{settings.tracker} would read channel {channel!r}, which the plate "
+                        f"does not have ({dataset.channel_names}); set image_channel."
+                    )
+        # --init runs once, before the fan-out: the one place to download model weights
+        # into the shared cache without every worker racing to do it.
+        if settings.tracker == "hoct":
+            hoct_solver_config(settings.hoct_config)  # check the solver overrides too
+            warm_hoct_weights(settings.hoct_config.model)
+        if (
+            settings.tracker == "trackastra"
+            and not Path(settings.trackastra_config.model).exists()
+        ):
+            warm_trackastra_weights(settings.trackastra_config.model)
         click.echo(f"Initialized tracking ({len(input_position_dirpaths)} positions)")
         return
 
     track_scale = scale[-2:] if settings.output_mode == "2D" else scale[-3:]
 
-    tracking_cfg = settings.tracking_config
-    tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
-    tracking_cfg["linking_config"]["n_workers"] = num_cpus
-    default_config = MainConfig()
-    tracking_cfg = update_model(default_config, tracking_cfg)
+    tracking_cfg = None
+    if settings.tracker == "ultrack":
+        tracking_cfg = settings.tracking_config
+        tracking_cfg["segmentation_config"]["n_workers"] = num_cpus
+        tracking_cfg["linking_config"]["n_workers"] = num_cpus
+        default_config = MainConfig()
+        tracking_cfg = update_model(default_config, tracking_cfg)
+    # HOCT and Trackastra run their models on a GPU when there is one.
+    use_gpu = settings.tracker in ("hoct", "trackastra")
 
     position_keys = [Path(p).parts[-3:] for p in input_position_dirpaths]
 
@@ -1003,6 +1509,8 @@ def track(
         "slurm_partition": "preempted",
         "slurm_use_srun": False,
     }
+    if use_gpu:
+        slurm_args.update({"slurm_partition": "gpu", "slurm_gpus_per_node": 1})
 
     if sbatch_filepath:
         slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
@@ -1013,7 +1521,7 @@ def track(
     if resolved_cluster == "local":
         # Explicit --sbatch-filepath values (e.g. '#LOCAL --timeout-min') win over
         # the computed local executor parameters.
-        slurm_args = {**local_executor_parameters(time_minutes, gpu=False), **slurm_args}
+        slurm_args = {**local_executor_parameters(time_minutes, gpu=use_gpu), **slurm_args}
     executor.update_parameters(**slurm_args)
 
     click.echo("Submitting jobs...")
@@ -1037,6 +1545,10 @@ def track(
                 output_mode=settings.output_mode,
                 min_sibling_length=settings.min_sibling_length,
                 tracks_stem=settings.tracks_stem,
+                tracker=settings.tracker,
+                tracksdata_config=settings.tracksdata_config,
+                hoct_config=settings.hoct_config,
+                trackastra_config=settings.trackastra_config,
             )
             jobs.append(job)
 

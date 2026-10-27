@@ -33,6 +33,41 @@ labels_sigma: 5.0
 # both that short is kept. Removes short false divisions. Off by default.
 # min_sibling_length: 3
 
+# The linker: ultrack (default; builds its own segmentation hypotheses from the labels'
+# contours and links them, configured by tracking_config below), tracksdata (ILP),
+# hoct (learned edge scores + ILP) or trackastra (transformer links). tracksdata, hoct
+# and trackastra link the instance labels of `labels` as they are, so they need
+# segmentation_method: labels and output_mode: 2D, and they write the tracked labels
+# and the CSV but no tracks.geff yet. Distances are in um; the defaults below are the
+# A549 benchmark's. hoct and trackastra also read the image the labels were segmented
+# from: the first channel `biahub segment` recorded for the label image, or
+# image_channel when set (needed for a label image segment did not write).
+# The tracked labels are the final segmentation: downstream steps should prefer
+# labels/tracks_<labels> over labels/<labels>. Only ultrack changes the masks (merging
+# or splitting segments where that tracks better); the other three keep them as they are.
+# tracker: ultrack
+# tracksdata_config:
+#   distance_threshold_um: 22.66   # candidate edges to the next frame
+#   n_neighbors: 3
+#   distance_norm_um: 11.33        # edge weight = -IoU * exp(distance / distance_norm_um)
+#   node_weight: -2.0
+#   appearance_weight: 5.0
+#   disappearance_weight: 5.0
+#   division_weight: 1.0
+#   border_margin_um: 6.80         # appearing within this distance of the edge ...
+#   border_appearance_weight: -1.0 # ... costs this instead of appearance_weight
+# hoct_config:
+#   model: general_v1              # HOCT registry name or a path to weights
+#   image_channel: null            # default: the channel segment recorded
+#   distance_threshold_um: 33.99
+#   n_neighbors: 5
+#   max_delta_t: 3                 # frames an edge may skip
+#   solver: {}                     # HOCT ILPSolverConfig overrides
+# trackastra_config:
+#   model: general_2d              # pretrained name (general_2d, ctc) or a model folder
+#   mode: greedy                   # greedy | greedy_nodiv | ilp
+#   image_channel: null            # default: the channel segment recorded
+
 # ---------------------------------------------------------------------------
 # Alternative: segmentation_method: foreground_contour (legacy)
 # Replace `labels` / `labels_sigma` above with `target_channel` (the name of the label
@@ -79,7 +114,7 @@ labels_sigma: 5.0
 #           kwargs: {}
 # ---------------------------------------------------------------------------
 
-# Configuration for Ultrack tracking algorithm.
+# Configuration for Ultrack tracking algorithm (used only when tracker: ultrack).
 # See: https://royerlab.github.io/ultrack/
 
 tracking_config:

@@ -261,3 +261,18 @@ def test_skill_config_templates_load():
     assert templates
     for template in templates:
         load_estimate_transform_settings(template)
+
+
+def test_track_skill_templates_load_one_per_tracker():
+    # The track-with-biahub skill copies these into runs; keep them on the current schema.
+    from biahub.utils.config import yaml_to_model
+
+    root = Path(__file__).resolve().parents[1] / ".claude" / "skills" / "track-with-biahub"
+    templates = sorted((root / "templates").glob("track-*.yml"))
+    settings = [yaml_to_model(t, TrackingSettings) for t in templates]
+    assert {s.tracker for s in settings} == {"ultrack", "tracksdata", "hoct", "trackastra"}
+    # The runs share one plate: each writes its own label image and CSVs ...
+    assert len({s.tracked_label for s in settings}) == len(settings)
+    # ... and tracks the label image the A549 segment config writes.
+    segment = Path(__file__).resolve().parents[1] / "nextflow/configs/a549/segment.yml"
+    assert {s.labels for s in settings} <= set(yaml.safe_load(segment.read_text())["models"])

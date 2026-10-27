@@ -15,6 +15,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ImportString,
+    NonNegativeFloat,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
@@ -107,6 +108,77 @@ class ProcessingInputChannel(MyBaseModel):
 TRACKED_LABEL_PREFIX = "tracks_"
 
 
+# Defaults below are the A549 benchmark's pixel settings at 0.1133 um/px (mantis v2),
+# converted to um; biahub converts back with each plate's pixel size.
+
+
+class TracksdataConfig(MyBaseModel):
+    """tracksdata ILP on fixed labels (``tracker: tracksdata``).
+
+    Nodes are the label regions; candidate edges join each region to its
+    ``n_neighbors`` nearest regions of the next frame within ``distance_threshold_um``,
+    weighted ``-IoU * exp(distance / distance_norm_um)``. Regions within
+    ``border_margin_um`` of the image edge appear at ``border_appearance_weight``
+    instead of ``appearance_weight``. Defaults are the A549 benchmark's full-movie run;
+    tune per dataset.
+    """
+
+    distance_threshold_um: PositiveFloat = 22.66
+    n_neighbors: PositiveInt = 3
+    distance_norm_um: PositiveFloat = 11.33
+    node_weight: float = -2.0
+    appearance_weight: float = 5.0
+    disappearance_weight: float = 5.0
+    division_weight: float = 1.0
+    border_margin_um: NonNegativeFloat = 6.80
+    border_appearance_weight: float = -1.0
+
+
+class HoctConfig(MyBaseModel):
+    """HOCT: learned edge scores, then an ILP, on fixed labels (``tracker: hoct``).
+
+    ``model`` is a HOCT registry name (e.g. ``general_v1``) or a path to weights.
+    HOCT runs in pixel space, as its models were trained; ``distance_threshold_um`` is
+    converted with the plate's pixel size. ``solver`` overrides HOCT's
+    ``ILPSolverConfig`` fields.
+    """
+
+    model: str = "general_v1"
+    # The image HOCT scores the label regions on. None (default) takes the first
+    # channel the label image was segmented from, recorded by `biahub segment`; set it
+    # to override that, or when the label image has no segment provenance.
+    image_channel: str | None = None
+    distance_threshold_um: PositiveFloat = 33.99
+    n_neighbors: PositiveInt = 5
+    max_delta_t: PositiveInt = 3
+    solver: dict[str, Any] = {}
+
+    @field_validator("solver")
+    @classmethod
+    def refuse_solver_preference(cls, solver):
+        if solver.get("solver_preference") is not None:
+            raise ValueError(
+                "hoct_config.solver.solver_preference is not supported by the pinned "
+                "tracksdata, which picks Gurobi or SCIP itself (see ilpy's Preference.Any)."
+            )
+        return solver
+
+
+class TrackastraConfig(MyBaseModel):
+    """Trackastra: a transformer predicts the links of fixed labels (``tracker: trackastra``).
+
+    ``model`` is a pretrained name (``general_2d``, ``ctc``) or a path to a trained
+    model folder. ``mode`` links greedily (``greedy``, or ``greedy_nodiv`` without
+    divisions) or with an ILP (``ilp``, via motile and ilpy: Gurobi with a full licence, else SCIP).
+    The model predicts in pixel space and needs no distance settings.
+    """
+
+    model: str = "general_2d"
+    mode: Literal["greedy", "greedy_nodiv", "ilp"] = "greedy"
+    # The image Trackastra reads with the labels; as for hoct_config.image_channel.
+    image_channel: str | None = None
+
+
 class TrackingSettings(MyBaseModel):
     fov: str = "*/*/*"
     blank_frames_path: Path | None = None
@@ -145,6 +217,16 @@ class TrackingSettings(MyBaseModel):
     # daughters are both that short is kept. Removes short false divisions, e.g. a
     # virtual-staining hallucination linked as a daughter. None (default) keeps all.
     min_sibling_length: PositiveInt | None = None
+    # The linker. ultrack (default) builds its own segmentation hypotheses from the
+    # labels' contours (or a foreground/contour map) and links them, configured by
+    # tracking_config; tracksdata, hoct and trackastra link the instance labels of
+    # `labels` as they are, in 2D. Either way the tracked labels (`labels/tracks_<labels>`)
+    # are the final segmentation and are preferred downstream over `labels/<labels>`;
+    # only ultrack can change the masks (it picks among its own hypotheses).
+    tracker: Literal["ultrack", "tracksdata", "hoct", "trackastra"] = "ultrack"
+    tracksdata_config: TracksdataConfig = TracksdataConfig()
+    hoct_config: HoctConfig = HoctConfig()
+    trackastra_config: TrackastraConfig = TrackastraConfig()
 
     @model_validator(mode="before")
     @classmethod
@@ -229,6 +311,20 @@ class TrackingSettings(MyBaseModel):
         of one plate keep their GEFFs and CSVs apart: ``tracks_<output_label>``.
         """
         return "tracks" if self.output_label is None else f"tracks_{self.output_label}"
+
+    @model_validator(mode="after")
+    def check_tracker(self):
+        if self.tracker == "ultrack":
+            return self
+        if self.segmentation_method != "labels":
+            raise ValueError(
+                f"tracker: {self.tracker} links fixed instance labels; set `labels` to the "
+                "label image `biahub segment` wrote (foreground_contour has no instance "
+                "labels)."
+            )
+        if self.output_mode != "2D":
+            raise ValueError(f"tracker: {self.tracker} supports output_mode 2D only.")
+        return self
 
 
 class EdgeGraphSettings(BaseModel):

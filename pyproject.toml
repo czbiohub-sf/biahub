@@ -51,12 +51,25 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose>=4.0.1"]
 
-# Deliberately CPU-only. ultrack has an optional GPU path when cupy and cucim
-# are installed, but it offers no speedup in tracking in our use cases.
+# The trackers `biahub track` can select with `tracker:`: ultrack (default),
+# tracksdata (ILP on fixed labels), HOCT (learned edge scores + ILP) and Trackastra
+# (transformer links; greedy, or ILP via motile). ultrack is deliberately CPU-only: its
+# optional cupy/cucim GPU path offers no speedup in our use cases. HOCT pins
+# gurobipy<13, which has no Python 3.14 wheels, so HOCT installs on Python < 3.14 only.
+# Gurobi is optional: ultrack falls back to CBC, the ilpy-based ILPs to SCIP (which they
+# also use with a token-server licence: ilpy reads its LicenseID 0 as the pip licence).
+# Biohub's token server needs each user added; SCIP can be slow on large problems.
 # geff-spec>=1.3 records related_objects[].node_prop, which links tracks.geff to
 # the label image; geff-spec 1.1 silently drops it, and geff 1.3 itself only caps
 # geff-spec (<1.4), so the floor has to be stated here.
-track = ["ultrack>=0.8", "geff>=1.3", "geff-spec>=1.3"]
+track = [
+  "ultrack>=0.8",
+  "geff>=1.3",
+  "geff-spec>=1.3",
+  "tracksdata",
+  "hoct>=0.3; python_version < '3.14'",
+  "trackastra[ilp]",
+]
 
 # PyQt6>=6.10 does not provide wheels
 gui = ["napari[pyqt6]", "PyQt6<6.10", "napari-animation"]
@@ -104,6 +117,10 @@ index-strategy = "unsafe-best-match"
 override-dependencies = [
   "iohub @ git+https://github.com/czbiohub-sf/iohub@c9c85b9372b5c7fbc902ef0954c7529bc3fa80a5",
 ]
+# ultrack needs gurobipy on every Python; HOCT (Python < 3.14 only) pins it below 13,
+# whose wheels stop at 3.13. Keep gurobipy 13 on 3.14 so the track extra still installs
+# there; this forks the resolution by Python version.
+constraint-dependencies = ["gurobipy>=13; python_version >= '3.14'"]
 
 [tool.uv.sources]
 # Private repo, no PyPI release. HTTPS rather than ssh so that installing the
@@ -156,6 +173,10 @@ ultrack = { git = "https://github.com/ieivanov/ultrack", rev = "69e7589a050b0aa5
 # contains them.
 #
 iohub = { git = "https://github.com/czbiohub-sf/iohub", rev = "c9c85b9372b5c7fbc902ef0954c7529bc3fa80a5" }
+
+# tracksdata has no stable release yet (0.1.0 release candidates); pin the commit the
+# A549 benchmark used.
+tracksdata = { git = "https://github.com/royerlab/tracksdata", rev = "e13cf379b5127deeb8301ce56410fda35b5a3cf9" }
 
 # Pin waveorder to the main commit that merged mehta-lab/waveorder#583, which
 # runs apply-inv-tf through iohub's process_single_position with resume (on top
