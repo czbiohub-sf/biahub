@@ -402,3 +402,45 @@ def test_every_method_is_named_like_its_settings_section():
     assert {m: METHOD_BLOCKS[m] for m in get_args(EstimationMethod)} == {
         m: m for m in get_args(EstimationMethod) if m in METHOD_BLOCKS
     }
+
+
+def _stage(block, error=None, won=False):
+    matrix = None if error else [[float(i == j) for j in range(4)] for i in range(4)]
+    return {"block": block, "matrix": matrix, "score": None, "error": error, "won": won}
+
+
+def test_a_failed_block_is_named_with_what_was_kept_instead():
+    from biahub.registration.engine import block_failure
+
+    stages = [
+        _stage("1:phase_cross_corr", won=True),
+        _stage("2:nuclei_matching", error="too few matches"),
+        _stage("3:ants", error="not run: an earlier block failed"),
+    ]
+    assert block_failure(stages) == (
+        "block 2:nuclei_matching failed (too few matches); "
+        "kept block 1:phase_cross_corr's result"
+    )
+    assert block_failure([_stage("1:a", won=True), _stage("2:b")]) is None
+    assert block_failure(None) is None
+
+
+def test_a_timepoint_whose_block_failed_is_unreliable_and_says_why():
+    # A stack whose nuclei block failed kept the tiles block's identity z; only
+    # blocks[].error said so, and the entry was `accepted`.
+    from biahub.core.transform import Transform
+    from biahub.estimate_transform import transform_entries
+    from biahub.registration.engine import SeriesResult
+
+    failed = [_stage("1:phase_cross_corr", won=True), _stage("2:nuclei_matching", "no nodes")]
+    ok = [_stage("1:phase_cross_corr"), _stage("2:nuclei_matching", won=True)]
+    result = SeriesResult(scores={0: 0.9, 1: 0.9}, blocks={0: failed, 1: ok})
+    entries = transform_entries(result, [0, 1], [Transform.identity(3)] * 2, hard_fail=0.0)
+    assert entries[0].status == "unreliable"
+    assert "2:nuclei_matching failed (no nodes)" in entries[0].note
+    assert (entries[1].status, entries[1].note) == ("accepted", None)
+
+    # a repair that replaced the estimate replaced its blocks too
+    result.provenance[0] = "consensus_full"
+    entries = transform_entries(result, [0, 1], [Transform.identity(3)] * 2, hard_fail=0.0)
+    assert (entries[0].status, entries[0].note) == ("accepted", None)

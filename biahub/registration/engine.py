@@ -1681,6 +1681,19 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
     }
 
 
+def block_failure(stages: list[dict] | None) -> str | None:
+    """Say which block of a stack failed and whose result was kept instead, or None.
+
+    Blocks after a failed one are "not run"; the first failure is the one to report.
+    """
+    failed = next((s for s in stages or [] if s["matrix"] is None and s["error"]), None)
+    if failed is None:
+        return None
+    kept = next((s["block"] for s in stages if s["won"]), None)
+    message = f"block {failed['block']} failed ({failed['error']})"
+    return f"{message}; kept block {kept}'s result" if kept else message
+
+
 def _blocks_summary(blocks: dict[int, list[dict]]) -> dict:
     """Return, per block of a stack, how often it won or failed and its median score."""
     summary = {}
@@ -1868,6 +1881,8 @@ def flag_run(
         line = f"t={t}: score={result.scores[t]:.4f}"
         if t in result.errors:
             line += f"  estimate failed: {result.errors[t]}"
+        elif failure := block_failure(result.blocks.get(t)):
+            line += f"  WARNING {failure}"
         click.echo(line)
 
     flag = settings.fallback.flag

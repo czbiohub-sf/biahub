@@ -39,6 +39,7 @@ from biahub.cli.parsing import (
 from biahub.registration.engine import (
     JOB_FAILED_PREFIX,
     SeriesResult,
+    block_failure,
     estimate_transform_series,
     finalize_run,
     flag_run,
@@ -61,7 +62,8 @@ def transform_entries(
 
     A timepoint is `unreliable` when the pipeline found no good transform for it: none
     at all (the entry is a stand-in -- the input seed -- and `note` says why), no score,
-    or flagged and still below `hard_fail` after repair and sweep. Otherwise `accepted`.
+    a stack block that failed (`note` names it and the block kept instead), or flagged and
+    still below `hard_fail` after repair and sweep. Otherwise `accepted`.
 
     A single timepoint (manual, `time_indices: 0`) is the series' transform: one entry
     without `t`, which `apply-transform` applies to every timepoint.
@@ -71,8 +73,12 @@ def transform_entries(
         score = result.scores.get(t)
         finite = score is not None and np.isfinite(score)
         filled_from = result.filled_from.get(t)
+        # a repair or sweep replaced the estimate, and its blocks with it
+        replaced = filled_from is not None or t in result.provenance
+        failure = None if replaced else block_failure(result.blocks.get(t))
         unreliable = (
             filled_from is not None
+            or failure is not None
             or not finite
             or (t in result.flagged and score < hard_fail)
         )
@@ -86,8 +92,9 @@ def transform_entries(
                 repaired_from=result.provenance.get(t),
                 status="unreliable" if unreliable else "accepted",
                 filled_from=filled_from,
-                # why there is no transform of its own (estimate error, job cancelled, ...)
-                note=result.errors.get(t) if filled_from is not None else None,
+                # why there is no transform of its own (estimate error, job cancelled, ...),
+                # or which block of a stack failed and whose result stands in for it
+                note=result.errors.get(t) if filled_from is not None else failure,
             )
         )
     return entries
