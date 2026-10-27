@@ -37,7 +37,7 @@ params.benchmark_mem_gb = 48
 params.benchmark_time_minutes = 120
 
 include { check_environment } from './modules/common'
-include { benchmark_estimate; benchmark_evaluate } from './modules/registration'
+include { benchmark_estimate; benchmark_evaluate; estimate_config_files } from './modules/registration'
 
 def as_list(value) {
     return value instanceof List ? value : [value]
@@ -103,7 +103,7 @@ workflow {
             runs << [
                 c.name, p.name, resolve(c.moving, base),
                 c.reference ? resolve(c.reference, base) : '',
-                as_list(c.estimate_positions), config, file(config), "${dir}/transforms.yml",
+                as_list(c.estimate_positions), config, estimate_config_files(config), "${dir}/transforms.yml",
             ]
         }
     }

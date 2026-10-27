@@ -58,6 +58,26 @@ def step_error_strategy(task) {
     return task.exitStatus in (130..145) + [Integer.MAX_VALUE] ? 'retry' : 'terminate'
 }
 
+// The estimate config and the files it reads (transform.seed_file), staged as each
+// task's `config_file` so an edit to any of them reruns the tasks (#397): the seed file is
+// an earlier result the estimate starts from, and the config only names it.
+def estimate_config_files(config) {
+    def files = [file(config)]
+    def settings = new org.yaml.snakeyaml.Yaml().load(file(config).text)
+    def seed = null
+    if (settings instanceof Map && settings.transform instanceof Map) {
+        seed = settings.transform.seed_file
+    }
+    if (seed) {
+        def seed_path = seed.toString()
+        if (!new File(seed_path).isAbsolute()) {
+            seed_path = "${file(config).parent}/${seed_path}"
+        }
+        files << file(seed_path)
+    }
+    return files
+}
+
 // One task's resources as a plain map of ints, the shape parse_resources returns.
 def task_resources(res) {
     return [cpus: res.cpus as int, mem_gb: res.mem_gb as int, time_minutes: res.time_minutes as int]
@@ -90,7 +110,7 @@ process init_estimate_transform {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
     val trigger
 
@@ -123,7 +143,7 @@ process estimate_timepoints {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
 
     output:
@@ -146,7 +166,7 @@ process flag_position {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
 
     output:
@@ -180,7 +200,7 @@ process refine_timepoint {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
 
     output:
@@ -201,7 +221,7 @@ process finalize_estimate_transform {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
 
     output:
@@ -496,7 +516,7 @@ process benchmark_estimate {
 
     input:
     tuple val(case_name), val(pipeline), val(moving), val(reference), val(estimate_positions),
-        val(config), path(config_file), val(transforms)
+        val(config), path(config_file, stageAs: 'estimate_inputs/?/*'), val(transforms)
 
     output:
     tuple val(case_name), val(pipeline), val(transforms), env('TRANSFORMS_HASH')

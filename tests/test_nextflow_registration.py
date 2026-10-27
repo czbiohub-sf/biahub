@@ -398,3 +398,53 @@ def test_registration_nf_applies_a_channel_whose_name_has_an_apostrophe(tmp_path
     )  # fmt: skip
     with open_ome_zarr(tmp_path / "run" / "data.zarr" / "A" / "1" / "0") as position:
         assert "5'EU" in position.channel_names
+
+
+def test_registration_nf_reruns_the_estimate_when_its_seed_file_is_edited(tmp_path):
+    # transform.seed_file is named by the config; the seed file itself is staged too, so
+    # rewriting it in place reruns the estimate instead of reusing the old seed's results.
+    import json
+
+    from biahub.core.transform import Transform
+    from biahub.settings import TransformEntry, TransformSettings
+    from biahub.utils.config import yaml_to_model
+
+    plate = _beads_plate(tmp_path)
+    store = plate.parents[2]
+    seed_file = tmp_path / "plate.yml"
+
+    def write_seed(inverse_shift):
+        model_to_yaml(
+            TransformSettings(
+                direction="inverse",
+                moving_channels=["GFP"],
+                reference_channel="Phase3D",
+                transforms=[
+                    TransformEntry(matrix=Transform.from_translation(inverse_shift).to_list())
+                ],
+            ),
+            seed_file,
+        )
+
+    write_seed(APPLIED_SHIFT_ZYX)
+    config = _write_config(tmp_path)
+    settings = yaml_to_model(config, EstimateTransformSettings)
+    settings.transform.seed_file = "plate.yml"  # relative to the config
+    model_to_yaml(settings, config)
+    params = (
+        "--moving", store, "--reference", store, "--estimate_config", config,
+        "--estimate_positions", "A/1/0", "--output", tmp_path / "run", "-resume",
+    )  # fmt: skip
+
+    def seed_x():
+        seeds = json.loads((tmp_path / "run" / "transforms" / "seeds.json").read_text())
+        return seeds["0"][2][3]  # forward x translation the run started from
+
+    _nextflow(tmp_path, *params)
+    assert seed_x() == pytest.approx(-APPLIED_SHIFT_ZYX[2])
+    entries = load_transform_settings(tmp_path / "run" / "transforms.yml").transforms
+    assert {e.seeded_from for e in entries} <= {"seed_file", "seed_file+refined"}
+
+    write_seed((0.0, 0.0, 0.0))  # same path, new contents
+    _nextflow(tmp_path, *params)
+    assert seed_x() == pytest.approx(0.0)
