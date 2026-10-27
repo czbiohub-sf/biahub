@@ -46,7 +46,7 @@ from biahub.registration.engine import (
     init_run,
     run_timepoint_jobs,
 )
-from biahub.registration.evaluate import pool_transforms
+from biahub.registration.planning import pool_transforms
 from biahub.settings import (
     TransformEntry,
     TransformSettings,

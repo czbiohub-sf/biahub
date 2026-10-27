@@ -28,7 +28,7 @@ def _estimates(per_position=0.0, per_time=0.0):
     ],
 )
 def test_the_spread_says_how_many_transforms(per_position, per_time, choice):
-    from biahub.registration.evaluate import transform_spread
+    from biahub.registration.planning import transform_spread
 
     spread = transform_spread(_estimates(per_position, per_time), SHAPE, UM)
     assert spread["choice"] == choice
@@ -39,7 +39,7 @@ def test_the_spread_says_how_many_transforms(per_position, per_time, choice):
 
 
 def test_the_tolerance_can_be_set_and_the_worst_pair_is_named():
-    from biahub.registration.evaluate import transform_spread
+    from biahub.registration.planning import transform_spread
 
     estimates = _estimates(per_position=3.0)
     spread = transform_spread(estimates, SHAPE, UM, tolerance_um=1.0)
@@ -48,7 +48,7 @@ def test_the_tolerance_can_be_set_and_the_worst_pair_is_named():
 
 
 def test_one_sample_on_an_axis_cannot_show_spread_there():
-    from biahub.registration.evaluate import transform_spread
+    from biahub.registration.planning import transform_spread
 
     one_time = {k: v for k, v in _estimates(3.0, 3.0).items() if k[1] == 0}
     spread = transform_spread(one_time, SHAPE, UM)
@@ -57,7 +57,7 @@ def test_one_sample_on_an_axis_cannot_show_spread_there():
 
 
 def test_the_worst_position_pair_says_when():
-    from biahub.registration.evaluate import transform_spread
+    from biahub.registration.planning import transform_spread
 
     spread = transform_spread(_estimates(per_position=3.0), SHAPE, UM)
     assert spread["worst_positions_t"] in TIMES
@@ -66,7 +66,7 @@ def test_the_worst_position_pair_says_when():
 def test_the_default_tolerance_is_in_um_not_voxels():
     # Half a voxel (0.05 µm at DragonFly's 0.1 µm pixels) is exceeded by any two
     # independent estimates, so "per position" came out almost every time.
-    from biahub.registration.evaluate import transform_spread
+    from biahub.registration.planning import transform_spread
 
     spread = transform_spread(_estimates(per_position=1.0), SHAPE, UM)  # 0.2 µm apart
     assert spread["tolerance_um"] == 0.5
@@ -75,7 +75,7 @@ def test_the_default_tolerance_is_in_um_not_voxels():
 
 def test_yx_and_z_are_judged_apart():
     # DragonFly: yx agreed across positions to ~0.3 µm, z varied by ~1.4 µm.
-    from biahub.registration.evaluate import transform_spread
+    from biahub.registration.planning import transform_spread
 
     estimates = {
         (p, 0): Transform.from_translation([8.0 + 5.0 * i, 3.0, 5.0 + 0.5 * i])
