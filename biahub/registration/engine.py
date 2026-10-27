@@ -44,10 +44,8 @@ from biahub.registration.estimators import (
 )
 from biahub.registration.methods.intensity.ants import AntsEstimator, use_task_threads
 from biahub.registration.methods.intensity.focus_finding import FocusEstimator
-from biahub.registration.methods.intensity.phase_cross_corr import (
-    LocalPCCEstimator,
-    PCCEstimator,
-)
+from biahub.registration.methods.intensity.local_phase_cross_corr import LocalPCCEstimator
+from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
 from biahub.registration.methods.interactive.manual import ManualEstimator
 from biahub.registration.methods.landmark.bead_matching import (
     NodeGraphEstimator,
