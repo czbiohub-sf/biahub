@@ -60,6 +60,28 @@ Every decision -- accept or flag, repair, the competitions -- uses one score per
 Beads matching is deterministic but depends on where it starts: on a drifting series,
 `previous_timepoint` finds better correspondences at hard timepoints.
 
+## One transform for the plate, or one per position: `pool` and `transform.seed_file`
+
+- `pool: {z: medoid | median}`: estimate on several positions and write ONE shared
+  transform, the medoid of their accepted estimates (the one closest to all the others;
+  a real estimate, not an average). `z: median` keeps its yx and moves z to the positions'
+  median depth (a plate whose yx agrees and whose z varies by FOV, e.g. DragonFly). Each
+  position's own estimate stays in the run folder (`per_position.yml`) for
+  `evaluate-transform`; the entry's note gives the median gap to the medoid and the
+  widest pair. Choose spread-out positions (`survey_positions`, `select_positions`).
+- `transform.seed_file: <transforms file>`: start each position (and timepoint) from an
+  earlier result instead of `transform.seed`. The estimate from it wins only if it
+  scores strictly better, so a run never ends worse than the file; entries record
+  `seeded_from`. A relative path is read from the config's folder; an edited file reruns
+  the estimate (CLI fingerprint and Nextflow staging). Not with `seed_from:
+  previous_timepoint`.
+
+Plate then positions: pool a few positions into `plate/transforms.yml`, evaluate it on
+held-out positions; if one transform is not enough (`transform_spread`'s `choice_z` /
+`choice_yx`), estimate every position with `seed_file: plate/transforms.yml`. Use a
+continuous score (`residual` for beads, an intensity metric otherwise) there: the beads
+`overlap` score ties corrections under its 6-voxel radius, and a tie keeps the seed.
+
 ## ANTs
 
 **How it works.** ANTs registers the moving volume onto the reference starting from
