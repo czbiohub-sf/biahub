@@ -487,6 +487,11 @@ def optimize_transform(
         return transform, quality_score_approx
 
 
+# How the evaluation pairs this method's landmarks: (radius in µm, axes it is measured on).
+# Beads are points: a partner within 1 µm in 3D.
+POINT_MATCHING = (1.0, "zyx")
+
+
 def detect_beads(
     volume: ArrayLike,
     voxel_um: tuple,

@@ -22,6 +22,10 @@ from biahub.registration.estimators import ScoreFn, fit_pairs
 from biahub.registration.methods.landmark.bead_matching import NodeGraphEstimator
 from biahub.settings import AffineTransformSettings, BeadsMatchSettings, NucleiSettings
 
+# How the evaluation pairs this method's landmarks: (radius in µm, axes it is measured on).
+# Nuclei are long in z: they pair up in yx within 3 µm and their z is compared afterwards.
+POINT_MATCHING = (3.0, "yx")
+
 
 def detect_nuclei(
     volume: ArrayLike,

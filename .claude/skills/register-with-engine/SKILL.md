@@ -204,8 +204,8 @@ plot_evaluation(record, path="<out>/evaluation/<fov>_t<t>.png", title="<dataset>
 json.dump(record.to_dict(), open("<out>/evaluation/<fov>_t<t>.json", "w"), indent=1)
 ```
 
-Landmarks detected or given are `Landmarks` (`.points_vox`: N x 3 voxel z, y, x, plus
-`.voxel_um`); `evaluate(..., landmarks=(moving, reference))` takes a pair you built.
+Clicked landmarks are two N x 3 arrays of voxel z, y, x, one per channel, paired row by
+row: `evaluate(..., landmarks=(moving_points, reference_points))`.
 
 - `landmarks`: `"beads"` on a beads well (`detect_kwargs={"threshold_abs": ...}`, from the
   config's peak settings), `"nuclei"` when the moving channel shows nuclei (DAPI, H2B onto

@@ -77,20 +77,15 @@ def test_residual_affine_needs_enough_points():
 
 from biahub.registration.methods.landmark.bead_matching import detect_beads  # noqa: E402
 from biahub.registration.methods.landmark.nuclei_matching import detect_nuclei  # noqa: E402
-from biahub.registration.metrics import Landmarks, point_residuals  # noqa: E402
+from biahub.registration.metrics import point_residuals  # noqa: E402
 
 
-def test_clicked_pairs_are_matched_by_their_ids_not_by_distance():
+def test_clicked_pairs_are_matched_row_by_row_not_by_distance():
     # A person clicked point i in both channels: the correspondence is known, even where
     # another point is closer.
-    ref = Landmarks(
-        np.array([[10.0, 100, 100], [10, 110, 100], [20, 500, 500]]),
-        VOX,
-        "manual",
-        pair_ids=[0, 1, 2],
-    )
-    mov = Landmarks(ref.points_vox + [0.0, 3.0, 0.0], VOX, "manual", pair_ids=[0, 1, 2])
-    r = point_residuals(Transform.identity(3), mov, ref)
+    ref = np.array([[10.0, 100, 100], [10, 110, 100], [20, 500, 500]])
+    mov = ref + [0.0, 3.0, 0.0]
+    r = point_residuals(Transform.identity(3), mov, ref, VOX, paired=True)
     assert r["n_matched"] == 3
     np.testing.assert_allclose(r["stats"]["median_zyx_um"], [0.0, -3 * 0.103, 0.0])
 
@@ -103,12 +98,10 @@ def test_detected_points_match_mutual_nearest_within_the_radius():
     truth = _similarity((1.0, 0.96, 0.96), 0.2, (2.0, 40.0, 30.0))  # forward: mov -> ref
     mov_pts = truth.invert().apply_points(ref_pts) + rng.normal(0, 0.2, ref_pts.shape)
     mov_pts = np.vstack([mov_pts, [[30.0, 1000.0, 1000.0]]])  # an unmatched extra bead
-    ref_l, mov_l = Landmarks(ref_pts, VOX, "beads"), Landmarks(mov_pts, VOX, "beads")
-
-    good = point_residuals(truth, mov_l, ref_l)
+    good = point_residuals(truth, mov_pts, ref_pts, VOX)  # beads: within 1 µm in zyx
     assert good["n_matched"] >= 78 and good["n_mov"] == 81
     assert good["stats"]["median_um"] < 0.1
-    off = point_residuals(Transform.identity(3), mov_l, ref_l)
+    off = point_residuals(Transform.identity(3), mov_pts, ref_pts, VOX)
     assert off["n_matched"] < 10  # far beyond the 1 µm radius: nothing pairs up
 
 
@@ -274,14 +267,9 @@ def test_tiles_and_z_share_one_prepared_pair(monkeypatch):
 # --- layer 4: one record per position and timepoint ---------------------------------------
 
 
-def _clicked(points_ref, shift_zyx, voxel_um):
+def _clicked(points_ref, shift_zyx):
     """Clicked pairs: the same structures in both channels, the moving ones at p + shift."""
-    from biahub.registration.metrics import Landmarks
-
-    ids = list(range(len(points_ref)))
-    mov = Landmarks(np.asarray(points_ref) + shift_zyx, voxel_um, "manual", ids)
-    ref = Landmarks(points_ref, voxel_um, "manual", ids)
-    return mov, ref
+    return np.asarray(points_ref) + shift_zyx, np.asarray(points_ref)
 
 
 def test_evaluate_reads_every_layer_against_the_unregistered_pair():
@@ -294,7 +282,7 @@ def test_evaluate_reads_every_layer_against_the_unregistered_pair():
     mov = _ndi_shift(ref, shift_zyx, order=1, mode="nearest")
     exact = Transform.from_translation([-s for s in shift_zyx])
     grid = np.stack(np.meshgrid([8, 16, 24], [40, 128, 216], [40, 128, 216], indexing="ij"))
-    landmarks = _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx, VOX3)
+    landmarks = _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx)
 
     record = evaluate(exact, mov, ref, VOX3, VOX3, landmarks=landmarks, tile_px=64, crop_px=96)
     assert record.geometry["translation_um"] == pytest.approx([-0.4, -0.309, 0.206])
@@ -354,10 +342,10 @@ def test_records_keep_each_residual_where_it_was_measured():
 
     shift_zyx = (0.0, 3.0, -2.0)
     grid = np.stack(np.meshgrid([8, 16], [40, 128, 216], [40, 128, 216], indexing="ij"))
-    mov_marks, ref_marks = _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx, VOX3)
-    points = point_residuals(Transform.identity(3), mov_marks, ref_marks)
+    mov_marks, ref_marks = _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx)
+    points = point_residuals(Transform.identity(3), mov_marks, ref_marks, VOX3, paired=True)
     um = np.asarray(VOX3)
-    np.testing.assert_allclose(points["residuals"]["position_um"], ref_marks.points_vox * um)
+    np.testing.assert_allclose(points["residuals"]["position_um"], ref_marks * um)
     np.testing.assert_allclose(
         points["residuals"]["diff_um"], -np.multiply(shift_zyx, um)[None].repeat(18, 0)
     )
@@ -402,9 +390,7 @@ def _record(images=True, landmarks=True):
     shift_zyx = (1.0, 3.0, -2.0)
     mov = _ndi_shift(ref, shift_zyx, order=1, mode="nearest")
     grid = np.stack(np.meshgrid([8, 16], [40, 128, 216], [40, 128, 216], indexing="ij"))
-    marks = (
-        _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx, VOX3) if landmarks else None
-    )
+    marks = _clicked(grid.reshape(3, -1).T.astype(float), shift_zyx) if landmarks else None
     exact = Transform.from_translation([-s for s in shift_zyx])
     return evaluate(
         exact, mov, ref, VOX3, VOX3, landmarks=marks, images=images, tile_px=64, crop_px=96
@@ -503,7 +489,7 @@ def test_z_from_too_few_points_falls_back_to_the_crops_and_says_why():
 
     ref = _cells(16, shape=(40, 256, 256))
     mov = _ndi_shift(ref, (2.0, 0.0, 0.0), order=1, mode="nearest")
-    few = _clicked(np.array([[20.0, 60.0, 60.0], [20.0, 190.0, 190.0]]), (2.0, 0.0, 0.0), VOX3)
+    few = _clicked(np.array([[20.0, 60.0, 60.0], [20.0, 190.0, 190.0]]), (2.0, 0.0, 0.0))
     record = evaluate(
         Transform.identity(3), mov, ref, VOX3, VOX3, landmarks=few, tile_px=64, crop_px=96
     )
@@ -591,7 +577,6 @@ def test_the_residual_affine_is_the_map_left_on_the_mapped_points():
     )
     ref_pts = grid.reshape(3, -1).T
     centre = np.array([20.0, 1000.0, 1000.0])
-    ids = list(range(len(ref_pts)))
     for moving, scale, angle in (
         (centre + 0.8 * (ref_pts - centre), 1.25, 0.0),
         (
@@ -601,9 +586,9 @@ def test_the_residual_affine_is_the_map_left_on_the_mapped_points():
             2.0,
         ),
     ):
-        mov = Landmarks(moving, VOX, "manual", ids)
-        ref = Landmarks(ref_pts, VOX, "manual", ids)
-        affine = point_residuals(Transform.identity(3), mov, ref)["affine"]
+        affine = point_residuals(Transform.identity(3), moving, ref_pts, VOX, paired=True)[
+            "affine"
+        ]
         np.testing.assert_allclose(affine["scale_zyx"][1:], [scale, scale], atol=1e-6)
         assert affine["rotation_yx_deg"] == pytest.approx(angle, abs=1e-6)
 

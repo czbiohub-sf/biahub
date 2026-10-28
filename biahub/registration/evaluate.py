@@ -16,10 +16,13 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
+from biahub.registration.methods.landmark.bead_matching import POINT_MATCHING as BEADS_MATCHING
 from biahub.registration.methods.landmark.bead_matching import detect_beads
+from biahub.registration.methods.landmark.nuclei_matching import (
+    POINT_MATCHING as NUCLEI_MATCHING,
+)
 from biahub.registration.methods.landmark.nuclei_matching import detect_nuclei
 from biahub.registration.metrics import (
-    Landmarks,
     point_residuals,
     prepare_pair,
     tile_residuals,
@@ -114,37 +117,47 @@ def display_projections(transform: Transform, mov: ArrayLike, ref: ArrayLike) ->
     }
 
 
-LANDMARK_DETECTORS = {"nuclei": detect_nuclei, "beads": detect_beads}
+# The landmark kinds, each detected and paired as its method says.
+LANDMARK_DETECTORS = {
+    "nuclei": (detect_nuclei, NUCLEI_MATCHING),
+    "beads": (detect_beads, BEADS_MATCHING),
+}
 
 
-def _detect(source: str, volume, voxel_um, **kwargs) -> Landmarks:
-    """Landmarks of `source` ("beads" or "nuclei") found in `volume` by its method's detector."""
-    points = LANDMARK_DETECTORS[source](volume, voxel_um, **kwargs)
-    return Landmarks(points, tuple(voxel_um), source)
+def detect_landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs) -> dict | None:
+    """Return both volumes' landmark points and how to pair them, or None.
 
-
-def detect_landmarks(landmarks, mov, ref, mov_um, ref_um, detect_kwargs) -> tuple | None:
-    """Return (moving, reference) `Landmarks`: detected for "beads" / "nuclei", or as given.
-
-    `detect_kwargs` hold one set of detector settings for both, or {"moving": {...},
-    "reference": {...}}. None (no landmarks) and a ready pair pass through.
+    `landmarks`: "beads" / "nuclei" (detected in each volume by its method's detector and
+    paired by its rule), a (moving, reference) pair of N x 3 voxel arrays a person clicked
+    (paired row by row), an earlier result (passed through) or None. `detect_kwargs` hold
+    one set of detector settings for both, or {"moving": {...}, "reference": {...}}.
+    Returns {"mov", "ref", "source", "radius_um", "axes", "paired"}.
     """
-    if landmarks is None or isinstance(landmarks, tuple):
+    if landmarks is None or isinstance(landmarks, dict):
         return landmarks
+    if isinstance(landmarks, tuple):
+        mov_points, ref_points = landmarks
+        return {"mov": mov_points, "ref": ref_points, "source": "manual",
+                "radius_um": None, "axes": "zyx", "paired": True}  # fmt: skip
     if landmarks not in LANDMARK_DETECTORS:
         raise ValueError(
             f"landmarks must be one of {sorted(LANDMARK_DETECTORS)}, a (moving, reference) "
-            f"pair of Landmarks or None, got {landmarks!r}"
+            f"pair of clicked points or None, got {landmarks!r}"
         )
+    detect, (radius_um, axes) = LANDMARK_DETECTORS[landmarks]
     kwargs = detect_kwargs or {}
     # one set for both, or {"moving": {...}, "reference": {...}} (e.g. bead thresholds)
     sides = kwargs if set(kwargs) <= {"moving", "reference"} and kwargs else None
     mov_kwargs = sides.get("moving", {}) if sides else kwargs
     ref_kwargs = sides.get("reference", {}) if sides else kwargs
-    return (
-        _detect(landmarks, mov, mov_um, **mov_kwargs),
-        _detect(landmarks, ref, ref_um, **ref_kwargs),
-    )
+    return {
+        "mov": detect(mov, mov_um, **mov_kwargs),
+        "ref": detect(ref, ref_um, **ref_kwargs),
+        "source": landmarks,
+        "radius_um": radius_um,
+        "axes": axes,
+        "paired": False,
+    }
 
 
 def _z(points: dict | None, z_crops: dict | None, points_source: str | None) -> tuple:
@@ -162,7 +175,19 @@ def _z(points: dict | None, z_crops: dict | None, points_source: str | None) -> 
 
 def _measures(transform, mov, ref, ref_um, marks, images, compare, image_kwargs) -> dict:
     """Return layers 2-3 and the z residual for one transform."""
-    points = point_residuals(transform, *marks) if marks is not None else None
+    points = (
+        point_residuals(
+            transform,
+            marks["mov"],
+            marks["ref"],
+            ref_um,
+            marks["radius_um"],
+            marks["axes"],
+            marks["paired"],
+        )  # fmt: skip
+        if marks is not None
+        else None
+    )
     tiles = z_crops = None
     if images:
         tile_kwargs = {k: v for k, v in image_kwargs.items() if k in ("tile_px", "grid")}
@@ -170,7 +195,7 @@ def _measures(transform, mov, ref, ref_um, marks, images, compare, image_kwargs)
         pair = prepare_pair(transform, mov, ref, compare)
         tiles = tile_residuals(transform, mov, ref, ref_um, compare, pair=pair, **tile_kwargs)
         z_crops = z_residuals(transform, mov, ref, ref_um, compare, pair=pair, **crop_kwargs)
-    z_um, z_from = _z(points, z_crops, marks[1].source if marks is not None else None)
+    z_um, z_from = _z(points, z_crops, marks["source"] if marks is not None else None)
     return {
         "points": points,
         "tiles": tiles,
@@ -186,7 +211,7 @@ def evaluate(
     ref: ArrayLike,
     mov_um: tuple,
     ref_um: tuple,
-    landmarks: str | tuple | None = None,
+    landmarks: str | tuple | dict | None = None,
     images: bool = True,
     compare: str = "edges",
     detect_kwargs: dict | None = None,
@@ -196,8 +221,8 @@ def evaluate(
     """Evaluate a forward transform on one moving / reference pair (ZYX volumes).
 
     `landmarks`: "nuclei" or "beads" (detected in both volumes; `detect_kwargs` go to the
-    detector, e.g. beads' `threshold_abs`), a (moving, reference) pair of `Landmarks`
-    (detected elsewhere or clicked), or None. `images` adds layer 3 (`compare`: "edges" or
+    detector, e.g. beads' `threshold_abs`), a (moving, reference) pair of clicked points
+    (N x 3 voxel arrays, paired row by row), an earlier `detect_landmarks` result, or None. `images` adds layer 3 (`compare`: "edges" or
     "intensity"; `tile_px`, `grid`, `crop_px` pass through), the slow part: one warp of
     the moving volume per transform. Thresholds for a verdict are left to the caller.
     `baseline=False` skips the unregistered pair (one warp less).

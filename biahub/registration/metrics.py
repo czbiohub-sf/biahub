@@ -408,71 +408,56 @@ def _residuals(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayLike) 
 
 
 # --- layer 2: point-based residuals -----------------------------------------------------
-# Landmarks seen in both channels (beads, nuclei, or points a person clicked), mapped through
+# Points seen in both channels (beads, nuclei, or points a person clicked), mapped through
 # the transform without warping any image, and compared where they pair up.
-
-
-@dataclass
-class Landmarks:
-    """Points in one volume: N x 3 voxel coordinates (z, y, x), with that volume's voxel size.
-
-    `pair_ids` marks known correspondences (points a person clicked in both channels): the
-    point with id i in the moving set is the one with id i in the reference set. Detected
-    landmarks have none and are matched by distance.
-    """
-
-    points_vox: np.ndarray
-    voxel_um: tuple
-    source: str  # "beads", "nuclei" or "manual"
-    pair_ids: list | None = None
-
-    def __post_init__(self):
-        self.points_vox = np.asarray(self.points_vox, dtype=float).reshape(-1, 3)
-
-
-# Matching radius (µm) and the axes it is measured on, per landmark source. Nuclei are long
-# in z, so they pair up in yx and their z is compared afterwards.
-MATCHING = {"beads": (1.0, "zyx"), "nuclei": (3.0, "yx")}
 
 
 def point_residuals(
     transform: Transform,
-    mov: Landmarks,
-    ref: Landmarks,
-    max_distance_um: float | None = None,
+    mov_points: np.ndarray,
+    ref_points: np.ndarray,
+    ref_um: tuple,
+    radius_um: float = 1.0,
+    axes: str = "zyx",
+    paired: bool = False,
 ) -> dict:
-    """Return how far `transform` leaves each landmark from its partner, in µm.
+    """Return how far `transform` leaves each point from its partner, in µm.
 
-    The moving points are mapped onto the reference (no warping). Clicked points pair by
-    `pair_ids`; detected ones by mutual nearest neighbour within `max_distance_um` (default
-    per source: `MATCHING`). Displacements are reference minus mapped moving, in reference
-    voxels, summarised by `displacement_stats` and `residual_affine`.
+    `mov_points` and `ref_points` are N x 3 voxel coordinates (z, y, x) in their own
+    volumes; the moving ones are mapped onto the reference (no warping), whose voxel size
+    is `ref_um`. `paired` points correspond row by row (points a person clicked in both
+    channels); otherwise they pair by mutual nearest neighbour within `radius_um`, measured
+    on `axes` ("zyx", or "yx" for objects long in z such as nuclei). Displacements are
+    reference minus mapped moving, in reference voxels, summarised by `displacement_stats`
+    and `residual_affine`.
     """
-    mapped = transform.apply_points(mov.points_vox) if len(mov.points_vox) else mov.points_vox
-    if mov.pair_ids is not None and ref.pair_ids is not None:
-        ref_index = {pid: k for k, pid in enumerate(ref.pair_ids)}
-        pairs = [(k, ref_index[pid]) for k, pid in enumerate(mov.pair_ids) if pid in ref_index]
-        i = np.array([p[0] for p in pairs], int)
-        j = np.array([p[1] for p in pairs], int)
-        matched_by = "pair_ids"
+    mov_points = np.asarray(mov_points, dtype=float).reshape(-1, 3)
+    ref_points = np.asarray(ref_points, dtype=float).reshape(-1, 3)
+    mapped = transform.apply_points(mov_points) if len(mov_points) else mov_points
+    if paired:
+        if len(mov_points) != len(ref_points):
+            raise ValueError(
+                f"paired points need one partner each: {len(mov_points)} moving, "
+                f"{len(ref_points)} reference"
+            )
+        i = j = np.arange(len(mov_points))
+        matched_by = "given pairs"
     else:
-        radius, axes = MATCHING.get(ref.source, (1.0, "zyx"))
-        radius = radius if max_distance_um is None else max_distance_um
         cols = slice(1, 3) if axes == "yx" else slice(0, 3)
-        um = np.asarray(ref.voxel_um, float)
+        um = np.asarray(ref_um, float)
         i, j = mutual_nearest(
-            mapped[:, cols] * um[cols], ref.points_vox[:, cols] * um[cols], radius
+            mapped[:, cols] * um[cols], ref_points[:, cols] * um[cols], radius_um
         )
-        matched_by = f"mutual nearest within {radius} um ({axes})"
-    diff = ref.points_vox[j] - mapped[i]
+        matched_by = f"mutual nearest within {radius_um} um ({axes})"
+    diff = ref_points[j] - mapped[i]
     return {
-        "n_mov": int(len(mov.points_vox)),
-        "n_ref": int(len(ref.points_vox)),
+        "n_mov": int(len(mov_points)),
+        "n_ref": int(len(ref_points)),
         "n_matched": int(len(i)),
         "matched_by": matched_by,
-        "stats": displacement_stats(diff, ref.voxel_um),
-        "affine": residual_affine(ref.points_vox[j], diff, ref.voxel_um),
-        "residuals": _residuals(ref.points_vox[j], diff, ref.voxel_um),
+        "stats": displacement_stats(diff, ref_um),
+        "affine": residual_affine(ref_points[j], diff, ref_um),
+        "residuals": _residuals(ref_points[j], diff, ref_um),
     }
 
 
