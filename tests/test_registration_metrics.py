@@ -121,3 +121,18 @@ def test_residual_shift_in_um_scales_each_axis(pair):
         np.sqrt(0.6**2 + 0.3**2 + 0.3**2), abs=0.2
     )
     assert residual_shift(wrong, mov, ref, ref_um=None) == in_vox  # the default: voxels
+
+
+def test_bead_residuals_in_um_scale_each_axis_and_pair_the_same_beads(pair):
+    mov, ref, _truth, wrong = pair
+    peaks = DetectPeaksSettings(
+        threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
+    )
+    settings = BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks)
+    in_vox = bead_alignment_metrics(wrong, mov, ref, settings)
+    in_um = bead_alignment_metrics(wrong, mov, ref, settings, ref_um=(0.2, 0.1, 0.1))
+    # matching stays on the configured radius in voxels: the same beads pair up
+    assert (in_um.n_matched, in_um.overlap) == (in_vox.n_matched, in_vox.overlap)
+    # 3 voxels off on every axis: 0.6 µm in z, 0.3 µm in y and x
+    assert in_um.median_residual == pytest.approx(np.sqrt(0.6**2 + 0.3**2 + 0.3**2), abs=0.15)
+    assert in_vox.median_residual == pytest.approx(np.sqrt(3 * 3.0**2), abs=1.0)

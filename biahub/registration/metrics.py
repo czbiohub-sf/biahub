@@ -43,7 +43,7 @@ class BeadAlignmentMetrics:
     n_ref_peaks: int
     n_matched: int  # reference peaks with a warped moving peak within `radius`
     overlap: float  # beads.overlap_score
-    median_residual: float  # voxels, over matched pairs; nan when none
+    median_residual: float  # voxels (or µm with ref_um), over matched pairs; nan when none
     rms_residual: float
 
     def to_dict(self) -> dict:
@@ -55,10 +55,13 @@ def bead_alignment_metrics(
     mov: ArrayLike,
     ref: ArrayLike,
     beads_match_settings: BeadsMatchSettings,
+    ref_um: tuple | None = None,
 ) -> BeadAlignmentMetrics | None:
     """Warp, re-detect beads, and measure how the two peak sets line up.
 
-    Returns None when peaks cannot be detected on either side.
+    Beads pair within the settings' radius, in voxels. The residuals are in reference
+    voxels, or in µm with the reference's voxel size `ref_um` (each axis scaled). Returns
+    None when peaks cannot be detected on either side.
     """
     radius = beads_match_settings.qc_settings.score_centroid_mask_radius
     ref = np.asarray(ref)
@@ -75,8 +78,12 @@ def bead_alignment_metrics(
     mov_peaks, ref_peaks = (np.asarray(p, dtype=float) for p in peaks)
     if len(mov_peaks) == 0 or len(ref_peaks) == 0:
         return None
-    distances, _ = cKDTree(mov_peaks).query(ref_peaks, distance_upper_bound=radius)
-    matched = distances[np.isfinite(distances)]
+    distances, nearest = cKDTree(mov_peaks).query(ref_peaks, distance_upper_bound=radius)
+    paired = np.isfinite(distances)
+    matched = distances[paired]
+    if ref_um is not None:  # the same pairs, measured in µm
+        gaps = (ref_peaks[paired] - mov_peaks[nearest[paired]]) * np.asarray(ref_um, float)
+        matched = np.linalg.norm(gaps, axis=1)
     return BeadAlignmentMetrics(
         n_mov_peaks=int(len(mov_peaks)),
         n_ref_peaks=int(len(ref_peaks)),
