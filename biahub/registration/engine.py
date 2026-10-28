@@ -56,12 +56,7 @@ from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimato
 from biahub.registration.metrics import (
     PREWARPED,
     bead_alignment_metrics,
-    beads_score_fn,
-    correlation_score,
-    gradient_correlation,
-    normalized_mutual_information,
-    residual_score,
-    score_transform,
+    metric_fn,
 )
 from biahub.registration.policies import (
     ConsensusSeed,
@@ -957,29 +952,14 @@ def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
     return _metric_fn(settings, settings.effective_score_metric, prepare)
 
 
-_INTENSITY_METRIC_FNS = {
-    "mutual_information": normalized_mutual_information,
-    "correlation": correlation_score,
-    "gradient_correlation": gradient_correlation,
-}
-
-
 def _final(settings: EstimateTransformSettings) -> EstimateTransformSettings:
     """Return the config of the method with the last word (a stack's final block)."""
     return settings.stack_settings()[-1] if settings.is_stack else settings
 
 
 def _metric_fn(settings: EstimateTransformSettings, metric: str, prepare=None) -> ScoreFn:
-    """Return one metric as a score function; `prepare` runs after the warp (intensity only)."""
-    beads = _final(settings).bead_matching  # a stack's bead settings: its final block's
-    if metric == "overlap":
-        return lambda transform, mov, ref: score_transform(transform, mov, ref, beads)
-    if metric == "residual":
-        return lambda transform, mov, ref: residual_score(transform, mov, ref, beads)
-    if metric not in _INTENSITY_METRIC_FNS:
-        raise ValueError(f"unknown score metric {metric!r}")
-    fn = _INTENSITY_METRIC_FNS[metric]
-    return lambda transform, mov, ref: fn(transform, mov, ref, prepare=prepare)
+    """Return one metric as a score function, with the bead settings of a stack's final block."""
+    return metric_fn(metric, _final(settings).bead_matching, prepare)
 
 
 def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSettings:
@@ -1014,7 +994,7 @@ def build_beads_estimator(
     front; `spectral_arm` on returns a `CompetingEstimator` of the configured matcher
     and a spectral-acquire-then-refine cascade, the higher-scoring arm wins.
     """
-    score_fn = score_fn or beads_score_fn(beads_match_settings)
+    score_fn = score_fn or metric_fn("overlap", beads_match_settings)
 
     def node_graph(settings: BeadsMatchSettings) -> NodeGraphEstimator:
         return NodeGraphEstimator.from_beads_settings(

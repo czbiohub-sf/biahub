@@ -298,21 +298,32 @@ def correlation_score(
     return float((a * b).sum() / denominator)
 
 
-def beads_score_fn(
-    beads_match_settings: BeadsMatchSettings, metric: str = "overlap"
+# The intensity metrics a score or report can name; they take the score's `prepare`.
+INTENSITY_METRIC_FNS = {
+    "mutual_information": normalized_mutual_information,
+    "correlation": correlation_score,
+    "gradient_correlation": gradient_correlation,
+}
+
+
+def metric_fn(
+    name: str, bead_settings: BeadsMatchSettings | None = None, prepare=None
 ) -> ScoreFn:
-    """Build a bead score function: overlap (production's ratio), residual, or mutual information."""
-    if metric == "overlap":
-        return lambda transform, mov, ref: score_transform(
-            transform, mov, ref, beads_match_settings
-        )
-    if metric == "residual":
-        return lambda transform, mov, ref: residual_score(
-            transform, mov, ref, beads_match_settings
-        )
-    if metric == "mutual_information":
-        return normalized_mutual_information
-    raise ValueError(f"unknown score_metric {metric!r}")
+    """Return the metric a config names as a score function (transform, mov, ref) -> float.
+
+    "overlap" and "residual" are bead metrics (`bead_settings`: the beads method's
+    detection and matching); "mutual_information", "correlation" and
+    "gradient_correlation" are intensity metrics, run after `prepare` (the score's
+    preprocessing) when given.
+    """
+    if name == "overlap":
+        return lambda transform, mov, ref: score_transform(transform, mov, ref, bead_settings)
+    if name == "residual":
+        return lambda transform, mov, ref: residual_score(transform, mov, ref, bead_settings)
+    if name not in INTENSITY_METRIC_FNS:
+        raise ValueError(f"unknown score metric {name!r}")
+    fn = INTENSITY_METRIC_FNS[name]
+    return lambda transform, mov, ref: fn(transform, mov, ref, prepare=prepare)
 
 
 # --- residuals: matched landmarks and image patches, in µm (used by the evaluation) ---
