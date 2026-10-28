@@ -11,9 +11,9 @@ import functools
 
 import numpy as np
 
+from scipy.ndimage import binary_erosion
 from skimage import filters
 
-from biahub.registration.metrics import SOBEL_FOOTPRINT, _away_from_padding
 from biahub.settings import (
     MASK_BLOCKS,
     ClipPercentiles,
@@ -22,6 +22,27 @@ from biahub.settings import (
     PreprocessBlocks,
     Sobel,
 )
+
+# Voxels a 3x3x3 filter (Sobel) reaches: one on each side.
+SOBEL_FOOTPRINT = 1
+
+
+def away_from_padding(mask: np.ndarray, footprint: int) -> np.ndarray:
+    """Return `mask` without the voxels a filter of `footprint` reaches from outside it.
+
+    A filter run on the warped volume sees the edge of the empty padding (or of empty data)
+    as a strong edge; those voxels compare an artefact, not content. The volume's own
+    borders are not padding and are kept.
+    """
+    if footprint <= 0:
+        return mask
+    # every neighbour (26 in 3D, 8 in 2D): a 3x3x3 filter reaches diagonally too
+    return binary_erosion(
+        mask,
+        structure=np.ones((3,) * mask.ndim, dtype=bool),
+        iterations=footprint,
+        border_value=1,
+    )
 
 
 def apply_image_blocks(
@@ -41,7 +62,7 @@ def apply_image_blocks(
         if isinstance(block, ClipPercentiles):
             sample = out
             if where is not None:
-                inside = _away_from_padding(where, reach)
+                inside = away_from_padding(where, reach)
                 # a thin overlap left with nothing: measure the whole overlap
                 sample = out[inside if inside.any() else where]
             low, high = np.nanpercentile(sample, [block.low, block.high])

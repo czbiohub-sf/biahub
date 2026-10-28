@@ -143,7 +143,7 @@ def test_the_padding_margin_covers_diagonal_neighbours():
     # voxels by a rotated padding edge in the score.
     from skimage import filters
 
-    from biahub.registration.metrics import SOBEL_FOOTPRINT, _away_from_padding
+    from biahub.registration.preprocess import SOBEL_FOOTPRINT, away_from_padding
 
     flat = np.full((16, 48, 48), 100.0, dtype=np.float32)
     angle = np.deg2rad(10)
@@ -151,7 +151,7 @@ def test_the_padding_margin_covers_diagonal_neighbours():
     matrix[1:3, 1:3] = [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
     matrix[1:3, 3] = [4.0, -3.0]
     warped = Transform(matrix).apply(flat, reference=flat, order=0)
-    kept = _away_from_padding(warped != 0, SOBEL_FOOTPRINT)
+    kept = away_from_padding(warped != 0, SOBEL_FOOTPRINT)
     assert kept.any()
     assert np.abs(filters.sobel(warped)[kept]).max() == 0
 
