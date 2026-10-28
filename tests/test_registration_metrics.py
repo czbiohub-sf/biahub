@@ -110,3 +110,14 @@ def test_residual_shift_measures_the_remaining_displacement_in_voxels(pair):
     assert normalized_mutual_information(
         truth, mov, ref, sobel=True
     ) > normalized_mutual_information(wrong, mov, ref, sobel=True)
+
+
+def test_residual_shift_in_um_scales_each_axis(pair):
+    # anisotropic voxels: 3 voxels off on every axis is 0.6 µm in z but 0.3 µm in y and x
+    mov, ref, _truth, wrong = pair
+    voxel_um = (0.2, 0.1, 0.1)
+    in_vox = residual_shift(wrong, mov, ref)
+    assert residual_shift(wrong, mov, ref, ref_um=voxel_um) == pytest.approx(
+        np.sqrt(0.6**2 + 0.3**2 + 0.3**2), abs=0.2
+    )
+    assert residual_shift(wrong, mov, ref, ref_um=None) == in_vox  # the default: voxels

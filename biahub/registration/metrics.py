@@ -210,13 +210,16 @@ def gradient_correlation(
     return float((a * b).sum() / denominator) if denominator > 0 else float("nan")
 
 
-def residual_shift(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> float:
-    """Remaining misalignment after `transform`, in voxels, as a displacement not a similarity.
+def residual_shift(
+    transform: Transform, mov: ArrayLike, ref: ArrayLike, ref_um: tuple | None = None
+) -> float:
+    """Remaining misalignment after `transform`, as a displacement not a similarity.
 
     Phase cross-correlation between the Sobel edges of the warped moving volume and the
-    reference; the norm of the recovered shift. A displacement stays interpretable when
-    similarity metrics are depressed by defocus or bleaching (registration-eval's
-    `mch_eshift`), and 0 means aligned regardless of modality.
+    reference; the norm of the recovered shift, in reference voxels, or in µm with the
+    reference's voxel size `ref_um` (each axis scaled before the norm). A displacement
+    stays interpretable when similarity metrics are depressed by defocus or bleaching
+    (registration-eval's `mch_eshift`), and 0 means aligned regardless of modality.
     """
     warped, ref, mask = _overlap_pair(transform, mov, ref)
     inside = away_from_padding(mask, SOBEL_FOOTPRINT)
@@ -226,6 +229,8 @@ def residual_shift(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> floa
     ref_edges = np.where(inside, filters.sobel(ref), 0).astype(np.float32)
     warped_edges = np.where(inside, filters.sobel(warped), 0).astype(np.float32)
     shift, _ = phase_cross_corr(ref_edges, warped_edges)
+    if ref_um is not None:
+        shift = np.asarray(shift, float) * np.asarray(ref_um, float)
     return float(np.linalg.norm(shift))
 
 
