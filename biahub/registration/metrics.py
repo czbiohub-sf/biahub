@@ -1,4 +1,7 @@
-"""Alignment metrics: how well a transform brings `mov` onto `ref`.
+"""Alignment metrics: every measure of how well a transform brings `mov` onto `ref`.
+
+The engine decides with some of them (a score per transform) and the evaluation
+analyses with all of them (residuals in voxels or µm); both call them from here.
 
 Two families, because the pipeline registers across modalities:
 
@@ -22,10 +25,12 @@ import numpy as np
 
 from numpy.typing import ArrayLike
 from scipy.ndimage import binary_erosion
+from scipy.ndimage import shift as ndi_shift
 from scipy.spatial import cKDTree
 from skimage import filters
 
-from biahub.core.transform import Transform
+from biahub.core.nodes.solvers import mutual_nearest
+from biahub.core.transform import Transform, polar, rotation_angles
 from biahub.registration.estimators import ScoreFn
 from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
 from biahub.registration.methods.landmark.bead_matching import overlap_score, peaks_from_beads
@@ -330,3 +335,307 @@ def beads_score_fn(
     if metric == "mutual_information":
         return normalized_mutual_information
     raise ValueError(f"unknown score_metric {metric!r}")
+
+
+# --- residuals: matched landmarks and image patches, in µm (used by the evaluation) ---
+
+# Fewer matched points than this do not constrain an affine residual (12 parameters,
+# fitted to noisy centres: DragonFly nuclei gave a scale of 0.86 from 8 points).
+MIN_POINTS_FOR_AFFINE = 10
+
+
+def displacement_stats(diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
+    """Return statistics of matched residual displacements (N x 3, voxels, ZYX) in µm."""
+    diff = np.asarray(diff_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
+    if len(diff) == 0:
+        return {"n": 0}
+    dist = np.linalg.norm(diff, axis=1)
+    median_zyx = np.median(diff, axis=0)
+    return {
+        "n": int(len(diff)),
+        "median_um": float(np.median(dist)),
+        "p90_um": float(np.percentile(dist, 90)),
+        "median_zyx_um": median_zyx.tolist(),
+        "mad_zyx_um": np.median(np.abs(diff - median_zyx), axis=0).tolist(),
+        "rms_zyx_um": np.sqrt((diff**2).mean(axis=0)).tolist(),
+    }
+
+
+def residual_affine(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
+    """Fit residual displacement = a + B @ mapped position over matched points, in µm.
+
+    `points_vox` are the reference positions and `diff_vox` reference minus mapped moving,
+    so what is left is a map acting on the mapped positions (`points - diff`): fitted
+    there, a moving set at 0.8 x the reference reads a scale of 1.25.
+
+    A residual that grows across the field is a scale or rotation error of the transform,
+    which median distances alone hide; a constant residual is a shift. Returns the residual
+    map's per-axis scale and rotation (1 and 0 for no such error), its shift in µm, and the
+    displacement it accumulates across the extent of the points (`trend_um`, per axis).
+    """
+    diff = np.asarray(diff_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
+    ref = np.asarray(points_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
+    pts = ref - diff  # the mapped positions, where the residual map acts
+    n = int(len(pts))
+    if n < MIN_POINTS_FOR_AFFINE:
+        return {"n": n, "scale_zyx": None, "rotation_yx_deg": None}
+    # positions about their centre: points at one depth (tiles) make a constant column,
+    # which would otherwise share the shift with a false z gradient
+    centre = pts.mean(axis=0)
+    design = np.c_[np.ones(n), pts - centre]
+    coef, *_ = np.linalg.lstsq(design, diff, rcond=None)
+    gradient = coef[1:].T  # diff ~ shift + gradient @ pos
+    shift = coef[0] - gradient @ centre
+    rotation, stretch = polar(np.eye(3) + gradient)
+    _total, yx = rotation_angles(rotation)
+    extent = pts.max(axis=0) - pts.min(axis=0)
+    return {
+        "n": n,
+        "scale_zyx": np.diag(stretch).tolist(),
+        "rotation_yx_deg": yx,
+        "shift_um": shift.tolist(),
+        "trend_um": (gradient @ extent).tolist(),
+    }
+
+
+def _residuals(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
+    """Return each residual with where it was measured, in µm (for the overlays)."""
+    um = np.asarray(voxel_um, float)
+    return {
+        "position_um": (np.asarray(points_vox, float).reshape(-1, 3) * um).tolist(),
+        "diff_um": (np.asarray(diff_vox, float).reshape(-1, 3) * um).tolist(),
+    }
+
+
+# --- layer 2: point-based residuals -----------------------------------------------------
+# Landmarks seen in both channels (beads, nuclei, or points a person clicked), mapped through
+# the transform without warping any image, and compared where they pair up.
+
+
+@dataclass
+class Landmarks:
+    """Points in one volume: N x 3 voxel coordinates (z, y, x), with that volume's voxel size.
+
+    `pair_ids` marks known correspondences (points a person clicked in both channels): the
+    point with id i in the moving set is the one with id i in the reference set. Detected
+    landmarks have none and are matched by distance.
+    """
+
+    points_vox: np.ndarray
+    voxel_um: tuple
+    source: str  # "beads", "nuclei" or "manual"
+    pair_ids: list | None = None
+
+    def __post_init__(self):
+        self.points_vox = np.asarray(self.points_vox, dtype=float).reshape(-1, 3)
+
+
+# Matching radius (µm) and the axes it is measured on, per landmark source. Nuclei are long
+# in z, so they pair up in yx and their z is compared afterwards.
+MATCHING = {"beads": (1.0, "zyx"), "nuclei": (3.0, "yx")}
+
+
+def point_residuals(
+    transform: Transform,
+    mov: Landmarks,
+    ref: Landmarks,
+    max_distance_um: float | None = None,
+) -> dict:
+    """Return how far `transform` leaves each landmark from its partner, in µm.
+
+    The moving points are mapped onto the reference (no warping). Clicked points pair by
+    `pair_ids`; detected ones by mutual nearest neighbour within `max_distance_um` (default
+    per source: `MATCHING`). Displacements are reference minus mapped moving, in reference
+    voxels, summarised by `displacement_stats` and `residual_affine`.
+    """
+    mapped = transform.apply_points(mov.points_vox) if len(mov.points_vox) else mov.points_vox
+    if mov.pair_ids is not None and ref.pair_ids is not None:
+        ref_index = {pid: k for k, pid in enumerate(ref.pair_ids)}
+        pairs = [(k, ref_index[pid]) for k, pid in enumerate(mov.pair_ids) if pid in ref_index]
+        i = np.array([p[0] for p in pairs], int)
+        j = np.array([p[1] for p in pairs], int)
+        matched_by = "pair_ids"
+    else:
+        radius, axes = MATCHING.get(ref.source, (1.0, "zyx"))
+        radius = radius if max_distance_um is None else max_distance_um
+        cols = slice(1, 3) if axes == "yx" else slice(0, 3)
+        um = np.asarray(ref.voxel_um, float)
+        i, j = mutual_nearest(
+            mapped[:, cols] * um[cols], ref.points_vox[:, cols] * um[cols], radius
+        )
+        matched_by = f"mutual nearest within {radius} um ({axes})"
+    diff = ref.points_vox[j] - mapped[i]
+    return {
+        "n_mov": int(len(mov.points_vox)),
+        "n_ref": int(len(ref.points_vox)),
+        "n_matched": int(len(i)),
+        "matched_by": matched_by,
+        "stats": displacement_stats(diff, ref.voxel_um),
+        "affine": residual_affine(ref.points_vox[j], diff, ref.voxel_um),
+        "residuals": _residuals(ref.points_vox[j], diff, ref.voxel_um),
+    }
+
+
+# --- layer 3: image-based residuals -----------------------------------------------------
+# For data without landmarks: local shifts between the warped moving volume and the
+# reference, measured by phase correlation and summarised like matched points.
+
+
+@dataclass
+class ComparablePair:
+    """The warped moving volume and the reference, prepared once for layer 3's measures."""
+
+    warped: np.ndarray
+    ref: np.ndarray
+    has_data: np.ndarray  # where the warped moving volume has data
+    compare: str
+
+
+def prepare_pair(transform: Transform, mov: ArrayLike, ref: ArrayLike, compare: str = "edges"):
+    """Return the pair `tile_residuals` and `z_residuals` compare, to share between them.
+
+    `edges` takes the Sobel magnitude in each volume's own grid before warping, so the
+    empty padding carries no edges and cross-modal pairs compare structure; `intensity`
+    compares the volumes as they are.
+    """
+    if compare not in ("edges", "intensity"):
+        raise ValueError(f"compare must be 'edges' or 'intensity', got {compare!r}")
+    mov = np.nan_to_num(np.asarray(mov, dtype=np.float32))
+    ref = np.nan_to_num(np.asarray(ref, dtype=np.float32))
+    if compare == "edges":
+        mov, ref = filters.sobel(mov).astype(np.float32), filters.sobel(ref).astype(np.float32)
+    if transform.is_identity and mov.shape == ref.shape:
+        # the unregistered pair: an identity warp returns the volume unchanged
+        return ComparablePair(mov, ref, np.ones(ref.shape, dtype=bool), compare)
+    warped = transform.apply(mov, reference=ref)
+    return ComparablePair(warped, ref, transform.coverage(mov.shape, ref.shape), compare)
+
+
+def _pair(transform, mov, ref, compare: str, pair: ComparablePair | None) -> ComparablePair:
+    if pair is None:
+        return prepare_pair(transform, mov, ref, compare)
+    if pair.compare != compare:
+        raise ValueError(f"the pair was prepared for {pair.compare!r}, not {compare!r}")
+    return pair
+
+
+def _zscore(a: np.ndarray) -> np.ndarray:
+    return (a - a.mean()) / (a.std() + 1e-9)
+
+
+def tile_residuals(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    voxel_um: tuple,
+    compare: str = "edges",
+    tile_px: int = 256,
+    grid: int = 7,
+    min_ncc: float = 0.5,
+    max_shift_px: float | None = None,
+    min_coverage: float = 0.95,
+    pair: ComparablePair | None = None,
+) -> dict:
+    """Return local yx residuals over a grid of tiles of the max projections, in µm.
+
+    Each tile of the warped moving projection is phase-correlated with the reference's; a
+    tile counts when it is mostly real data, its shift is plausible (under `max_shift_px`,
+    default a quarter tile) and its shifted copy correlates above `min_ncc`. Displacements
+    follow `point_residuals`' convention (reference minus mapped moving) and are summarised
+    by `displacement_stats` and `residual_affine` (a radial pattern = a scale error).
+    `pair` (from `prepare_pair`) skips preparing the volumes again.
+    """
+    pair = _pair(transform, mov, ref, compare, pair)
+    warped, ref_p, has_data = pair.warped, pair.ref, pair.has_data
+    w_mip, r_mip = warped.max(axis=0), ref_p.max(axis=0)
+    covered = has_data.mean(axis=0) >= 0.5
+    _, ny, nx = ref_p.shape
+    size = min(tile_px, ny, nx)  # a tile fits the image, and is exactly the window's size
+    max_shift = size / 4 if max_shift_px is None else max_shift_px
+    h = size // 2
+    window = np.outer(np.hanning(size), np.hanning(size))
+    points, diffs = [], []
+    # distinct centres only: a tile that fits the image once is one measurement
+    for cy in np.unique(np.linspace(h, ny - (size - h), grid).astype(int)):
+        for cx in np.unique(np.linspace(h, nx - (size - h), grid).astype(int)):
+            tile = (slice(cy - h, cy - h + size), slice(cx - h, cx - h + size))
+            if covered[tile].mean() < min_coverage:
+                continue
+            r, w = r_mip[tile], w_mip[tile]
+            if r.std() == 0 or w.std() == 0:
+                continue
+            r, w = _zscore(r), _zscore(w)
+            shift, _ = phase_cross_corr(r * window, w * window, upsample_factor=10)
+            if np.abs(shift).max() > max_shift:
+                continue
+            # the shared window pulls the peak toward zero shift (~5% short on nuclei):
+            # measure the remainder once more, where that pull is a share of almost nothing
+            moved = ndi_shift(w, shift, order=1, mode="nearest")
+            remainder, _ = phase_cross_corr(r * window, moved * window, upsample_factor=10)
+            shift = shift + remainder
+            if np.abs(shift).max() > max_shift:
+                continue
+            moved = ndi_shift(w, shift, order=1, mode="nearest")
+            if np.corrcoef(r.ravel(), moved.ravel())[0, 1] < min_ncc:
+                continue
+            points.append((ref_p.shape[0] / 2, cy, cx))
+            diffs.append((0.0, *shift))  # moving shifted by `shift` matches: ref - mapped
+    points, diffs = np.array(points).reshape(-1, 3), np.array(diffs).reshape(-1, 3)
+    return {
+        "compare": compare,
+        "n_tiles": int(len(points)),
+        "stats": displacement_stats(diffs, voxel_um),
+        "affine": residual_affine(points, diffs, voxel_um),
+        "residuals": _residuals(points, diffs, voxel_um),
+    }
+
+
+def z_residuals(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    voxel_um: tuple,
+    compare: str = "edges",
+    crop_px: int = 768,
+    min_coverage: float = 0.5,
+    pair: ComparablePair | None = None,
+) -> dict:
+    """Return the residual shift in the centre and 4 corner crops (3D phase correlation), µm.
+
+    Different corners show a tilt (`tilt_dz_um`: the spread of their z residuals). A crop
+    that is mostly padding is skipped; in intensity mode the padding is filled with the
+    crop's median so its edge does not dominate the correlation. `pair` (from
+    `prepare_pair`) skips preparing the volumes again.
+    """
+    pair = _pair(transform, mov, ref, compare, pair)
+    warped, ref_p, has_data = pair.warped, pair.ref, pair.has_data
+    _, ny, nx = ref_p.shape
+    cy, cx = min(crop_px, ny), min(crop_px, nx)
+    starts = {
+        "centre": ((ny - cy) // 2, (nx - cx) // 2),
+        "top_left": (0, 0),
+        "top_right": (0, nx - cx),
+        "bottom_left": (ny - cy, 0),
+        "bottom_right": (ny - cy, nx - cx),
+    }
+    um = np.asarray(voxel_um, float)
+    crops = {}
+    for name, (y0, x0) in starts.items():
+        box = (slice(None), slice(y0, y0 + cy), slice(x0, x0 + cx))
+        w, r, cov = warped[box], ref_p[box], has_data[box]
+        if cov.mean() < min_coverage or r.std() == 0 or w[cov].std() == 0:
+            crops[name] = None
+            continue
+        if compare == "intensity":
+            w = np.where(cov, w, np.median(w[cov]))
+        shift, _ = phase_cross_corr(_zscore(r), _zscore(w), upsample_factor=10)
+        crops[name] = (np.asarray(shift) * um).tolist()
+    # one value per distinct place: corners of a crop as big as the image are one place
+    corner_dz = list(
+        {starts[k]: v[0] for k, v in crops.items() if k != "centre" and v is not None}.values()
+    )
+    return {
+        "compare": compare,
+        "crops_um": crops,
+        "tilt_dz_um": float(max(corner_dz) - min(corner_dz)) if len(corner_dz) > 1 else None,
+    }

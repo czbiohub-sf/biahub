@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.evaluate import displacement_stats, residual_affine
+from biahub.registration.metrics import displacement_stats, residual_affine
 
 VOX = (0.2, 0.103, 0.103)  # z, y, x in µm (DragonFly)
 
@@ -75,12 +75,9 @@ def test_residual_affine_needs_enough_points():
 
 # --- layer 2: point-based residuals -----------------------------------------------------
 
-from biahub.registration.evaluate import (  # noqa: E402
-    Landmarks,
-    point_residuals,
-)
 from biahub.registration.methods.landmark.bead_matching import detect_beads  # noqa: E402
 from biahub.registration.methods.landmark.nuclei_matching import detect_nuclei  # noqa: E402
+from biahub.registration.metrics import Landmarks, point_residuals  # noqa: E402
 
 
 def test_clicked_pairs_are_matched_by_their_ids_not_by_distance():
@@ -155,7 +152,7 @@ def test_nuclei_centroids_skip_objects_cut_by_the_frame():
 from scipy.ndimage import affine_transform as _affine  # noqa: E402
 from scipy.ndimage import shift as _ndi_shift  # noqa: E402
 
-from biahub.registration.evaluate import tile_residuals, z_residuals  # noqa: E402
+from biahub.registration.metrics import tile_residuals, z_residuals  # noqa: E402
 
 VOX3 = (0.2, 0.103, 0.103)
 
@@ -249,7 +246,7 @@ def test_coverage_from_geometry_matches_warping_a_volume_of_ones(ndim):
 def test_tiles_and_z_share_one_prepared_pair(monkeypatch):
     # Each function prepared (Sobel + warp, ~240 s on a 2048 x 2048 stack) on its own; a
     # pair prepared once serves both, with the same results.
-    from biahub.registration.evaluate import prepare_pair
+    from biahub.registration.metrics import prepare_pair
 
     ref = _cells(5, shape=(32, 256, 256))
     mov = _ndi_shift(ref, (1.0, 2.0, -1.0), order=1, mode="nearest")
@@ -279,7 +276,7 @@ def test_tiles_and_z_share_one_prepared_pair(monkeypatch):
 
 def _clicked(points_ref, shift_zyx, voxel_um):
     """Clicked pairs: the same structures in both channels, the moving ones at p + shift."""
-    from biahub.registration.evaluate import Landmarks
+    from biahub.registration.metrics import Landmarks
 
     ids = list(range(len(points_ref)))
     mov = Landmarks(np.asarray(points_ref) + shift_zyx, voxel_um, "manual", ids)
@@ -334,7 +331,7 @@ def test_evaluate_refuses_an_unknown_landmark_source():
 def test_an_identity_pair_of_equal_shapes_skips_the_warp(monkeypatch):
     # The baseline's identity warp returns the volume unchanged (~200 s on a 2048 x 2048
     # stack for nothing); a pair of equal shapes uses the volume as it is.
-    from biahub.registration.evaluate import prepare_pair
+    from biahub.registration.metrics import prepare_pair
 
     ref = _cells(9)
     mov = _ndi_shift(ref, (0.0, 2.0, 1.0), order=1, mode="nearest")
@@ -353,7 +350,7 @@ def test_an_identity_pair_of_equal_shapes_skips_the_warp(monkeypatch):
 def test_records_keep_each_residual_where_it_was_measured():
     # The overlays draw each residual at its place, so the records keep them (in µm, on
     # the reference grid), not only their statistics.
-    from biahub.registration.evaluate import point_residuals
+    from biahub.registration.metrics import point_residuals
 
     shift_zyx = (0.0, 3.0, -2.0)
     grid = np.stack(np.meshgrid([8, 16], [40, 128, 216], [40, 128, 216], indexing="ij"))
@@ -587,7 +584,7 @@ def test_the_residual_affine_is_the_map_left_on_the_mapped_points():
     # Clicked pairs with the moving points at 0.8 x the reference, under identity: what is
     # left is a scale of 1.25 acting on the mapped points (fitting at the reference
     # positions read 1.2), and a pure rotation leaves no scale.
-    from biahub.registration.evaluate import point_residuals
+    from biahub.registration.metrics import point_residuals
 
     grid = np.stack(
         np.meshgrid([10.0, 30.0], np.linspace(100, 1900, 5), np.linspace(100, 1900, 5))
