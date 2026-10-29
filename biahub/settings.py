@@ -8,12 +8,14 @@ import numpy as np
 import torch
 import yaml
 
+from iohub.core.sharding import parse_shard_size
 from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
     Field,
     ImportString,
+    NonNegativeFloat,
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
@@ -25,6 +27,44 @@ from pydantic import (
 # All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+# Shard geometry as iohub's `shards=` takes it: a size target such as "5GB" (the largest
+# chunk-aligned shard under it, filled X, Y, Z then T; C is never grown), "XY"/"XYZ" (one
+# shard per plane / per volume), or an explicit TCZYX shape in array elements.
+ShardsSpec = str | list[int] | None
+
+
+def _validate_shards(v: ShardsSpec) -> ShardsSpec:
+    if v is None:
+        return v
+    if isinstance(v, str):
+        if v.strip().upper() in ("XY", "XYZ"):
+            return v
+        try:
+            parse_shard_size(v)
+        except ValueError as err:
+            raise ValueError(
+                f"shards: {err}. Use a size such as '5GB', 'XY' / 'XYZ', or a TCZYX shape."
+            ) from err
+        return v
+    if len(v) != 5 or any(i < 1 for i in v):
+        raise ValueError(
+            "shards must be 5 positive integers (T, C, Z, Y, X), in array elements"
+        )
+    if v[1] != 1:
+        raise ValueError("shards: iohub does not shard along C; the C entry must be 1")
+    return v
+
+
+def _reject_shards_ratio(data):
+    if isinstance(data, dict) and "shards_ratio" in data:
+        raise ValueError(
+            "shards_ratio (a multiplier over the chunk shape) was replaced by shards, which "
+            "needs no chunk arithmetic: a size such as '5GB', 'XY' / 'XYZ', or a TCZYX shape "
+            "in array elements."
+        )
+    return data
 
 
 class DetectPeaksSettings(MyBaseModel):
@@ -62,89 +102,153 @@ class ProcessingInputChannel(MyBaseModel):
         return v
 
 
-class CellposeConfig(MyBaseModel):
-    """Configuration for Cellpose segmentation used as input to tracking."""
-
-    # cellpose 4 model: cpsam_v2, cpsam, cpdino, cpdino-vitb, or a path to weights.
-    pretrained_model: str = "cpsam_v2"
-    # Deprecated: cellpose 4 ignores it (``model_type: nuclei`` always ran cpsam_v2).
-    model_type: str | None = None
-    # Cellpose 4 resizes each frame by 30 / diameter before inference (80 -> 37.5%),
-    # which shrinks small objects such as rounded mitotic nuclei. None = native size.
-    diameter: float | None = 80
-    cellprob_threshold: float = 0.0
-    flow_threshold: float = 0.4
-    gpu: bool = True
-    min_size: int = 500
-    input_channel: str = "nuclei_prediction"
-    labels_sigma: float = 5.0
-
-    @field_validator("model_type")
-    @classmethod
-    def warn_model_type_ignored(cls, v):
-        if v is not None:
-            warnings.warn(
-                f"cellpose_config.model_type={v!r} is ignored by cellpose 4, which runs "
-                "pretrained_model (default cpsam_v2). Remove model_type from the config.",
-                UserWarning,
-                stacklevel=2,
-            )
-        return v
+#: Prefix of the label image tracking writes next to the one it reads:
+#: ``labels/<labels>`` (from `biahub segment`) -> ``labels/tracks_<labels>``, matching
+#: the ``tracks.geff`` / ``tracks_<fov>.csv`` beside it.
+TRACKED_LABEL_PREFIX = "tracks_"
 
 
-class ZSlicing(MyBaseModel):
-    """How to SELECT the Z-planes used for tracking.
+# Defaults below are the A549 benchmark's pixel settings at 0.1133 um/px (mantis v2),
+# converted to um; biahub converts back with each plate's pixel size.
 
-    The ``method`` decides which of the other fields are used; fields that belong to a
-    different method are simply ignored (all have defaults). The block selects a
-    z-window; the actual reduction to 2D is governed separately by
-    ``TrackingSettings.output_mode`` (plus any Z-projection step, e.g. ``np.mean``, in
-    ``input_images``).
 
-    Methods
-    -------
-    all
-        Use every plane (``slice(None)``).
-    central
-        Use an automatically centred window (see ``central_z_slice``).
-    range
-        Use the explicit ``range`` ``[start, stop]`` slice (falls back to all planes
-        if ``range`` is left unset).
-    focus
-        Detect the in-focus plane per-FOV (waveorder ``focus_from_transverse_band``
-        on ``focus_channel``) and take a fixed window of ``window_size`` planes around it,
-        split ``frac_below``/``frac_above``.
+class TracksdataConfig(MyBaseModel):
+    """tracksdata ILP on fixed labels (``tracker: tracksdata``).
+
+    Nodes are the label regions; candidate edges join each region to its
+    ``n_neighbors`` nearest regions of the next frame within ``distance_threshold_um``,
+    weighted ``-IoU * exp(distance / distance_norm_um)``. Regions within
+    ``border_margin_um`` of the image edge appear at ``border_appearance_weight``
+    instead of ``appearance_weight``. Defaults are the A549 benchmark's full-movie run;
+    tune per dataset.
     """
 
-    method: Literal["all", "central", "range", "focus"] = "all"
-    range: tuple[int, int] | None = None  # method: range
-    window_size: int = 48  # method: focus (fixed window size, in z-planes)
-    frac_below: float = 1 / 3  # method: focus
-    frac_above: float = 2 / 3  # method: focus
-    focus_channel: str | None = None  # method: focus -- channel focus-finding runs on
+    distance_threshold_um: PositiveFloat = 22.66
+    n_neighbors: PositiveInt = 3
+    distance_norm_um: PositiveFloat = 11.33
+    node_weight: float = -2.0
+    appearance_weight: float = 5.0
+    disappearance_weight: float = 5.0
+    division_weight: float = 1.0
+    border_margin_um: NonNegativeFloat = 6.80
+    border_appearance_weight: float = -1.0
+
+
+class HoctConfig(MyBaseModel):
+    """HOCT: learned edge scores, then an ILP, on fixed labels (``tracker: hoct``).
+
+    ``model`` is a HOCT registry name (e.g. ``general_v1``) or a path to weights.
+    HOCT runs in pixel space, as its models were trained; ``distance_threshold_um`` is
+    converted with the plate's pixel size. ``solver`` overrides HOCT's
+    ``ILPSolverConfig`` fields.
+    """
+
+    model: str = "general_v1"
+    # The image HOCT scores the label regions on. None (default) takes the first
+    # channel the label image was segmented from, recorded by `biahub segment`; set it
+    # to override that, or when the label image has no segment provenance.
+    image_channel: str | None = None
+    distance_threshold_um: PositiveFloat = 33.99
+    n_neighbors: PositiveInt = 5
+    max_delta_t: PositiveInt = 3
+    solver: dict[str, Any] = {}
+
+    @field_validator("solver")
+    @classmethod
+    def refuse_solver_preference(cls, solver):
+        if solver.get("solver_preference") is not None:
+            raise ValueError(
+                "hoct_config.solver.solver_preference is not supported by the pinned "
+                "tracksdata, which picks Gurobi or SCIP itself (see ilpy's Preference.Any)."
+            )
+        return solver
+
+
+class TrackastraConfig(MyBaseModel):
+    """Trackastra: a transformer predicts the links of fixed labels (``tracker: trackastra``).
+
+    ``model`` is a pretrained name (``general_2d``, ``ctc``) or a path to a trained
+    model folder. ``mode`` links greedily (``greedy``, or ``greedy_nodiv`` without
+    divisions) or with an ILP (``ilp``, via motile and ilpy: Gurobi with a full licence, else SCIP).
+    The model predicts in pixel space and needs no distance settings.
+    """
+
+    model: str = "general_2d"
+    mode: Literal["greedy", "greedy_nodiv", "ilp"] = "greedy"
+    # The image Trackastra reads with the labels; as for hoct_config.image_channel.
+    image_channel: str | None = None
 
 
 class TrackingSettings(MyBaseModel):
-    target_channel: str = "nuclei_prediction"
     fov: str = "*/*/*"
     blank_frames_path: Path | None = None
-    # 2D writes an output plate with Z=1 (input must be projected); 3D keeps the
-    # selected z-window. Does not itself project the data.
+    # The dimensionality of the tracking. Track neither projects nor selects Z-planes:
+    # "2D" needs a Z=1 input (project the plate with `biahub project` first) and "3D"
+    # a Z>1 input; a mismatch is an error. The labels are written into the plate track
+    # reads, with its Z, so they take that store's OME-Zarr version.
     output_mode: Literal["2D", "3D"] = "2D"
-    # Which Z-planes to select for tracking. See ZSlicing.
-    z_slicing: ZSlicing = ZSlicing()
-    input_images: list[ProcessingInputChannel]
+    # What feeds ultrack: the instance labels of a label image of the plate track reads
+    # (`labels`, written by `biahub segment`; the default), or a foreground mask and
+    # contour map computed by the `input_images` processing functions (the legacy
+    # path; see settings/example_track_settings.yml). Track does not segment.
+    segmentation_method: Literal["labels", "foreground_contour"] = "labels"
+    # segmentation_method: labels -- the label image, `labels/<labels>` in each -i
+    # position, named after the segment config's model. The tracked labels go to
+    # `labels/tracks_<labels>`.
+    labels: str | None = None
+    # Smoothing (pixels) ultrack applies to the labels' contours before it builds its
+    # own segmentation hypotheses from them (ultrack `labels_to_contours`).
+    labels_sigma: float = 5.0
+    # segmentation_method: labels -- the name of the tracked label image, when the
+    # default `tracks_<labels>` is not wanted, e.g. to keep several tracking runs of
+    # one segmentation side by side. Then the tracks go to `tracks_<output_label>.geff`
+    # and `tracks_<output_label>_<fov>.csv` instead of `tracks.geff` / `tracks_<fov>.csv`.
+    output_label: str | None = None
+    # segmentation_method: foreground_contour only -- the name of the label image the
+    # tracks are written to.
+    target_channel: str | None = None
+    # Image channels to load and process per FOV; needed by foreground_contour (its
+    # processing functions compute the mask and contour) and optional otherwise.
+    input_images: list[ProcessingInputChannel] = []
     tracking_config: dict[str, Any] = {}
-    segmentation_method: Literal["foreground_contour", "cellpose"] = "foreground_contour"
     # Post-processing (ultrack's filter_short_sibling_tracks, same meaning): at a division
     # where exactly one daughter lives this many frames or fewer and does not divide
     # again, drop that daughter and merge the other into the parent. A division whose two
     # daughters are both that short is kept. Removes short false divisions, e.g. a
     # virtual-staining hallucination linked as a daughter. None (default) keeps all.
     min_sibling_length: PositiveInt | None = None
-    cellpose_config: CellposeConfig | None = None
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+    # The linker. ultrack (default) builds its own segmentation hypotheses from the
+    # labels' contours (or a foreground/contour map) and links them, configured by
+    # tracking_config; tracksdata, hoct and trackastra link the instance labels of
+    # `labels` as they are, in 2D. Either way the tracked labels (`labels/tracks_<labels>`)
+    # are the final segmentation and are preferred downstream over `labels/<labels>`;
+    # only ultrack can change the masks (it picks among its own hypotheses).
+    tracker: Literal["ultrack", "tracksdata", "hoct", "trackastra"] = "ultrack"
+    tracksdata_config: TracksdataConfig = TracksdataConfig()
+    hoct_config: HoctConfig = HoctConfig()
+    trackastra_config: TrackastraConfig = TrackastraConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_removed_keys(cls, data):
+        if not isinstance(data, dict):
+            return data
+        # Z-plane selection moved out of track into `biahub project`.
+        if "z_slicing" in data:
+            raise ValueError(
+                "z_slicing was removed from track: select and project the Z-planes with "
+                "`biahub project` and track the projected (Z=1) plate."
+            )
+        # Segmentation moved out of track into `biahub segment`.
+        if "cellpose_config" in data or data.get("segmentation_method") == "cellpose":
+            raise ValueError(
+                "Track no longer runs cellpose (cellpose_config, segmentation_method: "
+                "cellpose): segment the plate with `biahub segment` (its config takes the "
+                "cellpose settings; see settings/example_segmentation_settings.yml), which "
+                "writes labels/<model> into the plate, then set `labels: <model>` here "
+                "(and `labels_sigma` for the contour smoothing)."
+            )
+        return data
 
     @field_validator("blank_frames_path")
     @classmethod
@@ -152,6 +256,75 @@ class TrackingSettings(MyBaseModel):
         if v is None:
             return v
         return Path(v)
+
+    @model_validator(mode="after")
+    def check_segmentation_method(self):
+        if self.segmentation_method == "labels":
+            if self.labels is None:
+                raise ValueError(
+                    "segmentation_method is labels (the default) but `labels` is not set: "
+                    "name the label image `biahub segment` wrote (its model name), or set "
+                    "segmentation_method: foreground_contour to track a foreground mask "
+                    "and contour map from input_images."
+                )
+            if self.target_channel is not None:
+                raise ValueError(
+                    "target_channel is for segmentation_method: foreground_contour; with "
+                    f"labels the tracks are written to labels/{TRACKED_LABEL_PREFIX}{self.labels}"
+                    ", or to labels/<output_label> if set."
+                )
+            if self.output_label == self.labels:
+                raise ValueError(
+                    f"output_label {self.labels!r} is the label image being tracked; name "
+                    "the tracked one differently."
+                )
+        else:
+            if self.target_channel is None:
+                raise ValueError(
+                    "segmentation_method: foreground_contour needs target_channel, the name "
+                    "of the label image the tracks are written to."
+                )
+            if self.output_label is not None:
+                raise ValueError(
+                    "output_label is for segmentation_method: labels; foreground_contour "
+                    "names its label image with target_channel."
+                )
+            if not self.input_images:
+                raise ValueError(
+                    "segmentation_method: foreground_contour needs input_images whose "
+                    "processing functions produce the foreground mask and contour map."
+                )
+        return self
+
+    @property
+    def tracked_label(self) -> str:
+        """Name of the label image tracking writes, ``labels/<tracked_label>``."""
+        if self.segmentation_method == "labels":
+            return self.output_label or f"{TRACKED_LABEL_PREFIX}{self.labels}"
+        return self.target_channel
+
+    @property
+    def tracks_stem(self) -> str:
+        """Stem of the tracks files: ``tracks`` (``tracks.geff``, ``tracks_<fov>.csv``).
+
+        With an explicit ``output_label`` the stem carries it, so several tracking runs
+        of one plate keep their GEFFs and CSVs apart: ``tracks_<output_label>``.
+        """
+        return "tracks" if self.output_label is None else f"tracks_{self.output_label}"
+
+    @model_validator(mode="after")
+    def check_tracker(self):
+        if self.tracker == "ultrack":
+            return self
+        if self.segmentation_method != "labels":
+            raise ValueError(
+                f"tracker: {self.tracker} links fixed instance labels; set `labels` to the "
+                "label image `biahub segment` wrote (foreground_contour has no instance "
+                "labels)."
+            )
+        if self.output_mode != "2D":
+            raise ValueError(f"tracker: {self.tracker} supports output_mode 2D only.")
+        return self
 
 
 class EdgeGraphSettings(BaseModel):
@@ -329,6 +502,191 @@ class FocusSettings(MyBaseModel):
         if len(v) != 2 or any(c <= 0 for c in v):
             raise ValueError("center_crop_xy must be two positive integers (X, Y)")
         return v
+
+
+# --------------------------------------------------------------------------------------
+# Projection settings (`biahub project`)
+
+
+class ZSelection(MyBaseModel):
+    """Which Z-planes of a stack feed one channel's projection.
+
+    Two forms. Absolute: `start`/`stop`, a half-open ``[start, stop)`` like concatenate's
+    ``time_indices``. Around a plane: `center` with `below`/`above`, the planes
+    ``[center - below, center + above)`` (``below: 20, above: 40`` is 60 planes starting
+    20 below the center; `above` counts the center plane itself). `center` is a plane
+    index or ``"focus"``, the in-focus plane found on ``ProjectionSettings.focus.channel``;
+    `center` alone is the one plane (``slice``). `step` keeps every step-th plane. A
+    selection that runs past the stack is clipped to it.
+    """
+
+    center: NonNegativeInt | Literal["focus"] | None = None
+    start: NonNegativeInt | None = None
+    stop: PositiveInt | None = None
+    below: NonNegativeInt | None = None
+    above: NonNegativeInt | None = None
+    step: PositiveInt = 1
+
+    @property
+    def is_absolute(self) -> bool:
+        return self.start is not None or self.stop is not None
+
+    @property
+    def is_window(self) -> bool:
+        return self.below is not None or self.above is not None
+
+    @model_validator(mode="after")
+    def check_form(self):
+        if self.is_absolute:
+            if self.start is None or self.stop is None:
+                raise ValueError("start and stop go together.")
+            if self.center is not None or self.is_window:
+                raise ValueError(
+                    "start/stop are absolute planes; use center with below/above for a "
+                    "window around a plane."
+                )
+            if self.stop <= self.start:
+                raise ValueError(f"start {self.start}, stop {self.stop} is empty.")
+        elif self.is_window:
+            if self.below is None or self.above is None:
+                raise ValueError("below and above go together.")
+            if self.center is None:
+                raise ValueError("below/above need a center.")
+            if self.below + self.above == 0:
+                raise ValueError("below and above select no plane.")
+        elif self.step != 1:
+            raise ValueError("step needs start/stop or below/above.")
+        return self
+
+
+class ChannelProjection(MyBaseModel):
+    """How one output channel is projected from the input stack.
+
+    ``max``, ``mean`` and ``sum`` reduce the selected planes (the whole stack when `z` is
+    unset); ``slice`` keeps the one plane ``z.center``.
+    """
+
+    method: Literal["max", "mean", "sum", "slice"]
+    z: ZSelection | None = None
+
+    @model_validator(mode="after")
+    def check_z_for_method(self):
+        if self.method == "slice":
+            if self.z is None or self.z.center is None:
+                raise ValueError("method slice needs z.center (a plane index or 'focus').")
+            if self.z.is_window:
+                raise ValueError(
+                    "method slice selects one plane and takes no below/above; use max, "
+                    "mean or sum to project a window."
+                )
+        elif self.z is not None and self.z.center is not None and not self.z.is_window:
+            raise ValueError(
+                f"method {self.method} needs z.below/above with z.center; use method slice "
+                "to keep the one plane."
+            )
+        return self
+
+    @property
+    def uses_focus(self) -> bool:
+        return self.z is not None and self.z.center == "focus"
+
+
+class ProjectionFocusSettings(FocusSettings):
+    """Focus finding for `biahub project`: the engine's criterion, on one channel.
+
+    `channel` is the input channel the focus is measured on (it need not be an output).
+    `per` is how the in-focus plane is resolved across time: ``fov`` takes one plane per
+    position, the median over timepoints; ``timepoint`` keeps one plane per timepoint, so
+    the window follows Z drift.
+    """
+
+    channel: str
+    per: Literal["fov", "timepoint"] = "fov"
+    # Projection has no drift axes to choose; the inherited field is fixed.
+    axes: Literal["z"] = "z"
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_axes(cls, data):
+        if isinstance(data, dict) and "axes" in data:
+            raise ValueError("axes is a stabilization setting; projection has none.")
+        return data
+
+
+class ProjectionSettings(MyBaseModel):
+    """`biahub project`: a 3D plate to a 2D (Z=1) plate, one projection per output channel.
+
+    `channels` maps each OUTPUT channel (an input channel name, in output order) to its
+    projection; input channels not listed are dropped. `focus` is required when any
+    channel uses ``z.center: focus``.
+    """
+
+    channels: dict[str, ChannelProjection] = Field(min_length=1)
+    focus: ProjectionFocusSettings | None = None
+    # Output chunk shape (C, Z, Y, X) and shard geometry (see ShardsSpec), as in
+    # concatenate. None takes iohub's defaults (one-frame 256 x 256 chunks, one (t, c)
+    # frame per shard). Sharding needs OME-Zarr 0.5.
+    chunks_czyx: list[int] | None = None
+    shards: ShardsSpec = None
+    # When None, preserve the OME-Zarr version of the input store.
+    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
+
+    @field_validator("chunks_czyx")
+    @classmethod
+    def check_chunk_size(cls, v):
+        if v is not None and (len(v) != 4 or any(i < 1 for i in v)):
+            raise ValueError("chunks_czyx must be 4 positive integers (C, Z, Y, X)")
+        return v
+
+    @field_validator("shards")
+    @classmethod
+    def check_shards(cls, v):
+        return _validate_shards(v)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_shards_ratio(cls, data):
+        return _reject_shards_ratio(data)
+
+    @model_validator(mode="after")
+    def check_focus(self):
+        focus_users = [name for name, c in self.channels.items() if c.uses_focus]
+        if focus_users and self.focus is None:
+            raise ValueError(
+                f"{focus_users} use z.center: focus; add a `focus` block naming the channel "
+                "the focus is found on."
+            )
+        if self.focus is not None and not focus_users:
+            warnings.warn(
+                "`focus` is set but no channel uses z.center: focus; it is ignored.",
+                stacklevel=2,
+            )
+        return self
+
+    @property
+    def uses_focus(self) -> bool:
+        return any(c.uses_focus for c in self.channels.values())
+
+
+PYRAMID_METHODS = ("mean", "median", "mode", "min", "max", "stride")
+# Methods that only ever pick a value present in the window, so no level of a
+# label pyramid holds an id that level 0 does not (DCA v0.2: "maximum filter or
+# decimation filter for label arrays").
+LABEL_PYRAMID_METHODS = ("max", "stride", "mode")
+
+
+class PyramidSettings(MyBaseModel):
+    """`biahub pyramid`: the pyramid every image and label image of a position gets.
+
+    ``levels`` counts level 0, so ``3`` adds two downsampled levels, each 2x coarser
+    than the previous along the spatial axes longer than one voxel (Z is left alone
+    on a Z=1 plate). ``method`` pools the images and ``label_method`` the label
+    images under ``labels/``.
+    """
+
+    levels: Annotated[int, Field(ge=2)] = 3
+    method: Literal[PYRAMID_METHODS] = "mean"
+    label_method: Literal[LABEL_PYRAMID_METHODS] = "max"
 
 
 class AffineTransformSettings(MyBaseModel):
@@ -522,7 +880,9 @@ class ConcatenateSettings(MyBaseModel):
     Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     chunks_czyx: Literal[None] | list[int] = None
-    shards_ratio: list[int] | None = None
+    # Shard geometry of the output (see ShardsSpec); None takes iohub's default, one
+    # shard per (t, c) volume on OME-Zarr 0.5.
+    shards: ShardsSpec = None
     ensure_unique_positions: bool | None = False
     # Concatenate is the migration path into v0.5 stores, so it defaults to
     # "0.5". Set to None to preserve the input store's OME-Zarr version, or
@@ -646,6 +1006,16 @@ class ConcatenateSettings(MyBaseModel):
             raise ValueError("chunks_czyx must be a list of 4 integers (C, Z, Y, X)")
         return v
 
+    @field_validator("shards")
+    @classmethod
+    def check_shards(cls, v):
+        return _validate_shards(v)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_shards_ratio(cls, data):
+        return _reject_shards_ratio(data)
+
     @model_validator(mode="after")
     def validate_slice_lengths(self):
         # Per-source lists (channel_names, X/Y/Z_slice) must be one entry per
@@ -755,15 +1125,15 @@ class SegmentationModel(BaseModel):
     """One cellpose 4 model and how to apply it.
 
     ``channels`` are dataset channel names (1-3, any order: cellpose 4 takes up to 3
-    channels). ``z_slice_2D`` selects the plane for 2D segmentation; without it the model
-    segments the Z stack, which needs ``eval_args.do_3D`` (or ``stitch_threshold``).
-    ``eval_args`` are the remaining ``CellposeModel.eval`` keyword arguments.
+    channels). The model segments in 2D unless ``eval_args.do_3D`` (or a
+    ``stitch_threshold``) is set; a 2D model needs a Z=1 input, which `biahub project`
+    makes from a stack. ``eval_args`` are the remaining ``CellposeModel.eval`` keyword
+    arguments.
     """
 
     pretrained_model: str
     channels: list[str] = Field(min_length=1)
     eval_args: dict[str, Any] = {}
-    z_slice_2D: NonNegativeInt | None = None
     preprocessing: list[PreprocessingFunctions] = []
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
@@ -778,6 +1148,12 @@ class SegmentationModel(BaseModel):
                 raise ValueError(
                     "eval_args.channels moved to the model's own `channels` field "
                     "(dataset channel names)."
+                )
+            if "z_slice_2D" in data:
+                raise ValueError(
+                    "z_slice_2D was removed: select or project the plane with "
+                    "`biahub project` and segment the 2D (Z=1) plate. A model without "
+                    "eval_args.do_3D segments in 2D."
                 )
         return data
 
@@ -802,42 +1178,49 @@ class SegmentationModel(BaseModel):
             )
         return value
 
-    @model_validator(mode="after")
-    def check_2d_3d_settings(self):
-        if self.z_slice_2D is not None and self.eval_args.get("do_3D"):
-            raise ValueError(
-                "If 'z_slice_2D' is provided, 'do_3D' in 'eval_args' must be False."
-            )
-        # A model without z_slice_2D segments the Z stack, which cellpose 4 only accepts
-        # with do_3D or stitching (it raises "2D image processing selected, but z_axis...").
+    @property
+    def is_3d(self) -> bool:
+        """Whether the model segments the Z stack.
+
+        Cellpose 4 segments a stack only with do_3D or stitching; otherwise it refuses a
+        z axis ("2D image processing selected, but z_axis..."), so the model is 2D.
+        """
         stitch_threshold = self.eval_args.get("stitch_threshold")
-        if self.z_slice_2D is None and not (
-            self.eval_args.get("do_3D")
-            or (stitch_threshold is not None and stitch_threshold > 0)
-        ):
-            raise ValueError(
-                "A model without z_slice_2D segments in 3D: set eval_args.do_3D: true (or a "
-                "stitch_threshold), or set z_slice_2D for 2D segmentation."
-            )
-        return self
+        return bool(self.eval_args.get("do_3D")) or (
+            stitch_threshold is not None and stitch_threshold > 0
+        )
 
 
 class SegmentationSettings(BaseModel):
+    # One label image per model, `labels/<name>`, written into the plate segment reads.
+    # The name is the strategy's: strategies accumulate as differently named models.
     models: dict[str, SegmentationModel] = Field(min_length=1)
-    # When None, preserve the OME-Zarr version of the input store.
-    output_ome_zarr_version: Literal["0.4", "0.5"] | None = None
     model_config = {"extra": "forbid", "protected_namespaces": ()}
 
-    @model_validator(mode="after")
-    def check_models_share_z(self):
-        # All models write into one output array, so its Z size must suit every model.
-        flat = [name for name, m in self.models.items() if m.z_slice_2D is not None]
-        if flat and len(flat) != len(self.models):
+    @model_validator(mode="before")
+    @classmethod
+    def reject_output_version(cls, data):
+        if isinstance(data, dict) and "output_ome_zarr_version" in data:
             raise ValueError(
-                f"Cannot mix 2D and 3D models in one config: {flat} set z_slice_2D, the "
-                "others do not. Segment them in separate runs."
+                "output_ome_zarr_version was removed: segment writes its label images into "
+                "the plate it reads, so they take that plate's OME-Zarr version."
+            )
+        return data
+
+    @model_validator(mode="after")
+    def check_models_share_dimensionality(self):
+        # One input plate is either 2D (Z=1) or 3D (Z>1), so it suits only one kind.
+        three_d = [name for name, m in self.models.items() if m.is_3d]
+        if three_d and len(three_d) != len(self.models):
+            raise ValueError(
+                f"Cannot mix 2D and 3D models in one config: {three_d} set do_3D (or a "
+                "stitch_threshold), the others do not. Segment them in separate runs."
             )
         return self
+
+    @property
+    def is_3d(self) -> bool:
+        return next(iter(self.models.values())).is_3d
 
 
 # --------------------------------------------------------------------------------------

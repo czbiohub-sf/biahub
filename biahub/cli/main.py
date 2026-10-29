@@ -93,7 +93,7 @@ COMMANDS = [
     {
         "name": "pyramid",
         "import_path": "biahub.pyramid.pyramid_cli",
-        "help": "Create pyramid levels for a dataset",
+        "help": "Compute multiscale pyramids of a plate's images and label images, in place",
     },
     {
         "name": "apply-transform",
@@ -159,6 +159,11 @@ COMMANDS = [
         "name": "segment",
         "import_path": "biahub.segment.segment_cli",
         "help": "Segment a position using pretrained model or pipeline",
+    },
+    {
+        "name": "project",
+        "import_path": "biahub.project.project_cli",
+        "help": "Project a 3D plate to 2D (max, mean, sum or one plane per channel)",
     },
     {
         "name": "virtual-stain",

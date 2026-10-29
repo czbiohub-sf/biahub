@@ -23,7 +23,6 @@ backend: iohub
 positions: null
 metric_group: default
 log_level: INFO
-upstream_qc_dir: null
 
 metric_groups:
   default:
@@ -68,9 +67,8 @@ intensity_stats:
 # is NOT is a working SNR gate — see the non-gating note at the bottom of this
 # file before reading any clean SNR verdict as health.
 signal_to_noise:
-  granularity: slice
   gate:
-    granularity: channel
+    per_channel: true
     pooling_scope: store
     hard_ceiling: null
     outlier_method: zscore
@@ -81,10 +79,9 @@ signal_to_noise:
 blank:
   intensity_threshold: 0.01
   variance_threshold: 1.0e-6
-  granularity: slice
   channels: null
   gate:
-    granularity: channel
+    per_channel: true
 
 # NORMALIZE OFF, measured rather than preferred. With `normalize: true` this
 # metric divides gradient energy by an intensity scale, and in the empty planes
@@ -108,7 +105,7 @@ blank:
 # acquisition setting, not a defect. A floor read off a bright dataset would
 # flag a healthy dim one wholesale.
 #
-# `granularity: channel` was MISSING and is a genuine defect independent of
+# `per_channel: true` was MISSING and is a genuine defect independent of
 # everything else: without it the gate pools all six channels into ONE fence, and
 # raw tenengrad spans seven orders of magnitude across them (BF ~5e4 against
 # Phase3D ~0.13), so `mean - 3*sigma` lands below every channel's range and the
@@ -118,9 +115,8 @@ blank:
 tenengrad:
   threshold: 0.0
   normalize: false
-  granularity: slice
   gate:
-    granularity: channel
+    per_channel: true
     pooling_scope: store
     hard_floor: 0.001
     hard_ceiling: null

@@ -30,6 +30,7 @@ def test_main():
         "deconvolve",
         "characterize-psf",
         "segment",
+        "project",
         "virtual-stain",
         "track",
         "process-with-config",

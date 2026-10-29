@@ -1,7 +1,9 @@
-"""OME-Zarr store helpers: output paths, version, provenance, channels."""
+"""OME-Zarr store helpers: output paths, version, provenance, channels, label images."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+import numpy as np
 
 from iohub.ngff import open_ome_zarr
 from tqdm import tqdm
@@ -129,3 +131,56 @@ def append_channels(input_data_path: Path, target_data_path: Path) -> None:
                 position["0"][:, num_channels + i + 1] = appending_dataset[str(name)][0][:, i]
         dataset.print_tree()
     appending_dataset.close()
+
+
+# Label chunks, TCZYX: a label image has the image's axes with one channel,
+# (T, 1, Z, Y, X). 16 x 1 x 1 x 128 x 128 uint32 is 1 MB, the DCA v0.2 SHOULD (512 KB
+# is the MUST) and its "2D+time" example; growing T keeps per-plane reads cheap.
+LABEL_CHUNKS = (16, 1, 1, 128, 128)
+# Label shards as a size target for iohub's sizer (czbiohub-sf/iohub#461): the largest
+# chunk-aligned shard under 200 MB, filled X, Y, Z first and then T, C never grown. On
+# the A549 projected plate (1664 x 1193 uint32) that is one 16-timepoint chunk by the
+# full frame, 127 MB: the DCA 16-timepoint SHOULD, well under its 5 GB cap.
+LABEL_SHARDS = "200MB"
+
+
+def label_chunks(shape: tuple[int, int, int, int, int]) -> tuple[int, ...]:
+    """``LABEL_CHUNKS`` clamped to a (T, 1, Z, Y, X) label array of ``shape``."""
+    return tuple(min(c, s) for c, s in zip(LABEL_CHUNKS, shape, strict=True))
+
+
+def labels_exist(position_dirpaths: list[Path], label_name: str) -> bool:
+    """Whether every position has the label image ``labels/<label_name>``."""
+    return all(
+        (Path(p) / "labels" / label_name / "zarr.json").exists()
+        or (Path(p) / "labels" / label_name / ".zattrs").exists()
+        for p in position_dirpaths
+    )
+
+
+def label_layout(
+    position_dirpath: Path,
+    source_label: str | None = None,
+) -> tuple[tuple[int, int, int, int, int], dict[str, Any]]:
+    """Return the image's (T, C, Z, Y, X) shape and the label-image layout for its plate.
+
+    The layout is the ``label_dtype`` / ``label_chunks`` / ``label_shards`` keyword
+    arguments of iohub's ``create_empty_labels``, for a label of shape (T, 1, Z, Y, X):
+    the image's axes with one channel. With ``source_label``, the dtype, chunks and
+    shards are those of the position's ``labels/<source_label>`` level 0, so a label
+    derived from another (track's from segment's) is stored like it; otherwise uint32,
+    :data:`LABEL_CHUNKS` and the :data:`LABEL_SHARDS` size target (no shards on an
+    OME-Zarr 0.4 plate).
+    """
+    with open_ome_zarr(str(position_dirpath), mode="r") as dataset:
+        T, C, Z, Y, X = dataset.data.shape
+        version = dataset.version
+        if source_label is not None:
+            source = dataset.get_label(source_label).data
+            dtype, chunks, shards = np.dtype(source.dtype), tuple(source.chunks), source.shards
+            shards = tuple(shards) if shards is not None else None
+        else:
+            dtype, chunks = np.dtype(np.uint32), label_chunks((T, 1, Z, Y, X))
+            shards = LABEL_SHARDS if version == "0.5" else None
+    layout = {"label_dtype": dtype, "label_chunks": chunks, "label_shards": shards}
+    return (T, C, Z, Y, X), layout

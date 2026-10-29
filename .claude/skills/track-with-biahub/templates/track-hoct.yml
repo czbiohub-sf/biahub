@@ -1,0 +1,26 @@
+# biahub track, tracker: hoct (learned edge scores + ILP on the segment labels).
+# HOCT's general model, its pixel defaults converted to um at 0.1133 um/px.
+# Tracks the labels `biahub segment` wrote into the projected plate (segment.yml).
+
+output_mode: "2D"                  # the Z=1 projected plate; track does not project
+fov: "*/*/*"
+
+# The label image to track: segment.yml's model name, labels/nuclei in every position.
+labels: nuclei
+# The tracked labels go to labels/nuclei_hoct, with tracks_nuclei_hoct_<fov>.csv (<fov>
+# = row_col_fov; no .geff yet for hoct), so each tracker's run sits beside the others in
+# the plate (the pipeline's own run is labels/tracks_nuclei). Rename it to keep a tuning
+# run beside the previous one.
+output_label: nuclei_hoct
+
+# Drop a daughter that lives 3 frames or fewer (VS hallucinations, neighbours).
+min_sibling_length: 3
+
+tracker: hoct
+hoct_config:
+  model: general_v1                # HOCT registry name or a path to weights
+  # image_channel: nuclei_prediction  # default: the first channel segment recorded
+  distance_threshold_um: 33.99
+  n_neighbors: 5
+  max_delta_t: 3                   # frames an edge may skip
+  solver: {}                       # HOCT ILPSolverConfig overrides
