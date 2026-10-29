@@ -528,6 +528,20 @@ def test_a_stand_in_after_a_gap_names_the_timepoint_it_came_from():
     assert stand_in.translation[2] == 2.0 and source == "t=1"
 
 
+def test_an_ants_failure_is_a_failed_estimate_not_a_crash(monkeypatch):
+    # ITK raises RuntimeError (or ValueError); the run records the timepoint as failed
+    from biahub.registration.estimators import EstimationError
+    from biahub.registration.methods.intensity import ants as ants_method
+
+    def broken(**kwargs):
+        raise RuntimeError("ITK ERROR: All samples map outside moving image buffer")
+
+    monkeypatch.setattr(ants_method.ants, "registration", broken)
+    vol = np.random.default_rng(0).random((8, 16, 16)).astype(np.float32)
+    with pytest.raises(EstimationError, match="All samples map outside"):
+        ants_method.estimate(vol, vol, IDENTITY)
+
+
 def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain():
     from biahub.registration.engine import estimate_propagated
 

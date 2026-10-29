@@ -25,6 +25,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
+from biahub.registration.estimators import EstimationError
 from biahub.settings import AffineTransformSettings, AntsRegistrationSettings
 
 DEFAULT_ANTS_KWARGS = {
@@ -105,18 +106,19 @@ def estimate(
         # mass, replacing where `initial` starts.
         initial_path = os.path.join(tmp, "initial.mat")
         ants.write_transform(initial.invert().to_ants(), initial_path)
-        reg = ants.registration(
-            fixed=ants.from_numpy(np.asarray(ref, dtype=np.float32)),
-            moving=ants.from_numpy(np.asarray(mov, dtype=np.float32)),
-            initial_transform=[initial_path],
-            mask=as_ants_mask(ref_mask),
-            moving_mask=as_ants_mask(mov_mask),
-            verbose=verbose,
-            **ants_kwargs,
-        )
+        try:
+            reg = ants.registration(
+                fixed=ants.from_numpy(np.asarray(ref, dtype=np.float32)),
+                moving=ants.from_numpy(np.asarray(mov, dtype=np.float32)),
+                initial_transform=[initial_path],
+                mask=as_ants_mask(ref_mask),
+                moving_mask=as_ants_mask(mov_mask),
+                verbose=verbose,
+                **ants_kwargs,
+            )
+        except (RuntimeError, ValueError) as error:  # ITK's failures: a failed estimate
+            raise EstimationError(f"ANTs registration failed: {error}") from error
     inverse = Transform.from_ants(ants.read_transform(reg["fwdtransforms"][0]))
-    if inverse.matrix is None:
-        raise ValueError("Failed to estimate registration transform.")
     return inverse.invert()
 
 
