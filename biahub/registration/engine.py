@@ -707,6 +707,7 @@ def estimate_propagated(
     done = done or {}
     result = SeriesResult()
     previous: Transform | None = None  # what the next timepoint starts from
+    previous_t: int | None = None  # the timepoint it came from (a stand-in's source)
     for t in time_indices:
         _forget_blocks(estimator)
         if t in done:
@@ -716,7 +717,7 @@ def estimate_propagated(
             if _compares_with_itself(reference_policy, mov, t):
                 previous = None
             elif carried is not None:
-                previous = carried
+                previous, previous_t = carried, t
         else:
             mov_t = np.asarray(mov[t])
             ref_t = np.asarray(reference_policy.reference_for(mov, t))
@@ -739,14 +740,14 @@ def estimate_propagated(
                 except EstimationError as e:
                     result.scores[t] = float("nan")
                     result.errors[t] = f"{type(e).__name__}: {e}"
-                    source = f"t={t - 1}" if previous is not None else "seed"
+                    source = f"t={previous_t}" if previous is not None else "seed"
                     result.stand_ins[t] = (seed, source)
                     previous = seed
                 else:
                     transform = _gap_rule(estimator, reference_policy, mov, t, transform)
                     result.transforms[t] = transform
                     result.scores[t] = float(score_fn(transform, mov_t, ref_t))
-                    previous = transform
+                    previous, previous_t = transform, t
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result

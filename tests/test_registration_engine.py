@@ -516,6 +516,18 @@ def test_estimate_propagated_follows_the_legacy_rules():
     assert x[5] == 4.0
 
 
+def test_a_stand_in_after_a_gap_names_the_timepoint_it_came_from():
+    # t=2 is empty, t=3 fails: its stand-in is t=1's result, so it says t=1, not t=2
+    from biahub.registration.engine import estimate_propagated
+
+    mov = _frames([1, 2, 0, 4])
+    result = estimate_propagated(
+        mov, CrossChannel(mov), _StepX(fail_on={4}), IDENTITY, _finite_score, range(4)
+    )
+    stand_in, source = result.stand_ins[3]
+    assert stand_in.translation[2] == 2.0 and source == "t=1"
+
+
 def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain():
     from biahub.registration.engine import estimate_propagated
 
