@@ -976,3 +976,14 @@ def test_flagging_with_repair_off_does_not_announce_a_repair(
     out = capsys.readouterr().out
     assert "repair:" not in out
     assert "repair and sweep are off" in out
+
+
+def test_a_previous_chain_starts_at_the_first_requested_timepoint(drifting_plate, tmp_path):
+    # time_indices [1, 2]: t=1 starts the chain on its own grid (identity) and t=2 is one
+    # step from it. Measured against frame 0, outside the run, t=1 carried a step and the
+    # chain did not start on the first frame it writes.
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(tmp_path, source="GFP", reference="previous", time_indices=[1, 2])
+    _run(drifting_plate, config, output)
+    for row, factor in zip(_inverse_translations(output), [0, 1], strict=True):
+        np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)

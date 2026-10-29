@@ -58,17 +58,21 @@ class PreviousFrame:
     Usually t-1. Empty frames (no data) are skipped, so after a gap the first frame with
     data is compared against the last frame before the gap and the accumulated chain
     keeps the movement that happened during it. A frame with no earlier frame with data
-    (t=0, or after leading empty frames) is compared against itself: it starts the chain.
+    (the run's `first` timepoint, or after leading empty frames) is compared against itself:
+    it starts the chain. Frames before `first` are outside the run and never compared.
     """
 
+    def __init__(self, first: int = 0):
+        self.first = first
+
     def reference_index(self, mov: ArrayLike, t: int) -> int | None:
-        for earlier in range(t - 1, -1, -1):
+        for earlier in range(t - 1, self.first - 1, -1):
             if not is_empty(mov[earlier]):
                 return earlier
         return None
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
-        for earlier in range(t - 1, -1, -1):
+        for earlier in range(t - 1, self.first - 1, -1):
             frame = np.asarray(mov[earlier])  # read once: checked, then returned
             if not is_empty(frame):
                 return frame

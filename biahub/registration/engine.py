@@ -925,7 +925,8 @@ def _reference_policy(settings: EstimateTransformSettings, ref) -> ReferencePoli
         return CrossChannel(ref)
     if settings.reference.frame == "first":
         return FixedFrame(0)
-    return PreviousFrame()
+    # the chain starts at the run's first timepoint: nothing before it is compared
+    return PreviousFrame(first=min(resolve_time_indices(settings.time_indices, len(ref))))
 
 
 def _seed(settings: EstimateTransformSettings) -> Transform:
