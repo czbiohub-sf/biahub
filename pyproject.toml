@@ -122,9 +122,8 @@ override-dependencies = [
 # Pinned at #266: feat: plan-stage refuses an unknown channels:/per_channel: name
 imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", rev = "c5c51dc700d0aa52388d6f6a08eec5bfe16a5766" }
 
-# Pinned at the head of the dynamic-cell-atlas-specs metadata engine PR (#29).
-# Move this to `tag = "<first release containing the engine>"` before merge.
-dca_helpers = { git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git", rev = "1a72c28d3592ae7caf690efa4c8b7edfbc38a920" }
+# v0.2.11 is the first dynamic-cell-atlas-specs release with the metadata engine.
+dca_helpers = { git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git", tag = "v0.2.11" }
 
 # Pin iohub to main at the czbiohub-sf/iohub#476 merge, which syncs a write
 # unit's shards before recording it as done. Without it a preemption or a
