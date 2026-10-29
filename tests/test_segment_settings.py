@@ -41,7 +41,6 @@ def _settings(**model):
     base = {
         "pretrained_model": "cpsam_v2",
         "channels": ["nuc"],
-        "z_slice_2D": 2,
         "eval_args": {"diameter": None},
     }
     return SegmentationSettings(models={"nucleus": {**base, **model}})
@@ -52,6 +51,12 @@ def test_new_schema_is_accepted():
     m = s.models["nucleus"]
     assert m.pretrained_model == "cpsam_v2"
     assert m.channels == ["nuc"]
+    assert not m.is_3d and not s.is_3d  # no do_3D / stitch_threshold: a 2D model
+
+
+@pytest.mark.parametrize("eval_args", [{"do_3D": True}, {"stitch_threshold": 0.5}])
+def test_do_3d_or_stitching_makes_a_3d_model(eval_args):
+    assert _settings(eval_args=eval_args).is_3d
 
 
 def test_old_path_to_model_key_says_what_to_rename():
@@ -63,10 +68,24 @@ def test_old_path_to_model_key_says_what_to_rename():
                 "nucleus": {
                     "path_to_model": "cpsam_v2",
                     "channels": ["nuc"],
-                    "z_slice_2D": 0,
                     "eval_args": {},
                 }
             }
+        )
+
+
+def test_removed_z_slice_2d_points_at_project():
+    with pytest.raises(ValueError, match="z_slice_2D was removed.*biahub project"):
+        _settings(z_slice_2D=2)
+
+
+def test_models_cannot_mix_2d_and_3d():
+    from biahub.settings import SegmentationSettings
+
+    model = {"pretrained_model": "cpsam_v2", "channels": ["nuc"]}
+    with pytest.raises(ValueError, match="Cannot mix 2D and 3D"):
+        SegmentationSettings(
+            models={"flat": model, "stack": {**model, "eval_args": {"do_3D": True}}}
         )
 
 
@@ -100,39 +119,51 @@ def test_resolve_models_maps_names_without_mutating_the_settings():
     before = s.model_dump(mode="json")
 
     (m,) = resolve_models(
-        s, channel_names=["BF", "nuc", "mem"], scale=(1, 1, 0.5, 0.1, 0.1), z_size=5
+        s, channel_names=["BF", "nuc", "mem"], scale=(1, 1, 0.5, 0.1, 0.1), z_size=1
     )
 
     assert m.name == "nucleus"
     assert m.channel_indices == [2, 1]
     assert m.preprocessing[0][1] == 2
-    assert m.z_slice_2D == 2
+    assert not m.is_3d
     assert s.model_dump(mode="json") == before
 
 
 def test_resolve_models_fills_anisotropy_for_3d_only():
     from biahub.segment import resolve_models
 
-    s3d = _settings(z_slice_2D=None, eval_args={"do_3D": True})
+    s3d = _settings(eval_args={"do_3D": True})
     (m,) = resolve_models(s3d, channel_names=["nuc"], scale=(1, 1, 0.5, 0.1, 0.1), z_size=5)
+    assert m.is_3d
     assert m.eval_args["anisotropy"] == pytest.approx(5.0)
 
     (m,) = resolve_models(
-        _settings(), channel_names=["nuc"], scale=(1, 1, 0.5, 0.1, 0.1), z_size=5
+        _settings(), channel_names=["nuc"], scale=(1, 1, 0.5, 0.1, 0.1), z_size=1
     )
     assert "anisotropy" not in m.eval_args
 
 
-def test_resolve_models_rejects_unknown_channels_and_planes():
+def test_resolve_models_rejects_unknown_channels():
     from biahub.segment import resolve_models
 
     with pytest.raises(ValueError, match="not in the input"):
         resolve_models(
-            _settings(channels=["missing"]), channel_names=["nuc"], scale=(1,) * 5, z_size=5
+            _settings(channels=["missing"]), channel_names=["nuc"], scale=(1,) * 5, z_size=1
         )
-    with pytest.raises(ValueError, match="z_slice_2D"):
+
+
+def test_resolve_models_requires_the_input_dimensionality_to_match():
+    """Segment does not project: 2D models need a Z=1 plate, 3D models a stack."""
+    from biahub.segment import resolve_models
+
+    with pytest.raises(ValueError, match="input is 3D.*biahub project"):
+        resolve_models(_settings(), channel_names=["nuc"], scale=(1,) * 5, z_size=5)
+    with pytest.raises(ValueError, match="one Z-plane but the models segment in 3D"):
         resolve_models(
-            _settings(z_slice_2D=9), channel_names=["nuc"], scale=(1,) * 5, z_size=5
+            _settings(eval_args={"do_3D": True}),
+            channel_names=["nuc"],
+            scale=(1,) * 5,
+            z_size=1,
         )
 
 
@@ -147,3 +178,29 @@ def test_a_config_needs_at_least_one_model():
 def test_eval_args_cannot_set_the_image_or_self(key):
     with pytest.raises(ValueError, match=key):
         _settings(eval_args={key: 0})
+
+
+def test_nextflow_a549_segment_config_carries_the_validated_cellpose_settings():
+    """The A549 segment config runs cellpose at native resolution (diameter null).
+
+    Validated against the annotated A549 divisions: native resolution keeps the small
+    rounded daughter nuclei that diameter 80 (37.5 % resize) loses.
+    """
+    import yaml
+
+    from biahub.settings import SegmentationSettings
+
+    with open("nextflow/configs/a549/segment.yml") as f:
+        settings = SegmentationSettings(**yaml.safe_load(f))
+    (name,) = settings.models
+    model = settings.models[name]
+    assert name == "nuclei"  # track.yml's `labels: nuclei`; QC counts labels/tracks_nuclei
+    assert model.pretrained_model == "cpsam_v2"
+    assert model.channels == ["nuclei_prediction"]
+    assert model.eval_args == {
+        "diameter": None,
+        "cellprob_threshold": 0.0,
+        "flow_threshold": 0.4,
+        "min_size": 300,
+    }
+    assert not settings.is_3d

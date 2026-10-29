@@ -1,0 +1,23 @@
+# biahub track, tracker: trackastra (transformer links on the segment labels).
+# Pretrained general_2d model; no distance settings (the model predicts the links).
+# Tracks the labels `biahub segment` wrote into the projected plate (segment.yml).
+
+output_mode: "2D"                  # the Z=1 projected plate; track does not project
+fov: "*/*/*"
+
+# The label image to track: segment.yml's model name, labels/nuclei in every position.
+labels: nuclei
+# The tracked labels go to labels/nuclei_trackastra, with
+# tracks_nuclei_trackastra_<fov>.csv (<fov> = row_col_fov; no .geff yet for trackastra),
+# so each tracker's run sits beside the others in the plate (the pipeline's own run is
+# labels/tracks_nuclei). Rename it to keep a tuning run beside the previous one.
+output_label: nuclei_trackastra
+
+# Drop a daughter that lives 3 frames or fewer (VS hallucinations, neighbours).
+min_sibling_length: 3
+
+tracker: trackastra
+trackastra_config:
+  model: general_2d                # pretrained name (general_2d, ctc) or a trained model folder
+  mode: greedy                     # greedy | greedy_nodiv | ilp
+  # image_channel: nuclei_prediction  # default: the first channel segment recorded
