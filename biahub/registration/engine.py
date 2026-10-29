@@ -637,7 +637,7 @@ def _gap_rule(estimator, reference_policy, mov, t: int, transform: Transform) ->
 def _compares_with_itself(reference_policy: ReferencePolicy, mov, t: int) -> bool:
     """Whether timepoint t is its own reference (it starts the stabilization chain)."""
     if isinstance(reference_policy, FixedFrame):
-        return t == reference_policy.t_ref
+        return t == reference_policy.reference_index(mov)
     if isinstance(reference_policy, PreviousFrame):
         return reference_policy.reference_index(mov, t) is None
     return False

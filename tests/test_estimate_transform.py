@@ -987,3 +987,20 @@ def test_a_previous_chain_starts_at_the_first_requested_timepoint(drifting_plate
     _run(drifting_plate, config, output)
     for row, factor in zip(_inverse_translations(output), [0, 1], strict=True):
         np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
+
+
+def test_a_first_frame_reference_skips_an_empty_frame_zero(tmp_path):
+    # Frame 0 has no data: every timepoint was recorded as "empty frame". The reference is
+    # the first frame with data (t=1), which is identity, and t=2 is one step from it.
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    frames = [np.zeros_like(ref)] + [
+        ndi_shift(ref, shift=tuple(t * s for s in APPLIED_SHIFT_ZYX), order=1, mode="constant")
+        for t in range(2)
+    ]
+    plate = _write_plate(tmp_path / "late.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    _run(plate, _write_config(tmp_path, source="GFP", reference="first"), output)
+    rows = _inverse_translations(output)
+    np.testing.assert_allclose(rows[1], [0.0, 0.0, 0.0], atol=0.5)
+    np.testing.assert_allclose(rows[2], APPLIED_SHIFT_ZYX, atol=0.5)

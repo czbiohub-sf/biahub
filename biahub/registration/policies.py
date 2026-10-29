@@ -38,13 +38,40 @@ class CrossChannel:
 
 
 class FixedFrame:
-    """Stabilization `t_reference: "first"`: every t compares against one fixed frame."""
+    """Stabilization `t_reference: "first"`: every t compares against one fixed frame.
+
+    The frame is `t_ref`, or the first frame with data after it when `t_ref` is empty (an
+    empty frame cannot be a reference: every timepoint would read as empty).
+    """
 
     def __init__(self, t_ref: int = 0):
         self.t_ref = t_ref
+        self._index: int | None = None
+        self._frame: np.ndarray | None = None
+
+    def _resolve(self, mov: ArrayLike) -> None:
+        """Find the reference frame once, reading each frame at most once."""
+        t = self.t_ref
+        while True:
+            try:
+                frame = np.asarray(mov[t])
+            except IndexError:  # past the last frame: every frame is empty
+                self._index, self._frame = self.t_ref, None
+                return
+            if not is_empty(frame):
+                self._index, self._frame = t, frame
+                return
+            t += 1
+
+    def reference_index(self, mov: ArrayLike) -> int:
+        """Return the frame every t compares against: `t_ref`, else the first with data."""
+        if self._index is None:
+            self._resolve(mov)
+        return self._index
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
-        return np.asarray(mov[self.t_ref])
+        index = self.reference_index(mov)
+        return self._frame if self._frame is not None else np.asarray(mov[index])
 
 
 def is_empty(volume: ArrayLike) -> bool:
