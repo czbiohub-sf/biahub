@@ -186,3 +186,25 @@ def test_pool_refuses_a_chained_stabilization():
             method="phase_cross_corr",
             pool={"z": "medoid"},
         )
+
+
+def test_a_timepoint_without_an_estimate_falls_back_to_its_seed_from_the_file(tmp_path):
+    # An empty frame (or a crashed job) has no estimate: its stand-in must be the seed
+    # file's transform for that timepoint, not the config seed (identity with seed_file).
+    from tests.test_estimate_transform import _write_plate
+
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    mov = ndi_shift(ref, shift=SHIFTS["0"], order=1, mode="constant", cval=0.0)
+    empty = np.zeros_like(ref)
+    plate = _write_plate(tmp_path / "gap.zarr", [(ref, mov), (empty, empty)])
+    seed_file = _plate_file(tmp_path, SHIFTS["0"])
+    config = _config(tmp_path, transform__seed_file=str(seed_file), time_indices="all")
+    output = tmp_path / "gap" / "transforms.yml"
+    estimate_transform(
+        [plate], config, output, reference_position_dirpaths=[plate], cluster="debug"
+    )
+    model = load_transform_settings(output)
+    stand_in = model.entry_for(1)
+    assert stand_in.status == "unreliable" and stand_in.filled_from == "seed_file"
+    np.testing.assert_allclose(model.matrix_for(1, "inverse")[:3, 3], SHIFTS["0"], atol=1e-6)

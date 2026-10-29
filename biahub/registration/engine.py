@@ -1668,13 +1668,13 @@ def _run_propagated(
 
 
 def _one_transform_per_timepoint(
-    result: SeriesResult, time_indices: list[int], fallback: Transform
+    result: SeriesResult, time_indices: list[int], fallback: Transform | dict[int, Transform]
 ) -> list[Transform]:
     """Return one transform per requested timepoint.
 
     The accepted transform, else `fallback` -- the input seed (e.g. the approximate
-    transform), as the legacy pipeline returned when refinement failed. Each stand-in is
-    recorded in `result.filled_from`.
+    transform), as the legacy pipeline returned when refinement failed; a dict holds each
+    timepoint's own seed (a seed file's). Each stand-in is recorded in `result.filled_from`.
     """
     out = []
     for t in time_indices:
@@ -1685,9 +1685,25 @@ def _one_transform_per_timepoint(
             result.filled_from[t] = source
             out.append(transform)
         else:
-            result.filled_from[t] = "seed"
-            out.append(fallback)
+            result.filled_from[t] = "seed_file" if isinstance(fallback, dict) else "seed"
+            out.append(_at(fallback, t))
     return out
+
+
+def _at(seed: Transform | dict[int, Transform], t: int) -> Transform:
+    """Return timepoint `t`'s seed: its own from a dict (a seed file's), else the one seed."""
+    return seed[t] if isinstance(seed, dict) else seed
+
+
+def _run_seeds(output_dir: Path, settings: EstimateTransformSettings) -> dict | None:
+    """Return each timepoint's seed from the run's seed file (`init_run` wrote them), or None."""
+    if settings.transform.seed_file is None:
+        return None
+    seeds = json.loads((Path(output_dir) / SEEDS_FILENAME).read_text())
+    return {
+        int(t): Transform(np.asarray(m, dtype=float), transform_type=settings.transform.type)
+        for t, m in seeds.items()
+    }
 
 
 def _pass_report(outcome: PassResult) -> dict:
@@ -2013,7 +2029,9 @@ def finalize_run(
     settings, plan = _run_settings(output_dir), _run_plan(output_dir)
     time_indices = plan["time_indices"]
     transform_type = settings.transform.type
-    seed = _seed(settings)
+    # a timepoint without a transform of its own falls back to where it started: the seed
+    # file's transform for it, else the config seed
+    seed = _run_seeds(output_dir, settings) or _seed(settings)
     _, repairs_dir, sweeps_dir = _record_dirs(output_dir)
     if flags is None:
         flags = _flags(output_dir)
@@ -2035,7 +2053,9 @@ def finalize_run(
             record = _read_record(records_dir / f"{t}.json")
             if record is None:  # never ran (or unreadable)
                 return None
-        return _load_pass(record, transform_type, fallback=result.transforms.get(t, seed))
+        return _load_pass(
+            record, transform_type, fallback=result.transforms.get(t, _at(seed, t))
+        )
 
     for t in flags["repair"]:
         outcome = outcome_for(t, repair_records, repairs_dir, set(repaired))
@@ -2367,7 +2387,10 @@ def estimate_transform_series(
 
 
 def transforms_for_file(
-    result: SeriesResult, time_indices: list[int], seed: Transform, frame: str
+    result: SeriesResult,
+    time_indices: list[int],
+    seed: Transform | dict[int, Transform],
+    frame: str,
 ) -> list[Transform]:
     """One transform per timepoint, onto the reference grid, for the transforms file.
 

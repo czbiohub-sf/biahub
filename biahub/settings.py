@@ -1614,7 +1614,7 @@ class TransformEntry(MyBaseModel):
     # (an entry substituted in from another method's run by `substitute-transforms`).
     method: str | None = None
     status: EntryStatus = "accepted"
-    # Where a stand-in matrix came from, e.g. "t=81", "seed", "identity".
+    # Where a stand-in matrix came from, e.g. "t=81", "seed", "seed_file", "identity".
     filled_from: str | None = None
     # With transform.seed_file: "seed_file" (its transform, kept as it is) or
     # "seed_file+refined" (the estimate from it, which scored better).
