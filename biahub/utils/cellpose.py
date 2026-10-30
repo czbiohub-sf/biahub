@@ -15,9 +15,15 @@ head node) and ``stage_cellpose_weights`` (per worker) the second.
 A third: cellpose 4 ignores ``model_type`` and falls back to ``cpsam_v2`` with only a
 log warning when ``pretrained_model`` names a model it does not know.
 ``load_cellpose_model`` refuses unknown names instead.
+
+A fourth: the cpdino models need the ``dinov3`` package, which biahub does not install
+(it is not on PyPI and has its own licence). Without it cellpose only logs "Could not
+import CPDINO" and fails when the model is built. ``check_cellpose_model_name`` stops
+at ``--init`` with the install command instead.
 """
 
 import getpass
+import importlib.util
 import logging
 import os
 import shutil
@@ -171,8 +177,37 @@ def stage_cellpose_weights() -> Path | None:
     return dest
 
 
+# Cellpose 4 models built on a DINOv3 backbone (cellpose.vit.CPDINO).
+CPDINO_MODELS = ("cpdino", "cpdino-vitb")
+
+
+def _dinov3_installed() -> bool:
+    return "dinov3" in sys.modules or importlib.util.find_spec("dinov3") is not None
+
+
+def check_cpdino_dependency(pretrained_model: str) -> None:
+    """Raise if a cpdino model is requested and ``dinov3`` is not installed.
+
+    biahub does not depend on ``dinov3``: it is not on PyPI and is released under
+    Meta's DINOv3 License, so installing it is the user's choice.
+    """
+    if pretrained_model not in CPDINO_MODELS or _dinov3_installed():
+        return
+    raise ValueError(
+        f"Cellpose model {pretrained_model!r} needs the dinov3 package, which biahub "
+        "does not install. Install it into this environment with\n"
+        "    pip install git+https://github.com/facebookresearch/dinov3\n"
+        "(or `uv pip install ...`). dinov3 is released under the DINOv3 License "
+        "(https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md), not an "
+        "open-source licence: check that your use is allowed. cpsam_v2 needs no extra "
+        "package."
+    )
+
+
 def check_cellpose_model_name(pretrained_model: str) -> None:
-    """Raise if cellpose 4 cannot find ``pretrained_model`` (it would substitute cpsam_v2).
+    """Raise if cellpose 4 cannot use ``pretrained_model``.
+
+    Unknown names would be replaced by cpsam_v2; cpdino models also need ``dinov3``.
 
     Imports ``cellpose.models``: call it on the head node (``--init``) or after
     ``stage_cellpose_weights`` in a worker.
@@ -187,6 +222,7 @@ def check_cellpose_model_name(pretrained_model: str) -> None:
             f"Unknown cellpose model {pretrained_model!r}: not a file and not one of "
             f"{known}. Cellpose 4 dropped the cellpose 3 models (nuclei, cyto3, ...)."
         )
+    check_cpdino_dependency(pretrained_model)
 
 
 def load_cellpose_model(pretrained_model: str, device: torch.device):

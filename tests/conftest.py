@@ -274,6 +274,8 @@ def fake_cellpose(monkeypatch, tmp_path):
     package.models = models
     monkeypatch.setitem(sys.modules, "cellpose", package)
     monkeypatch.setitem(sys.modules, "cellpose.models", models)
+    # The cpdino models need dinov3 (checked by name); stand in for it like cellpose.
+    monkeypatch.setitem(sys.modules, "dinov3", types.ModuleType("dinov3"))
     monkeypatch.setenv("CELLPOSE_LOCAL_MODELS_PATH", str(tmp_path / "no-weights"))
     RecordingModel.built, RecordingModel.evaluated = [], []
     from biahub import segment

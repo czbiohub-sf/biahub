@@ -6,8 +6,11 @@ import types
 import pytest
 import torch
 
+import biahub.utils.cellpose as cellpose_utils
+
 from biahub.utils.cellpose import (
     cellpose_device,
+    check_cellpose_model_name,
     load_cellpose_model,
     stage_cellpose_weights,
     warm_cellpose_weights,
@@ -177,6 +180,41 @@ def test_load_cellpose_model_passes_the_requested_model(monkeypatch):
     _fake_cellpose(monkeypatch, FakeModel)
     sys.modules["cellpose.models"].MODEL_NAMES = ["cpsam_v2", "cpdino"]
     sys.modules["cellpose.models"].get_user_models = lambda: []
+    monkeypatch.setattr(cellpose_utils, "_dinov3_installed", lambda: True)
 
     load_cellpose_model("cpdino", torch.device("cpu"))
     assert built == {"pretrained_model": "cpdino", "gpu": False}
+
+
+def _known_models(monkeypatch):
+    _fake_cellpose(monkeypatch, None)
+    sys.modules["cellpose.models"].MODEL_NAMES = ["cpsam_v2", "cpdino", "cpdino-vitb"]
+    sys.modules["cellpose.models"].get_user_models = lambda: []
+
+
+@pytest.mark.parametrize("name", ["cpdino", "cpdino-vitb"])
+def test_cpdino_without_dinov3_says_how_to_install(monkeypatch, name):
+    """cellpose only warns 'Could not import CPDINO' and fails later; stop at init instead."""
+    _known_models(monkeypatch)
+    monkeypatch.setattr(cellpose_utils, "_dinov3_installed", lambda: False)
+
+    with pytest.raises(ValueError, match="dinov3") as excinfo:
+        check_cellpose_model_name(name)
+
+    message = str(excinfo.value)
+    assert "pip install git+https://github.com/facebookresearch/dinov3" in message
+    assert "DINOv3 License" in message
+
+
+def test_cpdino_with_dinov3_passes(monkeypatch):
+    _known_models(monkeypatch)
+    monkeypatch.setattr(cellpose_utils, "_dinov3_installed", lambda: True)
+
+    check_cellpose_model_name("cpdino")
+
+
+def test_cpsam_does_not_need_dinov3(monkeypatch):
+    _known_models(monkeypatch)
+    monkeypatch.setattr(cellpose_utils, "_dinov3_installed", lambda: False)
+
+    check_cellpose_model_name("cpsam_v2")

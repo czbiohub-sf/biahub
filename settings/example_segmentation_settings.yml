@@ -9,6 +9,8 @@
 models:
   membrane:
     pretrained_model: cpsam_v2  # cellpose 4 model (cpsam_v2, cpsam, cpdino, cpdino-vitb) or path to weights
+    # cpdino / cpdino-vitb need `pip install git+https://github.com/facebookresearch/dinov3`
+    # (not installed by biahub; DINOv3 License). `biahub segment --init` stops if it is missing.
     channels: ['mem', 'nuc']    # dataset channel names passed to cellpose (at most 3, any order)
     # Other CellposeModel.eval() arguments; see https://cellpose.readthedocs.io/en/latest/api.html
     eval_args:
