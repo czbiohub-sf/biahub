@@ -280,7 +280,8 @@ def test_biahub_agent_citations_quote_the_pinned_file():
 
 
 CELLOSAURUS_TXT = "https://www.cellosaurus.org/CVCL_0023.txt"
-# Copy of CELLOSAURUS_TXT fetched with curl on 2026-10-21.
+# Lines of CELLOSAURUS_TXT as fetched with curl on 2026-10-21: the identifying lines
+# (ID, AC, AS, SY) and every line a citation quotes, whole and unedited, in record order.
 CELLOSAURUS_RECORD = Path(__file__).parent / "fixtures" / "cellosaurus_CVCL_0023.txt"
 
 
