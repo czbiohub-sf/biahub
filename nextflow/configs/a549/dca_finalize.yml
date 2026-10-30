@@ -1,0 +1,4 @@
+# Relative paths resolve against this file's directory. Run-specific copies fill `airtable`.
+base_config: dca_base.toml
+airtable: null
+qc_stage: 5

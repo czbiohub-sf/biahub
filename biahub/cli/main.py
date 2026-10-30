@@ -116,6 +116,11 @@ COMMANDS = [
         "help": "Concatenate datasets (with optional cropping)",
     },
     {
+        "name": "dca-finalize",
+        "import_path": "biahub.dca_finalize.dca_finalize_cli",
+        "help": "Write DCA metadata onto every FOV of an assembled plate",
+    },
+    {
         "name": "estimate-crop",
         "import_path": "biahub.estimate_crop.estimate_crop_cli",
         "help": "Estimate crop region for dual-channel alignment",

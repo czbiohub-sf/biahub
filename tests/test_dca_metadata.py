@@ -1,0 +1,244 @@
+import sys
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from biahub.dca_metadata import (
+    AIRTABLE_FIELDS,
+    TABLE_COLUMNS,
+    PyairtableClient,
+    airtable_rows,
+    blank_row,
+    metadata_rows,
+    read_metadata_table,
+)
+from biahub.settings import AirtableSettings, DcaFinalizeSettings
+
+ROW_C2 = ["ds", "C/2", "A549", "TOMM20", "mitochondria", "ZIKV", "5", "30", "24"]
+ROW_B1 = ["ds", "B/1", "A549", "SEC61B", "endoplasmic_reticulum", "mock", "0", "30", "24"]
+
+
+def write_table(path: Path, rows: list[list[str]], sep: str, columns=TABLE_COLUMNS) -> Path:
+    lines = [sep.join(columns)] + [sep.join(row) for row in rows]
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def pyairtable_record(well: str, **overrides: Any) -> dict[str, Any]:
+    fields = {
+        AIRTABLE_FIELDS["dataset"]: "ds",
+        AIRTABLE_FIELDS["well"]: well,
+        AIRTABLE_FIELDS["cell_line"]: ["A549"],
+        AIRTABLE_FIELDS["marker"]: "TOMM20",
+        AIRTABLE_FIELDS["organelle"]: "mitochondria",
+        AIRTABLE_FIELDS["perturbation"]: "ZIKV",
+        AIRTABLE_FIELDS["moi"]: 5,
+        AIRTABLE_FIELDS["time_interval_min"]: 30,
+        AIRTABLE_FIELDS["hours_post_perturbation"]: 24.5,
+    }
+    fields.update(overrides)
+    return {
+        "id": "recXXXXXXXXXXXXXX",
+        "createdTime": "2024-01-01T00:00:00.000Z",
+        "fields": fields,
+    }
+
+
+class FakeClient:
+    def __init__(self, records: list[dict[str, Any]]):
+        self._records = records
+        self.calls: list[str] = []
+
+    def records(self, dataset: str) -> list[dict[str, Any]]:
+        self.calls.append(dataset)
+        return self._records
+
+
+def test_read_csv_and_tsv(tmp_path):
+    rows = [ROW_C2, ROW_B1]
+    csv = read_metadata_table(write_table(tmp_path / "t.csv", rows, ","))
+    tsv = read_metadata_table(write_table(tmp_path / "t.tsv", rows, "\t"))
+    assert csv == tsv
+    assert set(csv) == {"C/2", "B/1"}
+    assert csv["C/2"]["marker"] == "TOMM20"
+    assert csv["B/1"]["moi"] == "0"
+
+
+def test_duplicate_well_raises(tmp_path):
+    path = write_table(tmp_path / "t.csv", [ROW_C2, ROW_C2], ",")
+    with pytest.raises(ValueError, match="C/2"):
+        read_metadata_table(path)
+
+
+def test_missing_column_raises(tmp_path):
+    columns = tuple(c for c in TABLE_COLUMNS if c != "marker")
+    rows = [[v for c, v in zip(TABLE_COLUMNS, ROW_C2, strict=True) if c != "marker"]]
+    path = write_table(tmp_path / "t.csv", rows, ",", columns)
+    with pytest.raises(ValueError, match="marker"):
+        read_metadata_table(path)
+
+
+def test_blank_row_has_every_column():
+    assert blank_row() == {c: "" for c in TABLE_COLUMNS}
+
+
+def test_airtable_fields_cover_known_columns():
+    assert set(AIRTABLE_FIELDS) <= set(TABLE_COLUMNS)
+
+
+def test_airtable_rows_map_pyairtable_record_shape():
+    client = FakeClient([pyairtable_record("C/2")])
+    rows = airtable_rows(client, "ds")
+    assert client.calls == ["ds"]
+    assert rows["C/2"] == {
+        "dataset": "ds",
+        "well": "C/2",
+        "cell_line": "A549",
+        "marker": "TOMM20",
+        "organelle": "mitochondria",
+        "perturbation": "ZIKV",
+        "moi": "5",
+        "time_interval_min": "30",
+        "hours_post_perturbation": "24.5",
+    }
+
+
+def test_airtable_missing_field_gives_empty_string():
+    record = pyairtable_record("C/2")
+    del record["fields"][AIRTABLE_FIELDS["moi"]]
+    rows = airtable_rows(FakeClient([record]), "ds")
+    assert rows["C/2"]["moi"] == ""
+
+
+def test_airtable_multi_select_cell_line_joined():
+    record = pyairtable_record("C/2", **{AIRTABLE_FIELDS["cell_line"]: ["A549", "HEK293T"]})
+    rows = airtable_rows(FakeClient([record]), "ds")
+    assert rows["C/2"]["cell_line"] == "A549,HEK293T"
+
+
+def test_airtable_duplicate_template_raises():
+    client = FakeClient([pyairtable_record("C/2"), pyairtable_record("C/2")])
+    with pytest.raises(ValueError, match="C/2"):
+        airtable_rows(client, "ds")
+
+
+def test_airtable_record_without_well_raises():
+    record = pyairtable_record("C/2")
+    del record["fields"][AIRTABLE_FIELDS["well"]]
+    with pytest.raises(ValueError, match="recXXXXXXXXXXXXXX"):
+        airtable_rows(FakeClient([record]), "ds")
+
+
+def test_table_next_to_plate_wins_over_airtable(tmp_path):
+    plate = tmp_path / "plate.zarr"
+    write_table(tmp_path / "plate.dca-metadata.csv", [["plate", *ROW_C2[1:]]], ",")
+    client = FakeClient([pyairtable_record("B/1")])
+    settings = DcaFinalizeSettings(
+        base_config="b.toml", airtable=AirtableSettings(base_id="b", table="t")
+    )
+    rows = metadata_rows(plate, settings, client)
+    assert set(rows) == {"C/2"}
+    assert client.calls == []
+
+
+def test_airtable_used_when_no_table(tmp_path):
+    plate = tmp_path / "plate.zarr"
+    client = FakeClient([pyairtable_record("C/2"), pyairtable_record("B/1")])
+    settings = DcaFinalizeSettings(
+        base_config="b.toml", airtable=AirtableSettings(base_id="b", table="t")
+    )
+    rows = metadata_rows(plate, settings, client)
+    assert set(rows) == {"C/2", "B/1"}
+    assert client.calls == ["plate"]
+
+
+def test_no_source_raises(tmp_path):
+    plate = tmp_path / "plate.zarr"
+    settings = DcaFinalizeSettings(base_config="b.toml")
+    expected = tmp_path / "plate.dca-metadata.csv"
+    with pytest.raises(FileNotFoundError, match=str(expected)):
+        metadata_rows(plate, settings, None)
+
+
+def test_default_client_missing_token_names_variable(monkeypatch):
+    monkeypatch.delenv("BIAHUB_TEST_AIRTABLE_TOKEN", raising=False)
+    settings = AirtableSettings(base_id="b", table="t", token_env="BIAHUB_TEST_AIRTABLE_TOKEN")
+    with pytest.raises(RuntimeError, match="BIAHUB_TEST_AIRTABLE_TOKEN"):
+        PyairtableClient(settings)
+
+
+def test_airtable_template_wins_over_fov_records():
+    template = pyairtable_record("C/2", **{AIRTABLE_FIELDS["marker"]: "TOMM20"})
+    fov = pyairtable_record("C/2", fov="000000", **{AIRTABLE_FIELDS["marker"]: "OTHER"})
+    rows = airtable_rows(FakeClient([fov, template]), "ds")
+    assert rows["C/2"]["marker"] == "TOMM20"
+
+
+def test_airtable_agreeing_fov_records_collapse():
+    records = [pyairtable_record("C/2", fov="000000"), pyairtable_record("C/2", fov="000001")]
+    rows = airtable_rows(FakeClient(records), "ds")
+    assert list(rows) == ["C/2"]
+    assert rows["C/2"]["marker"] == "TOMM20"
+
+
+def test_airtable_disagreeing_fov_records_raise():
+    records = [
+        pyairtable_record("C/2", fov="000000"),
+        pyairtable_record("C/2", fov="000001", **{AIRTABLE_FIELDS["moi"]: 1}),
+    ]
+    with pytest.raises(ValueError, match="C/2.*moi"):
+        airtable_rows(FakeClient(records), "ds")
+
+
+def test_blank_well_cell_raises_with_row_number(tmp_path):
+    blank = ["ds", "", "A549", "TOMM20", "mitochondria", "ZIKV", "5", "30", "24"]
+    path = write_table(tmp_path / "t.csv", [ROW_C2, blank], ",")
+    with pytest.raises(ValueError, match="row 3"):
+        read_metadata_table(path)
+
+
+@pytest.fixture
+def no_pyairtable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "pyairtable", None)
+    monkeypatch.setitem(sys.modules, "pyairtable.formulas", None)
+
+
+def test_csv_path_works_and_default_client_explains_missing_extra(
+    no_pyairtable, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("BIAHUB_TEST_AIRTABLE_TOKEN", "x")
+    plate = tmp_path / "plate.zarr"
+    write_table(tmp_path / "plate.dca-metadata.csv", [["plate", *ROW_C2[1:]]], ",")
+    settings = DcaFinalizeSettings(base_config="b.toml")
+    assert set(metadata_rows(plate, settings)) == {"C/2"}
+    with pytest.raises(ImportError, match=r"biahub\[dca\]"):
+        PyairtableClient(
+            AirtableSettings(base_id="b", table="t", token_env="BIAHUB_TEST_AIRTABLE_TOKEN")
+        )
+
+
+def test_shared_sheet_rows_filtered_by_plate_stem(tmp_path):
+    shared = write_table(
+        tmp_path / "shared.csv",
+        [
+            ["plate_a", *ROW_C2[1:]],
+            ["plate_b", "C/2", *["other"] * 7],
+            ["", *ROW_B1[1:]],
+        ],
+        ",",
+    )
+    settings = DcaFinalizeSettings(base_config="b.toml", metadata_table=shared)
+    rows_a = metadata_rows(tmp_path / "plate_a.zarr", settings)
+    rows_b = metadata_rows(tmp_path / "plate_b.zarr", settings)
+    assert set(rows_a) == {"C/2", "B/1"}
+    assert rows_a["C/2"]["marker"] == "TOMM20"
+    assert rows_b["C/2"]["marker"] == "other"
+    assert metadata_rows(tmp_path / "plate_c.zarr", settings) == {"B/1": rows_a["B/1"]}
+
+
+def test_sheet_without_matching_dataset_gives_no_rows(tmp_path):
+    write_table(tmp_path / "plate.dca-metadata.csv", [ROW_C2], ",")
+    settings = DcaFinalizeSettings(base_config="b.toml")
+    assert metadata_rows(tmp_path / "plate.zarr", settings) == {}

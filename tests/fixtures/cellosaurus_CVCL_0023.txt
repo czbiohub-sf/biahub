@@ -1,0 +1,10 @@
+ID   A-549
+AC   CVCL_0023
+AS   CVCL_H249
+SY   A 549; A549; NCI-A549; A549/ATCC; A549 ATCC; A549ATCC; hA549
+DR   ATCC; CCL-185
+DI   NCIt; C3512; Lung adenocarcinoma
+OX   NCBI_TaxID=9606; ! Homo sapiens (Human)
+SX   Male
+AG   58Y
+//
