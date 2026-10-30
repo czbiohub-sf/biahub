@@ -67,3 +67,22 @@ def test_policies_index_one_frame_and_never_materialize_the_series():
 
     assert ref.materialized == [2]
     assert mov.materialized == [1, 2]
+
+
+def test_a_neighbour_median_reference_leaves_out_t_and_keeps_inside_the_run():
+    from biahub.registration.policies import NeighbourMedian
+
+    frames = np.stack([np.full((2, 2), float(v)) for v in [1, 2, 0, 4, 5, 60, 7, 8]])
+    mov = _LazySeries(frames)  # frame 2 is empty; frame 5 is a jump
+    policy = NeighbourMedian(window=2, first=1, last=6)
+    # t=4: frames 2..6 without 4 -> 2 is empty, so 3, 5, 6 -> median(4, 60, 7) = 7
+    np.testing.assert_array_equal(policy.reference_for(mov, 4), np.full((2, 2), 7.0))
+    assert sorted(set(mov.materialized)) == [2, 3, 5, 6]  # each read, nothing outside 1-6
+    # t=1 (the run's first): frames 2, 3 (frame 0 is outside the run) -> 2 is empty -> 4
+    np.testing.assert_array_equal(policy.reference_for(mov, 1), np.full((2, 2), 4.0))
+    assert policy.neighbour_indices(mov, 1) == [3]
+    # a timepoint with no neighbour with data compares against itself
+    lonely = NeighbourMedian(window=1, first=0, last=7)
+    alone = np.stack([np.zeros((2, 2)), np.ones((2, 2)), np.zeros((2, 2))])
+    assert lonely.neighbour_indices(alone, 1) == []
+    np.testing.assert_array_equal(lonely.reference_for(alone, 1), np.ones((2, 2)))
