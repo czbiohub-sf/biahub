@@ -34,7 +34,6 @@ import numpy as np
 from iohub import open_ome_zarr
 from numpy.typing import ArrayLike
 from scipy.spatial import cKDTree
-from skimage.transform import AffineTransform, EuclideanTransform, SimilarityTransform
 
 from biahub.characterize_psf import detect_peaks
 from biahub.core.nodes.costs import MatchingTooLargeError
@@ -47,6 +46,7 @@ from biahub.registration.estimators import (
     NodeDetector,
     NodeMatcher,
     ScoreFn,
+    fit_pairs,
 )
 from biahub.settings import (
     AffineTransformSettings,
@@ -312,54 +312,20 @@ def transform_from_matches(
     ndim: int = 3,
     verbose: bool = False,
 ) -> tuple[Transform, Transform]:
-    """
-    Estimate the affine transformation matrix between source and target channels.
+    """Return the (forward, inverse) transform fitted to matched peaks (`Transform.fit`).
 
-    Based on detected bead matches at a specific timepoint.
-
-    Parameters
-    ----------
-    matches : ArrayLike
-        (n, 2) array of matches.
-    mov_peaks : ArrayLike
-        (n, 2) array of moving peaks.
-    ref_peaks : ArrayLike
-        (n, 2) array of reference peaks.
-    affine_transform_settings : AffineTransformSettings
-        Settings for the affine transform.
-    ndim: int
-        Number of dimensions.
-    verbose : bool
-        If True, prints detailed logs during the process.
-
-    Returns
-    -------
-    tuple[Transform, Transform]
-        Tuple of forward and inverse transforms.
+    `matches` are (moving, reference) index pairs into the (N, D) peaks; the transform
+    type is the settings'. `ndim` is not needed (the peaks give it) and kept for callers.
+    Raises ValueError when the fit fails.
     """
     if verbose:
         click.echo(f"Estimating transform with settings: {affine_transform_settings}")
-    # Detect dimensionality from peaks
-    if ndim not in (2, 3):
-        raise ValueError(f"Peaks must be 2D or 3D, got {ndim}D")
-
-    # Create appropriate transform
-    if affine_transform_settings.transform_type == "affine":
-        transform = AffineTransform(dimensionality=ndim)
-    elif affine_transform_settings.transform_type == "euclidean":
-        transform = EuclideanTransform(dimensionality=ndim)
-    elif affine_transform_settings.transform_type == "similarity":
-        transform = SimilarityTransform(dimensionality=ndim)
-    else:
-        raise ValueError(f"Unknown transform type: {affine_transform_settings.transform_type}")
-
-    # Fit transform
-    transform.estimate(mov_peaks[matches[:, 0]], ref_peaks[matches[:, 1]])
-
-    inv_transform = Transform(matrix=transform.inverse.params)
-    fwd_transform = Transform(matrix=transform.params)
-
-    return fwd_transform, inv_transform
+    fwd_transform = Transform.fit(
+        np.asarray(mov_peaks)[matches[:, 0]],
+        np.asarray(ref_peaks)[matches[:, 1]],
+        affine_transform_settings.transform_type,
+    )
+    return fwd_transform, fwd_transform.invert()
 
 
 # How the evaluation pairs this method's landmarks: (radius in µm, axes it is measured on).
@@ -598,12 +564,12 @@ class NodeGraphEstimator:
         if self.fit is not None:
             correction = self.fit(matches, mov_nodes, ref_nodes)
         else:
-            correction, _inv_correction = transform_from_matches(
-                matches,
-                mov_nodes,
-                ref_nodes,
-                self.affine_transform_settings,
-                ndim=mov.ndim,
+            correction = Transform(
+                fit_pairs(
+                    mov_nodes[matches[:, 0]],
+                    ref_nodes[matches[:, 1]],
+                    self.affine_transform_settings.transform_type,
+                )
             )
         if not np.all(np.isfinite(correction.matrix)):
             raise EstimationError(
