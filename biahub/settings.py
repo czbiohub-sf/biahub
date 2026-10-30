@@ -326,6 +326,18 @@ class PhaseCrossCorrSettings(MyBaseModel):
     # Local: a shift per tile, fitted in yx (z stays the seed's), instead of one
     # translation for the whole volume.
     local: LocalPhaseCrossCorrSettings | None = None
+    # 1: whole-pixel shifts. Above 1: refined to 1/upsample_factor of a pixel (an upsampled
+    # DFT around the peak) -- chained whole-pixel steps add up to a drift.
+    upsample_factor: PositiveInt = 1
+
+    @model_validator(mode="after")
+    def check_upsample_factor(self) -> "PhaseCrossCorrSettings":
+        if self.upsample_factor > 1 and self.function_type == "custom_padding":
+            raise ValueError(
+                "upsample_factor > 1 refines the plain phase correlation; function_type "
+                "custom_padding has no sub-pixel step (use function_type: custom)"
+            )
+        return self
 
 
 class FocusSettings(MyBaseModel):

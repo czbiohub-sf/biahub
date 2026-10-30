@@ -265,8 +265,10 @@ class PCCEstimator:
         normalization: Literal["magnitude", "classic"] | None = None,
         maximum_shift: float = 1.2,
         crop_zyx: tuple[slice, slice, slice] | None = None,
+        upsample_factor: int = 1,
     ):
         self.function_type = function_type
+        self.upsample_factor = upsample_factor
         self.normalization = normalization
         self.maximum_shift = maximum_shift
         self.crop_zyx = crop_zyx
@@ -281,6 +283,7 @@ class PCCEstimator:
             normalization=settings.normalization,
             maximum_shift=settings.maximum_shift,
             crop_zyx=pcc_crop(settings, shape_zyx) if shape_zyx is not None else None,
+            upsample_factor=settings.upsample_factor,
         )
 
     def estimate(
@@ -302,7 +305,12 @@ class PCCEstimator:
                     f"{mov.shape} and reference {ref.shape}: set phase_cross_corr.function_type: "
                     "custom_padding"
                 )
-            shift, _corr = phase_cross_corr(ref, mov, normalization=self.normalization)
+            shift, _corr = phase_cross_corr(
+                ref,
+                mov,
+                normalization=self.normalization,
+                upsample_factor=self.upsample_factor,
+            )
         return Transform.from_translation(shift)
 
 
