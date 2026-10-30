@@ -250,9 +250,8 @@ def score_transform(
     """Overlap score of a candidate transform, independent of any estimator's own scoring.
 
     Warps `mov` with `transform`, re-detects beads, and scores their overlap against
-    `ref` -- the same sequence `optimize_transform` uses internally, duplicated here
-    (rather than calling `optimize_transform`) because that function also refines the
-    transform, which would score something other than what was passed in. Used as the
+    `ref`, without refining the transform (an estimator's pass would score something
+    other than what was passed in). Used as the
     `score_fn` a fallback pass (e.g. `registration.engine.repair`) needs to compare
     candidate seeds against each other and against the current transform.
     """

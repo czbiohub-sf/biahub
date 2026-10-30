@@ -8,7 +8,7 @@ registration pipeline. Walks through each step:
 3. Detect bead peaks in both channels
 4. Match beads and visualize correspondences
 5. Estimate correction transform from matches
-6. Run the full iterative optimization pipeline (optimize_transform)
+6. Run the full beads estimator (detect -> match -> correct -> score, over its passes)
 
 Usage: Run cell-by-cell in an IDE with interactive Python support (e.g. VSCode).
 Set ``visualize = True`` to open napari viewers at each stage.
@@ -27,8 +27,9 @@ from biahub.registration.methods.landmark.bead_matching import (
     transform_from_matches,
     matches_from_beads,
     peaks_from_beads,
-    optimize_transform,
 )
+from biahub.registration.engine import build_beads_estimator
+from biahub.registration.metrics import metric_fn
 
 # %% Dataset configuration
 dataset = '2024_12_11_A549_LAMP1_DENV'
@@ -249,15 +250,11 @@ if visualize:
 matches
 # %%
 composed_transform
-# %% Run the full iterative optimization pipeline (detect -> match -> correct -> score)
-optimized_transform, quality_score_optimized = optimize_transform(
-    transform=initial_transform,
-    mov=mov_data,
-    ref=ref_data,
-    beads_match_settings=config.beads_match_settings,
-    affine_transform_settings=config.affine_transform_settings,
-    verbose=True,
-    debug=True,
+# %% Run the full beads estimator (detect -> match -> correct -> score, over its passes)
+estimator = build_beads_estimator(config.beads_match_settings, config.affine_transform_settings)
+optimized_transform = estimator.estimate(mov_data, ref_data, seed=initial_transform)
+quality_score_optimized = metric_fn("overlap", config.beads_match_settings)(
+    optimized_transform, mov_data, ref_data
 )
 print(f"Optimized transform:\n{optimized_transform}")
 print(f"Quality score: {quality_score_optimized:.4f}")

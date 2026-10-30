@@ -12,7 +12,7 @@ Pipeline overview
    (Hungarian or descriptor-based) with geometric consistency filtering.
 3. **Transform estimation** (`transform_from_matches`): Fit an affine/euclidean/similarity
    transform from matched bead pairs.
-4. **Iterative refinement** (`optimize_transform`, `estimate`): Compose the approximate
+4. **Iterative refinement** (`NodeGraphEstimator.estimate`): Compose the approximate
    transform with bead-based corrections, re-detect peaks, and score until convergence.
 
 Key conventions
@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import ants
 import click
 import dask.array as da
 import numpy as np
@@ -361,130 +360,6 @@ def transform_from_matches(
     fwd_transform = Transform(matrix=transform.params)
 
     return fwd_transform, inv_transform
-
-
-def optimize_transform(
-    transform: Transform,
-    mov: da.Array,
-    ref: da.Array,
-    beads_match_settings: BeadsMatchSettings,
-    affine_transform_settings: AffineTransformSettings,
-    verbose: bool = False,
-    debug: bool = False,
-) -> tuple[Transform, float]:
-    """
-    Refine a transform by bead matching and evaluate registration quality.
-
-    Applies the current transform to the moving volume, detects beads in both
-    the registered moving and reference volumes, matches them, estimates a
-    correction transform, and composes it with the input transform. Returns
-    the better of the two (original vs corrected) based on overlap score.
-
-    Parameters
-    ----------
-    transform : Transform
-        Current transform to refine (maps moving -> reference space).
-    mov : ArrayLike
-        Original (unregistered) moving volume (Z, Y, X).
-    ref : ArrayLike
-        Reference volume (Z, Y, X).
-    beads_match_settings : BeadsMatchSettings
-        Settings controlling peak detection, matching, and filtering.
-    affine_transform_settings : AffineTransformSettings
-        Settings for the transform type (affine/euclidean/similarity).
-    verbose : bool
-        If True, prints quality scores before and after optimization.
-    debug : bool
-        If True, prints detailed intermediate results (peaks, matches, transforms).
-
-    Returns
-    -------
-    tuple[Transform, float]
-        The best transform and its overlap score.
-        Returns (None, -1) if not enough peaks or matches are found.
-    """
-    mov_ants = ants.from_numpy(mov)
-    ref_ants = ants.from_numpy(ref)
-
-    # Step 1: Score the current transform by applying it and measuring peak overlap
-    if debug:
-        click.echo("Step 1: Scoring current transform (before bead matching)...")
-    mov_reg_approx = transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
-    mov_peaks, ref_peaks = peaks_from_beads(
-        mov=mov_reg_approx,
-        ref=ref,
-        mov_peaks_settings=beads_match_settings.source_peaks_settings,
-        ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose=debug,
-    )
-    if mov_peaks is None or ref_peaks is None:
-        return None, -1
-
-    quality_score_approx = overlap_score(
-        mov_peaks=mov_peaks,
-        ref_peaks=ref_peaks,
-        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
-        verbose=debug,
-    )
-
-    # Step 2: Match beads and estimate a correction transform
-    if debug:
-        click.echo("Step 2: Matching beads to estimate correction transform...")
-    matches = matches_from_beads(
-        mov_peaks=mov_peaks,
-        ref_peaks=ref_peaks,
-        beads_match_settings=beads_match_settings,
-        verbose=debug,
-    )
-
-    if len(matches) < 3:
-        click.echo("Not enough matches found, returning the current transform")
-        return None, -1
-
-    fwd_transform, inv_transform = transform_from_matches(
-        matches=matches,
-        mov_peaks=mov_peaks,
-        ref_peaks=ref_peaks,
-        affine_transform_settings=affine_transform_settings,
-        ndim=mov.ndim,
-        verbose=debug,
-    )
-    composed_transform = transform @ inv_transform
-
-    # Step 3: Score the composed (corrected) transform
-    if debug:
-        click.echo("Step 3: Scoring composed transform (after bead matching)...")
-    mov_reg_optimized = (
-        composed_transform.to_ants().apply_to_image(mov_ants, reference=ref_ants).numpy()
-    )
-    mov_peaks_optimized, ref_peaks_optimized = peaks_from_beads(
-        mov=mov_reg_optimized,
-        ref=ref,
-        mov_peaks_settings=beads_match_settings.source_peaks_settings,
-        ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose=debug,
-    )
-
-    quality_score_optimized = overlap_score(
-        mov_peaks=mov_peaks_optimized,
-        ref_peaks=ref_peaks_optimized,
-        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
-        verbose=debug,
-    )
-    if debug:
-        click.echo(f"Bead matches: {matches}")
-        click.echo(f"Forward transform: {fwd_transform}")
-        click.echo(f"Inverse transform: {inv_transform}")
-        click.echo(f"Composed transform: {composed_transform}")
-
-    if verbose:
-        click.echo(f"Quality score before beads matching: {quality_score_approx}")
-        click.echo(f"Quality score after beads matching: {quality_score_optimized}")
-
-    if quality_score_optimized >= quality_score_approx:
-        return composed_transform, quality_score_optimized
-    else:
-        return transform, quality_score_approx
 
 
 # How the evaluation pairs this method's landmarks: (radius in µm, axes it is measured on).

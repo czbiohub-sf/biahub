@@ -10,7 +10,7 @@ import napari
 from biahub.registration.legacy.convert_settings import EstimateRegistrationSettings
 import numpy as np
 
-from biahub.registration.methods.landmark.bead_matching import transform_from_matches, matches_from_beads, peaks_from_beads, optimize_transform
+from biahub.registration.methods.landmark.bead_matching import transform_from_matches, matches_from_beads, peaks_from_beads
 
 # %%%
 
