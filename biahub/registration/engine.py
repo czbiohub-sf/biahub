@@ -1899,9 +1899,10 @@ def init_run(
 
     propagated = settings.transform.seed_from == "previous_timepoint"
     # a stack's jobs run every block: plan for the heaviest
-    # a neighbour median holds 2 x window frames and the median, besides the method's volumes
+    # a neighbour median holds 2 x window frames, the one being read and the median,
+    # besides the method's volumes
     reference_volumes = (
-        2 * settings.reference.window + 1 if settings.reference.frame == "neighbours" else 0
+        2 * settings.reference.window + 2 if settings.reference.frame == "neighbours" else 0
     )
     num_cpus, gb_ram_per_cpu = max(
         (

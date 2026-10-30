@@ -121,11 +121,20 @@ class NeighbourMedian:
         self.window = window
         self.first = first
         self.last = last
+        self._t: int | None = None  # the last timepoint gathered, its neighbours, median
+        self._indices: list[int] = []
+        self._median: np.ndarray | None = None
 
-    def _frames(self, mov: ArrayLike, t: int) -> list[tuple[int, np.ndarray]]:
-        """Return the neighbours with data, (index, frame), each frame read once."""
+    def _gather(self, mov: ArrayLike, t: int) -> None:
+        """Read t's neighbours once and keep their median (both calls for t reuse it).
+
+        The frames go straight into one preallocated array and the median is taken in
+        place: the peak is 2 x window frames, the one being read and the median.
+        """
+        if self._t == t:
+            return
         last = t + self.window if self.last is None else min(t + self.window, self.last)
-        found = []
+        stack, indices = None, []
         for k in range(max(self.first, t - self.window), last + 1):
             if k == t:
                 continue
@@ -133,19 +142,25 @@ class NeighbourMedian:
                 frame = np.asarray(mov[k])
             except IndexError:  # past the series' last frame
                 break
-            if not is_empty(frame):
-                found.append((k, frame))
-        return found
+            if is_empty(frame):
+                continue
+            if stack is None:
+                stack = np.empty((2 * self.window, *frame.shape), dtype=np.float32)
+            stack[len(indices)] = frame
+            indices.append(k)
+        self._t, self._indices, self._median = t, indices, None
+        if indices:
+            self._median = np.median(stack[: len(indices)], axis=0, overwrite_input=True)
+            self._median = self._median.astype(np.float32, copy=False)
 
     def neighbour_indices(self, mov: ArrayLike, t: int) -> list[int]:
         """Return the frames t's reference is the median of (empty: t is its own)."""
-        return [k for k, _ in self._frames(mov, t)]
+        self._gather(mov, t)
+        return list(self._indices)
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
-        frames = [frame for _, frame in self._frames(mov, t)]
-        if not frames:
-            return np.asarray(mov[t])
-        return np.median(np.stack(frames), axis=0).astype(np.float32)
+        self._gather(mov, t)
+        return self._median if self._median is not None else np.asarray(mov[t])
 
 
 @runtime_checkable

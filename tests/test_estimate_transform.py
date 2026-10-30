@@ -1065,4 +1065,4 @@ def test_a_neighbour_median_run_plans_memory_for_the_frames_it_holds(tmp_path):
     first = plan({"frame": "first"})
     wide = plan({"frame": "neighbours", "window": 6})
     gb_per_volume = np.prod(zyx) * 4 / 2**30
-    assert first["mem_gb"] < (10 + 13) * gb_per_volume <= wide["mem_gb"]
+    assert first["mem_gb"] < (10 + 14) * gb_per_volume <= wide["mem_gb"]

@@ -86,3 +86,21 @@ def test_a_neighbour_median_reference_leaves_out_t_and_keeps_inside_the_run():
     alone = np.stack([np.zeros((2, 2)), np.ones((2, 2)), np.zeros((2, 2))])
     assert lonely.neighbour_indices(alone, 1) == []
     np.testing.assert_array_equal(lonely.reference_for(alone, 1), np.ones((2, 2)))
+
+
+def test_a_neighbour_median_holds_its_frames_once():
+    # the real run ran out of memory: frames kept in a list, stacked into a copy, and the
+    # median sorting another; now the peak is 2 x window frames, the one read and the median
+    import tracemalloc
+
+    from biahub.registration.policies import NeighbourMedian
+
+    frames = np.random.default_rng(0).random((13, 16, 64, 64)).astype(np.float32)
+    frame_bytes = frames[0].nbytes
+    policy = NeighbourMedian(window=6)
+    tracemalloc.start()
+    policy.reference_for(frames, 6)
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert peak <= (2 * 6 + 2) * frame_bytes * 1.05
+    policy.neighbour_indices(frames, 6)  # the same timepoint: no second read
