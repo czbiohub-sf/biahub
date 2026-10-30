@@ -1804,14 +1804,21 @@ RAM_VOLUMES_PER_JOB = {"ants": 30}
 DEFAULT_RAM_VOLUMES_PER_JOB = 10
 
 
-def _estimate_job_resources(method: str, zyx_shape: tuple[int, int, int]) -> tuple[int, int]:
-    """Return (cpus, GB of RAM per CPU) for one estimate job of `method` on this volume."""
+def _estimate_job_resources(
+    method: str, zyx_shape: tuple[int, int, int], extra_volumes: int = 0
+) -> tuple[int, int]:
+    """Return (cpus, GB of RAM per CPU) for one estimate job of `method` on this volume.
+
+    `extra_volumes`: volumes the reference holds besides the method's own (a neighbour
+    median holds its frames and the median).
+    """
     # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
     _, num_cpus, min_gb_per_cpu = estimate_resources(
         shape=(1, 2, *zyx_shape), max_num_cpus=8 if method == "ants" else 4
     )
     gb_per_volume = np.prod(zyx_shape) * np.dtype(np.float32).itemsize / 2**30
-    job_gb = gb_per_volume * RAM_VOLUMES_PER_JOB.get(method, DEFAULT_RAM_VOLUMES_PER_JOB)
+    volumes = RAM_VOLUMES_PER_JOB.get(method, DEFAULT_RAM_VOLUMES_PER_JOB) + extra_volumes
+    job_gb = gb_per_volume * volumes
     return num_cpus, int(max(min_gb_per_cpu, np.ceil(job_gb / num_cpus)))
 
 
@@ -1892,8 +1899,15 @@ def init_run(
 
     propagated = settings.transform.seed_from == "previous_timepoint"
     # a stack's jobs run every block: plan for the heaviest
+    # a neighbour median holds 2 x window frames and the median, besides the method's volumes
+    reference_volumes = (
+        2 * settings.reference.window + 1 if settings.reference.frame == "neighbours" else 0
+    )
     num_cpus, gb_ram_per_cpu = max(
-        (_estimate_job_resources(m, (Z, Y, X)) for m in settings.method_names),
+        (
+            _estimate_job_resources(m, (Z, Y, X), reference_volumes)
+            for m in settings.method_names
+        ),
         key=lambda r: r[0] * r[1],
     )
     n_trials = len(settings.sweep_trials()) if settings.fallback.sweep is not None else 0

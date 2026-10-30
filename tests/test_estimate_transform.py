@@ -1042,3 +1042,27 @@ def test_a_neighbour_median_reference_needs_several_timepoints():
             method="phase_cross_corr",
             time_indices=4,
         )
+
+
+def test_a_neighbour_median_run_plans_memory_for_the_frames_it_holds(tmp_path):
+    # each timepoint holds 2 x window frames and their median besides the method's volumes
+    from biahub.registration.engine import init_run
+    from biahub.settings import EstimateTransformSettings as Settings
+
+    zyx = (171, 768, 794)  # the neuromast timelapse; created empty (metadata only)
+    path = tmp_path / "big.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]) as p:
+        p.create_position("A", "1", "0").create_zeros("0", (3, 2, *zyx), dtype=np.float32)
+    plate = path / "A" / "1" / "0"
+
+    def plan(reference):
+        settings = Settings(
+            moving={"channel": "GFP"}, reference=reference, method="phase_cross_corr"
+        )
+        out = tmp_path / reference["frame"]
+        return init_run(plate, plate, settings, out)["resources"]["estimate"]
+
+    first = plan({"frame": "first"})
+    wide = plan({"frame": "neighbours", "window": 6})
+    gb_per_volume = np.prod(zyx) * 4 / 2**30
+    assert first["mem_gb"] < (10 + 13) * gb_per_volume <= wide["mem_gb"]
