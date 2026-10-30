@@ -60,6 +60,19 @@ Every decision -- accept or flag, repair, the competitions -- uses one score per
 Beads matching is deterministic but depends on where it starts: on a drifting series,
 `previous_timepoint` finds better correspondences at hard timepoints.
 
+## Stabilization: `reference.frame: first` or `previous`
+
+- `first`: every timepoint against one frame (the first with data); absolute
+  transforms, no chain. Fine while the sample stays recognisable against that frame.
+- `previous`: each timepoint against the previous frame with data, steps chained onto
+  the run's first frame. **Every step's error is carried by all later frames.** On a
+  761-frame neuromast timelapse (GFP nuclei, whole-pixel phase correlation) the chain
+  drifted -384 px in y (~0.5 px per frame) while the sample never left +-30 px of the
+  centre; single-frame jumps that snap back are counted twice (out and back). Before
+  applying a long `previous` chain, compare its cumulative translation with the sample's
+  centroid over time; prefer `first`, and keep chains short. A neighbour-median
+  reference (no chain) is planned.
+
 ## One transform for the plate, or one per position: `pool` and `transform.seed_file`
 
 - `pool: {z: medoid | median}`: estimate on several positions and write ONE shared

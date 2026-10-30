@@ -1275,6 +1275,11 @@ class ReferenceSettings(MyBaseModel):
     `frame: cross` -- `channel` of the reference store at the same timepoint
     (registration). `frame: first` / `previous` -- the moving channel's own first /
     previous timepoint (stabilization); `channel` is then omitted.
+
+    `previous` chains each step onto the run's first frame, so a step's error is carried
+    by every later frame: on long series, whole-pixel phase correlation drifted by about
+    0.5 px per frame (-384 px over 761 frames on a neuromast timelapse) while the sample
+    stayed in place. Check the chained translation against the sample before applying.
     """
 
     frame: ReferenceFrame = "cross"
