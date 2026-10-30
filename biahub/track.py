@@ -1,15 +1,9 @@
-import ast
-import json
 import logging
-import os
 import shutil
-import tempfile
 
-from contextlib import contextmanager
 from pathlib import Path
 
 import click
-import dask.array as da
 import numpy as np
 import pandas as pd
 import submitit
@@ -30,13 +24,113 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
-from biahub.cli.resolve_function import resolve_function
 from biahub.settings import (
     HoctConfig,
     ProcessingInputChannel,
     TrackastraConfig,
     TrackingSettings,
     TracksdataConfig,
+)
+from biahub.tracking.graph import (
+    TRACK_COLUMNS as TRACK_COLUMNS,
+)
+from biahub.tracking.graph import (
+    _empty_result as _empty_result,
+)
+from biahub.tracking.graph import (
+    _isolated_tracks as _isolated_tracks,
+)
+from biahub.tracking.graph import (
+    _select_every_detection as _select_every_detection,
+)
+from biahub.tracking.graph import (
+    _solution_to_tracks as _solution_to_tracks,
+)
+from biahub.tracking.methods.hoct import (
+    _import_hoct as _import_hoct,
+)
+from biahub.tracking.methods.hoct import (
+    _run_hoct as _run_hoct,
+)
+from biahub.tracking.methods.hoct import (
+    _select_sparse_links as _select_sparse_links,
+)
+from biahub.tracking.methods.hoct import (
+    hoct_solver_config as hoct_solver_config,
+)
+from biahub.tracking.methods.hoct import (
+    run_hoct as run_hoct,
+)
+from biahub.tracking.methods.hoct import (
+    warm_hoct_weights as warm_hoct_weights,
+)
+from biahub.tracking.methods.trackastra import (
+    _run_trackastra as _run_trackastra,
+)
+from biahub.tracking.methods.trackastra import (
+    run_trackastra as run_trackastra,
+)
+from biahub.tracking.methods.trackastra import (
+    warm_trackastra_weights as warm_trackastra_weights,
+)
+from biahub.tracking.methods.tracksdata import (
+    _num_threads as _num_threads,
+)
+from biahub.tracking.methods.tracksdata import (
+    _solve_tracksdata as _solve_tracksdata,
+)
+from biahub.tracking.methods.tracksdata import (
+    run_tracksdata as run_tracksdata,
+)
+from biahub.tracking.methods.ultrack import (
+    _database_dirpath as _database_dirpath,
+)
+from biahub.tracking.methods.ultrack import (
+    _patch_ultrack_readonly_buffer as _patch_ultrack_readonly_buffer,
+)
+from biahub.tracking.methods.ultrack import (
+    _resolved_ultrack_config as _resolved_ultrack_config,
+)
+from biahub.tracking.methods.ultrack import (
+    _ultrack_patched as _ultrack_patched,
+)
+from biahub.tracking.methods.ultrack import (
+    detect_foreground_segmentation as detect_foreground_segmentation,
+)
+from biahub.tracking.methods.ultrack import (
+    run_ultrack as run_ultrack,
+)
+from biahub.tracking.postprocess import (
+    _merge_single_children as _merge_single_children,
+)
+from biahub.tracking.postprocess import (
+    _upsample_result as _upsample_result,
+)
+
+# Moved to biahub.tracking (#449); re-exported so `from biahub.track import ...` keeps working.
+from biahub.tracking.postprocess import (
+    filter_short_siblings as filter_short_siblings,
+)
+from biahub.tracking.preprocess import (
+    CUSTOM_FUNCTIONS as CUSTOM_FUNCTIONS,
+)
+from biahub.tracking.preprocess import (
+    _downsample as _downsample,
+)
+from biahub.tracking.preprocess import (
+    fill_empty_frames as fill_empty_frames,
+)
+from biahub.tracking.preprocess import (
+    fill_empty_frames_from_csv as fill_empty_frames_from_csv,
+)
+from biahub.tracking.preprocess import (
+    get_empty_frames_idx_from_csv as get_empty_frames_idx_from_csv,
+)
+from biahub.tracking.preprocess import (
+    mem_nuc_contour as mem_nuc_contour,
+)
+from biahub.tracking.preprocess import (
+    run_preprocessing_pipeline as run_preprocessing_pipeline,
 )
 from biahub.utils.cluster import (
     apply_sbatch_overrides,
@@ -55,205 +149,6 @@ PROVENANCE_KEY = "biahub-track"
 
 # Lazy imports for ultrack - imported only when needed in specific functions
 
-_ultrack_patched = False
-
-
-def _patch_ultrack_readonly_buffer():
-    """Workaround for scikit-image #6378: read-only buffer in _map_array.
-
-    scikit-image's Cython ``_map_array`` rejects read-only memoryviews.
-    Under numpy 2.x, pandas DataFrame columns and ``np.asarray`` results are
-    often read-only, so every call path through ``map_array`` can trigger this.
-
-    Patch ``skimage.util.map_array`` directly to force writable copies of
-    all arrays before passing them to Cython.
-
-    Remove when scikit-image >= 0.27 is available.
-    """
-    global _ultrack_patched
-    if _ultrack_patched:
-        return
-    _ultrack_patched = True
-
-    import skimage.util._map_array as _ma
-
-    _original_map_array = _ma.map_array
-
-    def _map_array_writable(input_arr, input_vals, output_vals, out=None):
-        input_arr = np.array(input_arr, copy=False)
-        if not input_arr.flags.writeable:
-            input_arr = input_arr.copy()
-        input_vals = np.array(input_vals, copy=False)
-        if not input_vals.flags.writeable:
-            input_vals = input_vals.copy()
-        output_vals = np.array(output_vals, copy=False)
-        if not output_vals.flags.writeable:
-            output_vals = output_vals.copy()
-        return _original_map_array(input_arr, input_vals, output_vals, out=out)
-
-    _ma.map_array = _map_array_writable
-
-
-def mem_nuc_contour(nuclei_prediction: ArrayLike, membrane_prediction: ArrayLike) -> ArrayLike:
-    """
-    Compute a contour map at the boundary between nuclei and membranes.
-
-    This function enhances boundary contrast by averaging the membrane signal with the
-    inverse of the nucleus signal. The result is a contour-like representation that
-    highlights the interface between nuclear and membrane regions.
-
-    Parameters
-    ----------
-    nuclei_prediction : ArrayLike
-        Array representing the predicted nuclear signal. Values are typically in [0, 1].
-    membrane_prediction : ArrayLike
-        Array representing the predicted membrane signal. Values are typically in [0, 1].
-
-    Returns
-    -------
-    ArrayLike
-        The resulting contour map, computed as the average of membrane and (1 - nucleus).
-        Output has the same shape as the input arrays.
-
-    Notes
-    -----
-    - Both input arrays must have the same shape.
-    - Values are not thresholded; this function assumes soft probabilities or intensities.
-    - The function is compatible with NumPy or Dask arrays (via `np.asarray` conversion).
-
-    Examples
-    --------
-    >>> contour = mem_nuc_contour(nuc, mem)
-    >>> contour.shape == nuc.shape
-    True
-    """
-    return (np.asarray(membrane_prediction) + (1 - np.asarray(nuclei_prediction))) / 2
-
-
-CUSTOM_FUNCTIONS = {
-    "biahub.track.mem_nuc_contour": mem_nuc_contour,
-}
-
-
-def fill_empty_frames(arr: ArrayLike, empty_frames_idx: list[int]) -> ArrayLike:
-    """
-    Fill empty frames in a time-series imaging array using nearest available frames.
-
-    This function modifies a temporal image stack by replacing specified empty frames
-    (e.g., entirely blank or corrupted) with the nearest valid frame. For leading/trailing
-    empty frames, the nearest single neighbor is used. For interior empty frames, it
-    prioritizes previous-frame filling but can fall back to future frames if needed.
-
-    Parameters
-    ----------
-    arr : ArrayLike
-        Time-series imaging data of shape (T, Y, X) or (T, C, Y, X). The first dimension must be time.
-    empty_frames_idx : list of int
-        List of time indices (frame numbers) that are considered empty and should be filled.
-
-    Returns
-    -------
-    ArrayLike
-        The modified array with empty frames replaced in-place using temporal neighbors.
-
-    Notes
-    -----
-    - This function modifies the input array in-place.
-    - If no valid neighbors are available (e.g., all frames empty), the original frame is left unchanged.
-    - For performance and reproducibility, the function uses a simple sequential search rather than interpolation.
-
-    Examples
-    --------
-    >>> arr.shape
-    (10, 1, 256, 256)  # T, C, Y, X
-    >>> empty_frames_idx = [0, 4]
-    >>> arr_filled = fill_empty_frames(arr, empty_frames_idx)
-    """
-    if not empty_frames_idx or not isinstance(empty_frames_idx, list):
-        return arr
-
-    num_frames = arr.shape[0]
-
-    for idx in empty_frames_idx:
-        if idx == 0:  # First frame is empty
-            # Use the next non-empty frame to fill the first frame
-            next_non_empty = next(
-                (i for i in range(idx + 1, num_frames) if i not in empty_frames_idx), None
-            )
-            if next_non_empty is not None:
-                arr[idx] = arr[next_non_empty]
-        elif idx == num_frames - 1:  # Last frame is empty
-            # Use the previous non-empty frame to fill the last frame
-            prev_non_empty = next(
-                (i for i in range(idx - 1, -1, -1) if i not in empty_frames_idx), None
-            )
-            if prev_non_empty is not None:
-                arr[idx] = arr[prev_non_empty]
-        else:  # Middle frames are empty
-            # Find the nearest non-empty frame (previous or next)
-            prev_non_empty = next(
-                (i for i in range(idx - 1, -1, -1) if i not in empty_frames_idx), None
-            )
-            next_non_empty = next(
-                (i for i in range(idx + 1, num_frames) if i not in empty_frames_idx), None
-            )
-
-            if prev_non_empty is not None and next_non_empty is not None:
-                arr[idx] = arr[prev_non_empty]
-            elif prev_non_empty is not None:
-                # Fill with the previous non-empty frame
-                arr[idx] = arr[prev_non_empty]
-            elif next_non_empty is not None:
-                # Fill with the next non-empty frame
-                arr[idx] = arr[next_non_empty]
-
-    return arr
-
-
-def get_empty_frames_idx_from_csv(blank_frame_df: pd.DataFrame, fov: str) -> list[int] | None:
-    """
-    Extract the indices of empty timepoints for a given field of view (FOV) from a DataFrame.
-
-    This function parses a DataFrame that contains information about blank (empty) frames
-    across different FOVs and returns a list of time indices corresponding to empty frames
-    for the specified FOV.
-
-    Parameters
-    ----------
-    blank_frame_df : pandas.DataFrame
-        DataFrame containing at least two columns: 'FOV' (str) and 't' (list-like or int).
-        The 't' column may contain strings representing Python lists (e.g., "[0, 3, 5]").
-    fov : str
-        Field of view identifier used to filter the DataFrame.
-
-    Returns
-    -------
-    list of int or None
-        List of integer indices representing empty timepoints for the specified FOV.
-        Returns `None` if no matching FOV is found or if no empty frames are reported.
-
-    Notes
-    -----
-    - The function uses `ast.literal_eval` to parse stringified lists from CSV files.
-    - If `t` is the integer 0 (and not a list), it assumes no empty frames and returns `None`.
-
-    Examples
-    --------
-    >>> df = pd.DataFrame({"FOV": ["A/1/1"], "t": ["[0, 2, 4]"]})
-    >>> get_empty_frames_idx_from_csv(df, "A/1/1")
-    [0, 2, 4]
-    """
-    empty_frames_idx = blank_frame_df[blank_frame_df["FOV"] == fov]["t"]
-    if not empty_frames_idx.empty:
-        t_value = empty_frames_idx.iloc[0]
-        if isinstance(t_value, str) and t_value.startswith("["):
-            t_value = ast.literal_eval(t_value)
-        if isinstance(t_value, list):
-            return [int(i) for i in t_value]
-        elif t_value == 0:
-            return None
-    return None
-
 
 def check_input_dimensionality(output_mode: str, z_size: int) -> None:
     """Refuse an input whose Z does not match ``output_mode``.
@@ -270,626 +165,6 @@ def check_input_dimensionality(output_mode: str, z_size: int) -> None:
         raise ValueError(
             "output_mode is 3D but the input has one Z-plane; set output_mode: 2D."
         )
-
-
-def filter_short_siblings(
-    tracks_df: pd.DataFrame, labels: ArrayLike, min_length: int
-) -> tuple[pd.DataFrame, np.ndarray]:
-    """Remove short daughter tracks at divisions, in tracks and labels.
-
-    At each division where exactly one daughter lives ``min_length`` frames or fewer
-    and does not divide again, that daughter is dropped (its labels set to 0) and the
-    other daughter is merged into the parent. If both daughters are that short, both
-    are kept. This is ultrack's ``filter_short_sibling_tracks``, which counts a
-    daughter of exactly ``min_length`` frames as short.
-    """
-    from ultrack.tracks import filter_short_sibling_tracks
-
-    n_before = tracks_df.track_id.nunique()
-    tracks_df, labels = filter_short_sibling_tracks(tracks_df, min_length, segments=labels)
-    tracks_df = tracks_df.sort_values(["track_id", "t"]).reset_index(drop=True)
-    click.echo(
-        f"Sibling filter (min_length={min_length}): {n_before} -> "
-        f"{tracks_df.track_id.nunique()} tracks"
-    )
-    return tracks_df, np.asarray(labels)
-
-
-TRACK_COLUMNS = ["track_id", "t", "y", "x", "parent_track_id"]
-
-
-def _empty_result(shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
-    """Zero labels and a tracks table with no rows, for movies with nothing to track."""
-    tracks = pd.DataFrame(
-        {
-            "track_id": pd.Series(dtype="int64"),
-            "t": pd.Series(dtype="int64"),
-            "y": pd.Series(dtype="float64"),
-            "x": pd.Series(dtype="float64"),
-            "parent_track_id": pd.Series(dtype="int64"),
-        }
-    )
-    return np.zeros(shape, dtype=np.int32), tracks
-
-
-def _num_threads() -> int:
-    """CPUs for the ILP solvers: the SLURM allocation, else this process's CPUs."""
-    if os.environ.get("SLURM_CPUS_PER_TASK"):
-        return int(os.environ["SLURM_CPUS_PER_TASK"])
-    if hasattr(os, "sched_getaffinity"):  # not on macOS or Windows
-        return len(os.sched_getaffinity(0))
-    return os.cpu_count() or 1
-
-
-def _select_every_detection(graph, keep_edges: bool = False):
-    """Mark every node selected: each detection becomes its own track.
-
-    Used when a candidate graph has no edges (one frame, or objects farther apart than
-    the distance threshold), which the ILP solvers refuse. ``keep_edges`` also selects
-    the edges, for a graph whose single edge is the only possible link.
-    """
-    import polars as pl
-    import tracksdata as td
-
-    solution = td.DEFAULT_ATTR_KEYS.SOLUTION
-    graph.add_node_attr_key(solution, pl.Boolean, default_value=True)
-    graph.add_edge_attr_key(solution, pl.Boolean, default_value=keep_edges)
-    return graph
-
-
-def _isolated_tracks(labels: np.ndarray) -> tuple[np.ndarray, pd.DataFrame]:
-    """Each detection of (T, Y, X) ``labels`` as its own track, without linking."""
-    import tracksdata as td
-
-    graph = td.graph.InMemoryGraph()
-    td.nodes.RegionPropsNodes().add_nodes(graph, labels=labels)
-    return _solution_to_tracks(_select_every_detection(graph), labels.shape)
-
-
-def _select_sparse_links(graph):
-    """Select every detection and its candidate links, one incoming link per detection.
-
-    For graphs where HOCT could score no inference window (each holds at most one
-    candidate link, so each link is the only option where it is): every node is kept,
-    and each node keeps one incoming edge (the first), so no detection gets two parents.
-    """
-    import polars as pl
-    import tracksdata as td
-
-    keys = td.DEFAULT_ATTR_KEYS
-    graph.add_node_attr_key(keys.SOLUTION, pl.Boolean, default_value=True)
-    graph.add_edge_attr_key(keys.SOLUTION, pl.Boolean, default_value=False)
-    edges = graph.edge_attrs(attr_keys=[keys.EDGE_ID, keys.EDGE_SOURCE, keys.EDGE_TARGET])
-    keep = edges.unique(subset=[keys.EDGE_TARGET], keep="first")[keys.EDGE_ID].to_list()
-    if keep:
-        graph.update_edge_attrs(attrs={keys.SOLUTION: True}, edge_ids=keep)
-    return graph
-
-
-def _solve_tracksdata(labels: np.ndarray, config: TracksdataConfig, pixel_size: float):
-    """Build the tracksdata graph of (T, Y, X) ``labels`` and solve its ILP.
-
-    Returns the solved graph (nodes and edges carry the ``solution`` attribute).
-    """
-    import polars as pl
-    import tracksdata as td
-
-    _, Y, X = labels.shape
-    graph = td.graph.InMemoryGraph()
-    td.nodes.RegionPropsNodes().add_nodes(graph, labels=labels)
-    margin = config.border_margin_um / pixel_size
-    appearance = config.appearance_weight
-    if margin > 0:
-        nodes = graph.node_attrs(attr_keys=[td.DEFAULT_ATTR_KEYS.NODE_ID, "y", "x"])
-        y, x = nodes["y"].to_numpy(), nodes["x"].to_numpy()
-        is_border = ((y < margin) | (y > Y - margin) | (x < margin) | (x > X - margin)).astype(
-            float
-        )
-        graph.add_node_attr_key("is_border", pl.Float64, default_value=0.0)
-        graph.update_node_attrs(
-            attrs={"is_border": is_border.tolist()},
-            node_ids=nodes[td.DEFAULT_ATTR_KEYS.NODE_ID].to_list(),
-        )
-        border = td.NodeAttr("is_border")
-        appearance = appearance * (1 - border) + config.border_appearance_weight * border
-    td.edges.DistanceEdges(
-        distance_threshold=config.distance_threshold_um / pixel_size,
-        n_neighbors=config.n_neighbors,
-    ).add_edges(graph)
-    if graph.num_edges() == 0:
-        return _select_every_detection(graph)
-    td.edges.IoUEdgeAttr(output_key="iou").add_edge_attrs(graph)
-    edge_weight = (
-        -td.EdgeAttr("iou")
-        * (td.EdgeAttr("distance") * (pixel_size / config.distance_norm_um)).exp()
-    )
-    td.solvers.ILPSolver(
-        edge_weight=edge_weight,
-        node_weight=config.node_weight,
-        appearance_weight=appearance,
-        disappearance_weight=config.disappearance_weight,
-        division_weight=config.division_weight,
-        num_threads=_num_threads(),
-        return_solution=False,
-    ).solve(graph)
-    return graph
-
-
-def _merge_single_children(
-    tracks: pd.DataFrame, labels: np.ndarray
-) -> tuple[pd.DataFrame, np.ndarray]:
-    """Merge every track that is its parent's only child into the parent.
-
-    Linking across skipped frames (HOCT's ``max_delta_t``, CTC conversion at gaps)
-    splits one track into parent -> one child. ultrack's tables, and the sibling filter
-    built on them, allow only 0 or 2 children, so the child takes its parent's id in the
-    tracks and the labels; chains collapse to their first track.
-    """
-    linked = tracks[tracks.parent_track_id != -1]
-    kids = linked.groupby("parent_track_id").track_id.unique()
-    into = {int(k[0]): int(parent) for parent, k in kids.items() if len(k) == 1}
-    if not into:
-        return tracks, labels
-
-    def root(track_id: int) -> int:
-        while track_id in into:
-            track_id = into[track_id]
-        return track_id
-
-    original_parent = tracks.groupby("track_id").parent_track_id.first().astype(int)
-    tracks = tracks.copy()
-    tracks["track_id"] = tracks.track_id.map(lambda k: root(int(k)))
-    tracks["parent_track_id"] = tracks.track_id.map(
-        lambda k: -1 if original_parent[k] == -1 else root(int(original_parent[k]))
-    )
-    lut = np.arange(int(labels.max()) + 1, dtype=labels.dtype)
-    for child in into:
-        if child < len(lut):
-            lut[child] = root(child)
-    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
-    return tracks, lut[labels]
-
-
-def _solution_to_tracks(graph, shape: tuple[int, ...]) -> tuple[np.ndarray, pd.DataFrame]:
-    """Convert a solved tracksdata graph to labels (value = track_id) and ultrack-like tracks.
-
-    The tracks have ``track_id, t, y, x, parent_track_id`` (-1 for roots), the columns
-    the sibling filter and the tracks CSV use. HOCT promotes 2D movies to (T, 1, Y, X)
-    and records that shape in the graph metadata, so labels are rendered in the graph's
-    own shape and reshaped to ``shape``.
-    """
-    import tracksdata as td
-
-    solution_key = td.DEFAULT_ATTR_KEYS.SOLUTION
-    if graph.num_nodes() == 0 or (
-        solution_key in graph.node_attr_keys()
-        and not graph.node_attrs(attr_keys=[solution_key])[solution_key].any()
-    ):
-        # The solver selected nothing (an empty solution can be the cheapest one).
-        return _empty_result(shape)
-
-    metadata = getattr(graph, "metadata", None) or {}
-    render_shape = tuple(metadata.get("shape", shape))
-    tracks, parents, labels_view = td.functional.to_napari_format(
-        graph, shape=render_shape, mask_key=td.DEFAULT_ATTR_KEYS.MASK
-    )
-    tracks = tracks.to_pandas().rename(columns={"tracklet_id": "track_id"})
-    tracks = tracks[["track_id", "t", "y", "x"]].copy()
-
-    def parent_of(track_id):
-        parent = parents.get(int(track_id), -1)
-        return int(parent[0]) if isinstance(parent, (list, tuple)) else int(parent)
-
-    tracks["parent_track_id"] = tracks.track_id.map(parent_of)
-    tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
-    labels = np.stack([np.asarray(labels_view[t]) for t in range(shape[0])])
-    tracks, labels = _merge_single_children(tracks, labels.reshape(shape).astype(np.int32))
-    return labels, tracks
-
-
-def run_tracksdata(
-    labels: np.ndarray, config: TracksdataConfig, pixel_size: float
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Link fixed (T, Y, X) instance labels with tracksdata's ILP."""
-    if not labels.any():
-        return _empty_result(labels.shape)
-    graph = _solve_tracksdata(labels, config, pixel_size)
-    return _solution_to_tracks(graph, labels.shape)
-
-
-def _import_hoct():
-    try:
-        import hoct
-        import hoct.features
-    except ImportError as e:
-        raise ImportError(
-            "tracker: hoct needs HOCT, which biahub[track] installs on Python < 3.14 only "
-            "(its gurobipy pin has no Python 3.14 wheels)."
-        ) from e
-    return hoct
-
-
-def hoct_solver_config(config: HoctConfig):
-    """HOCT's ILPSolverConfig: ``config.solver`` overrides on HOCT's tracking defaults.
-
-    ILPSolverConfig needs every field when built directly, and refuses unknown keys.
-    """
-    _import_hoct()
-    from hoct.tracking import ILPSolverConfig
-
-    return ILPSolverConfig.model_validate(
-        {**ILPSolverConfig.default().model_dump(), **config.solver}
-    )
-
-
-def warm_hoct_weights(model: str) -> None:
-    """Download HOCT weights into the shared cache once (from --init, on the head node)."""
-    hoct = _import_hoct()
-    hoct.load_model(model, device="cpu")
-    click.echo(f"HOCT weights ready: {model}")
-
-
-def _downsample(
-    labels: np.ndarray, images: np.ndarray, factor: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """Shrink (T, Y, X) labels and images by an integer factor.
-
-    Labels are strided (every ``factor``-th pixel), which keeps the label ids; images are
-    block-averaged. Objects smaller than the stride can vanish (they stay untracked).
-    """
-    T, Y, X = labels.shape
-    Yc, Xc = Y // factor * factor, X // factor * factor
-    small_images = (
-        np.asarray(images)[:, :Yc, :Xc]
-        .reshape(T, Yc // factor, factor, Xc // factor, factor)
-        .mean(axis=(2, 4))
-        .astype(np.float32)
-    )
-    return np.ascontiguousarray(labels[:, :Yc:factor, :Xc:factor]), small_images
-
-
-def _upsample_result(
-    tracked_small: np.ndarray,
-    tracks: pd.DataFrame,
-    labels_small: np.ndarray,
-    labels: np.ndarray,
-    factor: int,
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Map tracks found on downsampled labels back to the full-resolution labels.
-
-    Each original label id takes the track id it got on the downsampled frame, so the
-    tracked labels keep the full-resolution masks; positions are rescaled by ``factor``.
-    """
-    tracked = np.zeros(labels.shape, dtype=np.int32)
-    for t in range(labels.shape[0]):
-        small, ids = labels_small[t].ravel(), tracked_small[t].ravel()
-        both = (small > 0) & (ids > 0)
-        if not both.any():
-            continue
-        pairs = np.unique(np.stack([small[both], ids[both]]), axis=1)
-        lut = np.zeros(int(labels[t].max()) + 1, dtype=np.int32)
-        lut[pairs[0]] = pairs[1]
-        tracked[t] = lut[labels[t]]
-    tracks = tracks.assign(y=tracks.y * factor, x=tracks.x * factor)
-    return tracked, tracks
-
-
-def run_hoct(
-    labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.
-
-    With ``config.downsample`` > 1 the labels and image are shrunk first (HOCT's models
-    were trained on small nuclei) and the result is mapped back to full resolution.
-    """
-    factor = config.downsample
-    if factor == 1:
-        return _run_hoct(labels, images, config, pixel_size)
-    labels_small, images_small = _downsample(labels, images, factor)
-    tracked, tracks = _run_hoct(labels_small, images_small, config, pixel_size * factor)
-    return _upsample_result(tracked, tracks, labels_small, labels, factor)
-
-
-def _run_hoct(
-    labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.
-
-    ``images`` is the (T, Y, X) image the labels were segmented from. HOCT runs in pixel
-    space, as its models were trained, so distances are converted to pixels.
-    """
-    if not labels.any():
-        return _empty_result(labels.shape)
-
-    import torch
-
-    hoct = _import_hoct()
-
-    # Build HOCT's candidate graph first: inference fails on a graph without edges.
-    graph = hoct.features.create_graph(
-        labels,
-        images=images,
-        distance_threshold=config.distance_threshold_um / pixel_size,
-        n_neighbors=config.n_neighbors,
-        delta_t=config.max_delta_t,
-    )
-    # HOCT 0.3.0's inference skips batches with at most one edge and then fails on an
-    # empty prediction list, so sparse graphs are resolved here: no edge leaves each
-    # detection on its own, a single edge is the only possible link.
-    if graph.num_edges() <= 1:
-        selected = _select_every_detection(graph, keep_edges=graph.num_edges() == 1)
-        return _solution_to_tracks(selected, labels.shape)
-
-    solver_config = hoct_solver_config(config)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = hoct.load_model(config.model, device=device)
-    try:
-        solution = hoct.predict(
-            model, graph=graph, solver_config=solver_config, return_solution=True
-        )
-    except ValueError as e:
-        # Every inference window held at most one candidate link, so HOCT scored none
-        # (0.3.0 then fails on an empty prediction list); each link is the only option.
-        if "non-empty list of Tensors" not in str(e):
-            raise
-        click.echo(
-            "HOCT scored no inference window (each holds at most one candidate link); "
-            "keeping every detection and its candidate links."
-        )
-        return _solution_to_tracks(_select_sparse_links(graph), labels.shape)
-    return _solution_to_tracks(solution, labels.shape)
-
-
-def warm_trackastra_weights(model: str) -> None:
-    """Download Trackastra weights into the shared cache once (from --init)."""
-    from trackastra.model import Trackastra
-
-    Trackastra.from_pretrained(model, device="cpu")
-    click.echo(f"Trackastra weights ready: {model}")
-
-
-def run_trackastra(
-    labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Link fixed (T, Y, X) instance labels with Trackastra.
-
-    With ``config.downsample`` > 1 the labels and image are shrunk first and the result
-    is mapped back to full resolution (as :func:`run_hoct`).
-    """
-    factor = config.downsample
-    if factor == 1:
-        return _run_trackastra(labels, images, config)
-    labels_small, images_small = _downsample(labels, images, factor)
-    tracked, tracks = _run_trackastra(labels_small, images_small, config)
-    return _upsample_result(tracked, tracks, labels_small, labels, factor)
-
-
-def _run_trackastra(
-    labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Link fixed (T, Y, X) instance labels with Trackastra.
-
-    ``images`` is the (T, Y, X) image the labels were segmented from. Trackastra's
-    ``graph_to_ctc`` relabels the masks by track and gives each track's parent; the
-    tracks table takes each track's centroid per frame.
-    """
-    if not labels.any():
-        return _empty_result(labels.shape)
-    if labels.shape[0] < 2:
-        # Trackastra needs two frames to link; one frame is its detections, unlinked.
-        return _isolated_tracks(labels)
-
-    import torch
-
-    from skimage.measure import regionprops_table
-    from trackastra.model import Trackastra
-    from trackastra.tracking import graph_to_ctc
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if Path(config.model).exists():
-        model = Trackastra.from_folder(Path(config.model), device=device)
-    else:
-        model = Trackastra.from_pretrained(config.model, device=device)
-    # track() also returns a rendered mask movie; keep only the graph so it is freed.
-    graph = model.track(images, labels, mode=config.mode)[0]
-    ctc, tracked = graph_to_ctc(graph, labels)
-    tracked = np.asarray(tracked).astype(np.int32)
-
-    rows = []
-    for t in range(tracked.shape[0]):
-        props = regionprops_table(tracked[t], properties=("label", "centroid"))
-        rows.append(
-            pd.DataFrame(
-                {
-                    "track_id": props["label"],
-                    "t": t,
-                    "y": props["centroid-0"],
-                    "x": props["centroid-1"],
-                }
-            )
-        )
-    tracks = pd.concat(rows, ignore_index=True)
-    # CTC marks roots with parent 0; ultrack's tables use -1.
-    # graph_to_ctc's table is CTC's res_track.txt: label, t1, t2, parent.
-    parent = dict(zip(ctc["label"].astype(int), ctc["parent"].astype(int), strict=True))
-    tracks["parent_track_id"] = tracks.track_id.map(lambda k: parent.get(int(k), 0) or -1)
-    tracks, tracked = _merge_single_children(tracks, tracked)
-    return tracked, tracks
-
-
-def run_ultrack(
-    tracking_config,
-    database_path,
-    geff_path: Path | None = None,
-    geff_kwargs: dict | None = None,
-    min_sibling_length: int | None = None,
-    **track_kwargs,
-):
-    """
-    Run object tracking using the Ultrack library.
-
-    Note: ultrack is imported lazily within this function.
-
-    This function performs object tracking on time-series image data and outputs labeled
-    segmentation results, a track DataFrame, and a graph of object trajectories over time.
-    The detection inputs are forwarded to ``Tracker.track()`` via ``**track_kwargs``, so it
-    accepts either the foreground+contour pair (``detection``, ``edges``) or precomputed
-    instance ``labels`` (with ``sigma``), plus ``scale`` and ``overwrite``.
-
-    Parameters
-    ----------
-    tracking_config : MainConfig
-        Ultrack configuration object defining segmentation, linking, and optimization parameters.
-    database_path : Path
-        Directory where tracking results, configuration files, and output data will be saved.
-    geff_path : Path, optional
-        If set, the tracks are also exported there as GEFF via ``Tracker.to_geff``
-        (overwriting any previous export), from the same tracks table the labels are
-        painted from, so the three outputs agree after the sibling filter.
-    geff_kwargs : dict, optional
-        Extra keyword arguments for ``Tracker.to_geff``.
-    min_sibling_length : int, optional
-        If set, apply :func:`filter_short_siblings` to the tracks and labels before the
-        GEFF export.
-    **track_kwargs
-        Keyword arguments forwarded to ``Tracker.track()``. E.g. ``detection``, ``edges``
-        (foreground+contour mode), or ``labels``, ``sigma`` (label-image mode), plus ``scale``
-        and ``overwrite``.
-
-    Returns
-    -------
-    labels : np.ndarray
-        Labeled segmentation array of shape (T, Z, Y, X) or (T, Y, X), where each object instance
-        is assigned a unique integer label across time.
-    tracks_df : pandas.DataFrame
-        DataFrame with tracking metadata including object ID, frame index, spatial coordinates,
-        and parent-child relationships.
-    graph : networkx.Graph
-        Directed graph representing tracked object lineages. Nodes correspond to objects and
-        edges represent links between objects across frames.
-
-    Notes
-    -----
-    - This function modifies `tracking_config` to set the working directory (`working_dir`).
-    - The configuration used is saved to `config.toml` under the `database_path`.
-    """
-    import toml
-
-    from ultrack import Tracker
-
-    _patch_ultrack_readonly_buffer()
-
-    cfg = tracking_config
-
-    cfg.data_config.working_dir = database_path
-
-    click.echo(str(cfg))
-
-    tracker = Tracker(cfg)
-    tracker.track(**track_kwargs)
-
-    tracks_df, graph = tracker.to_tracks_layer()
-    labels = tracker.to_zarr(
-        tracks_df=tracks_df,
-    )
-    if min_sibling_length is not None:
-        tracks_df, labels = filter_short_siblings(tracks_df, labels, min_sibling_length)
-    if geff_path is not None:
-        # `tracks_df` restricts the export to these (possibly filtered) tracks and their
-        # ids, which is what the labels were painted with (royerlab/ultrack: to_geff
-        # from a tracks DataFrame).
-        tracker.to_geff(
-            str(geff_path), overwrite=True, tracks_df=tracks_df, **(geff_kwargs or {})
-        )
-
-    with open(database_path / "config.toml", mode="w") as f:
-        toml.dump(cfg.dict(by_alias=True), f)
-
-    return (
-        labels,
-        tracks_df,
-        graph,
-    )
-
-
-def run_preprocessing_pipeline(
-    data_dict: dict[str, ArrayLike],
-    input_images: list[ProcessingInputChannel],
-    visualize: bool = False,
-) -> dict[str, ArrayLike]:
-    """
-    Run a configurable preprocessing pipeline on input image channels.
-
-    This function applies a sequence of user-defined functions (e.g., filters, transformations)
-    to each specified channel in the dataset. Function pipelines are defined via the
-    `ProcessingInputChannel` objects, which describe the function, its arguments, and whether
-    it should be applied per timepoint.
-
-    Parameters
-    ----------
-    data_dict : dict of str to ArrayLike
-        A dictionary where each key is a channel name and each value is the corresponding
-        multi-dimensional image array (typically of shape (T, Z, Y, X) or (T, C, Z, Y, X)).
-    input_images : list of ProcessingInputChannel
-        A list of input image specifications. Each `ProcessingInputChannel` defines
-        which channels to process and the pipeline (functions + arguments) to apply.
-    visualize : bool, optional
-        If True, opens a Napari viewer to display each processed channel after its pipeline.
-
-    Returns
-    -------
-    dict of str to ArrayLike
-        Updated dictionary where the processed channel data has replaced the originals.
-
-    Notes
-    -----
-    - The `step.input_channels` field can define which channel(s) to use as inputs
-      to a function, even if different from the one being written to.
-    - If `per_timepoint` is True for a step, the function will be applied frame-by-frame
-      using `ultrack.utils.array.array_apply`.
-    - All functions must be registered in the `FUNCTION_MAP` to be resolved.
-    """
-    import napari
-
-    from ultrack.utils.array import array_apply
-
-    for image in input_images:
-        for channel_name, pipeline in image.channels.items():
-            for step in pipeline:
-                click.echo(f"Processing {channel_name} with {step.function}")
-                f_name = step.function
-                run_function = resolve_function(f_name, custom_functions=CUSTOM_FUNCTIONS)
-                f_kwargs = step.kwargs
-                per_timepoint = step.per_timepoint
-                # if there is input channel, apply the function to the input channel otherwise apply the function to the output channel
-                f_channel_name = step.input_channels
-                if f_channel_name is None:
-                    f_channel_name = [channel_name]
-                # Feed the arrays in lazily. Materialising them here costs the full
-                # (T, Z, Y, X) stack -- tens of GB for a full timelapse -- even though
-                # neither branch below needs it all at once:
-                #   * array_apply slices one timepoint at a time into a zarr output;
-                #   * a reduction over a dask array (e.g. np.mean) streams chunk-wise
-                #     and only its much smaller result is materialised, just below.
-                # numpy functions dispatch on dask via __array_function__; any function
-                # that is not dask-aware falls back to np.asarray internally, which is
-                # exactly the eager behaviour this replaces.
-                f_data = [data_dict[name] for name in f_channel_name]
-                if per_timepoint:
-                    result = array_apply(*f_data, func=run_function, **f_kwargs)
-
-                else:
-                    result = run_function(*f_data, **f_kwargs)
-
-                if isinstance(result, da.Array):
-                    result = result.compute()
-
-                data_dict[channel_name] = result
-                if visualize:
-                    viewer = napari.Viewer()
-                    viewer.add_image(data_dict[channel_name], name=channel_name)
-
-    return data_dict
 
 
 def load_data(
@@ -952,46 +227,6 @@ def load_data(
     return data_dict
 
 
-def fill_empty_frames_from_csv(
-    fov: str,
-    data_dict: dict[str, ArrayLike],
-    blank_frame_csv_path: Path,
-) -> dict[str, ArrayLike]:
-    """
-    Fill empty timepoints in a multi-channel image dictionary using a CSV file of blank frames.
-
-    This function loads a list of empty time indices from a CSV and fills them using the
-    nearest non-empty frames in the data.
-
-    Parameters
-    ----------
-    fov : str
-        Field of view identifier used to filter the CSV rows.
-    data_dict : dict of str to ArrayLike
-        Dictionary mapping channel names to image arrays.
-    blank_frame_csv_path : Path
-        Path to the CSV file containing empty frame information.
-        The CSV must contain columns: 'FOV' and 't'.
-
-    Returns
-    -------
-    dict of str to ArrayLike
-        Updated dictionary with empty frames filled in-place.
-    """
-    if blank_frame_csv_path:
-        blank_frame_df = pd.read_csv(blank_frame_csv_path)
-        empty_frames_idx = get_empty_frames_idx_from_csv(blank_frame_df, fov)
-        for channel_name, channel_data in data_dict.items():
-            # fill_empty_frames mutates in place, so it needs a concrete array. Only
-            # materialise when there is actually something to fill, to keep channels
-            # that need no filling lazy.
-            if empty_frames_idx and isinstance(channel_data, da.Array):
-                channel_data = channel_data.compute()
-            data_dict[channel_name] = fill_empty_frames(channel_data, empty_frames_idx)
-
-    return data_dict
-
-
 def _load_and_preprocess(
     position_key: str,
     input_images: list[ProcessingInputChannel],
@@ -1008,22 +243,6 @@ def _load_and_preprocess(
     )
     data_dict = run_preprocessing_pipeline(data_dict, input_images, visualize=visualize)
     return fill_empty_frames_from_csv(fov, data_dict, blank_frames_path)
-
-
-def detect_foreground_segmentation(
-    data_dict: dict[str, ArrayLike],
-) -> tuple[ArrayLike, ArrayLike]:
-    """Pull the foreground mask and contour map out of a preprocessed ``data_dict``.
-
-    Accepts either separate ``foreground`` and ``contour`` channels or a single
-    ``foreground_contour`` pair. Raises if neither is present.
-    """
-    channel_names = data_dict.keys()
-    if "foreground" in channel_names and "contour" in channel_names:
-        return data_dict["foreground"], data_dict["contour"]
-    if "foreground_contour" in channel_names:
-        return data_dict["foreground_contour"]
-    raise ValueError("Foreground and contour channels are required for tracking.")
 
 
 def load_labels(
@@ -1184,34 +403,6 @@ def write_tracking_labels(label_array, labels: ArrayLike, output_mode: str) -> N
             f"tracking produced shape {labels.shape}."
         )
     label_array[:, 0] = labels
-
-
-@contextmanager
-def _database_dirpath(output_dirpath: Path | None, fov: str):
-    """Yield the Ultrack working directory (database and config) for one FOV.
-
-    ``{output_dirpath}/{fov}`` when ``output_dirpath`` is given, and kept. Otherwise a
-    fresh directory in this worker's ``$TMPDIR``, deleted on exit: one per FOV,
-    because ``$TMPDIR`` can be shared by all of a user's jobs on a node.
-    """
-    if output_dirpath is not None:
-        dirpath = Path(output_dirpath) / fov
-        dirpath.mkdir(parents=True, exist_ok=True)
-        yield dirpath
-        return
-    dirpath = Path(tempfile.mkdtemp(prefix=f"biahub-track-{fov}-"))
-    try:
-        yield dirpath
-    finally:
-        shutil.rmtree(dirpath, ignore_errors=True)
-
-
-def _resolved_ultrack_config(tracking_config) -> dict:
-    """Return the full Ultrack config, defaults included, as JSON-safe provenance."""
-    config = json.loads(json.dumps(tracking_config.dict(by_alias=True), default=str))
-    # The working directory is the per-FOV database, often a deleted temp directory.
-    config.get("data", {}).pop("working_dir", None)
-    return config
 
 
 def track_one_position(
