@@ -253,3 +253,23 @@ def test_a_methods_own_score_judges_the_raw_volumes(monkeypatch):
     for m, r in seen:
         np.testing.assert_array_equal(m, mov)
         np.testing.assert_array_equal(r, ref)
+
+
+def test_log1p_and_gaussian_blur_blocks():
+    # the neuromast stabilization prototype's preprocessing: log1p, then a slight blur
+    from scipy import ndimage
+
+    from biahub.registration.preprocess import blocks_footprint
+
+    rng = np.random.default_rng(0)
+    volume = rng.normal(100, 30, size=(6, 24, 24)).astype(np.float32)
+    volume[0, 0, 0] = -5.0  # below zero: clipped before the log
+    blocks = _parse("- log1p: {}\n- gaussian_blur: {sigma: 1.0}")
+    out = apply_image_blocks(volume, blocks, "moving")
+    expected = ndimage.gaussian_filter(np.log1p(np.clip(volume, 0, None)), 1.0)
+    np.testing.assert_allclose(out, expected, rtol=1e-6)
+    # a blur reaches ~4 sigma: the score keeps that far from the warp's padding
+    assert blocks_footprint(_parse("- gaussian_blur: {sigma: 1.5}")) == 6
+    assert blocks_footprint(_parse("- log1p: {}")) == 0
+    with pytest.raises(ValidationError):
+        _parse("- gaussian_blur: {sigma: 0}")

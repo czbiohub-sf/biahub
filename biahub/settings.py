@@ -421,6 +421,21 @@ class Sobel(_Block):
     target: list[Volume] = ["moving", "reference"]
 
 
+class Log1p(_Block):
+    """log(1 + v), negatives clipped to 0: compresses bright structure so dim structure counts."""
+
+    kind: Literal["log1p"] = "log1p"
+    target: list[Volume] = ["moving", "reference"]
+
+
+class GaussianBlur(_Block):
+    """Gaussian blur of `sigma` voxels (every axis): steadies a noisy comparison."""
+
+    kind: Literal["gaussian_blur"] = "gaussian_blur"
+    target: list[Volume] = ["moving", "reference"]
+    sigma: float = Field(gt=0)
+
+
 class MaskCircle(_Block):
     """Compare only inside a circle in yx, the same on every z slice, centred on the volume.
 
@@ -462,7 +477,7 @@ class MaskBox(_Block):
         return v
 
 
-IMAGE_BLOCKS = (ClipPercentiles, Sobel)
+IMAGE_BLOCKS = (ClipPercentiles, Sobel, Log1p, GaussianBlur)
 MASK_BLOCKS = (MaskCircle, MaskBox)
 # Methods that can restrict their comparison to a mask.
 MASK_METHODS = {"ants"}
@@ -486,7 +501,10 @@ def _named_block(item):
 
 
 PreprocessBlock = Annotated[
-    Annotated[ClipPercentiles | Sobel | MaskCircle | MaskBox, Field(discriminator="kind")],
+    Annotated[
+        ClipPercentiles | Sobel | Log1p | GaussianBlur | MaskCircle | MaskBox,
+        Field(discriminator="kind"),
+    ],
     BeforeValidator(_named_block),
 ]
 PreprocessBlocks = list[PreprocessBlock]

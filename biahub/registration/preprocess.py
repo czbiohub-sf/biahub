@@ -11,12 +11,15 @@ import functools
 
 import numpy as np
 
+from scipy import ndimage
 from scipy.ndimage import binary_erosion
 from skimage import filters
 
 from biahub.settings import (
     MASK_BLOCKS,
     ClipPercentiles,
+    GaussianBlur,
+    Log1p,
     MaskBox,
     MaskCircle,
     PreprocessBlocks,
@@ -25,6 +28,11 @@ from biahub.settings import (
 
 # Voxels a 3x3x3 filter (Sobel) reaches: one on each side.
 SOBEL_FOOTPRINT = 1
+
+
+def blur_footprint(sigma: float) -> int:
+    """Voxels a Gaussian blur of `sigma` reaches: scipy's default truncation, 4 sigma."""
+    return int(np.ceil(4.0 * sigma))
 
 
 def away_from_padding(mask: np.ndarray, footprint: int) -> np.ndarray:
@@ -70,6 +78,11 @@ def apply_image_blocks(
         elif isinstance(block, Sobel):
             out = filters.sobel(out).astype(np.float32)
             reach += SOBEL_FOOTPRINT
+        elif isinstance(block, Log1p):
+            out = np.log1p(np.clip(out, 0, None)).astype(np.float32)
+        elif isinstance(block, GaussianBlur):
+            out = ndimage.gaussian_filter(out, block.sigma).astype(np.float32)
+            reach += blur_footprint(block.sigma)
         else:
             raise TypeError(f"no image operation for {type(block).__name__}")
     return out
@@ -81,9 +94,14 @@ def blocks_footprint(blocks: PreprocessBlocks) -> int:
     Each volume is filtered only by the blocks that target it, so filters on different
     volumes do not add up.
     """
+
+    def reach(block) -> int:
+        if isinstance(block, Sobel):
+            return SOBEL_FOOTPRINT
+        return blur_footprint(block.sigma) if isinstance(block, GaussianBlur) else 0
+
     return max(
-        SOBEL_FOOTPRINT * sum(isinstance(b, Sobel) and which in b.target for b in blocks)
-        for which in ("moving", "reference")
+        sum(reach(b) for b in blocks if which in b.target) for which in ("moving", "reference")
     )
 
 
