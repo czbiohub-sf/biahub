@@ -1066,3 +1066,27 @@ def test_a_neighbour_median_run_plans_memory_for_the_frames_it_holds(tmp_path):
     wide = plan({"frame": "neighbours", "window": 6})
     gb_per_volume = np.prod(zyx) * 4 / 2**30
     assert first["mem_gb"] < (10 + 14) * gb_per_volume <= wide["mem_gb"]
+
+
+def test_a_neighbour_median_reference_stabilizes_a_projected_plate(tmp_path):
+    # A projected plate (`biahub project`: Z = 1) is a 1 x Y x X volume per timepoint: the
+    # neighbour median measures the yx jumps; z, which a projection has no depth for, is 0.
+    rng = np.random.default_rng(11)
+    projection = _synthetic_bead_volume(rng, SHAPE).max(axis=0, keepdims=True)
+    jumps = {3: (0.0, 4.0, -2.0), 6: (0.0, -3.0, 2.0)}
+    frames = [
+        ndi_shift(projection, shift=jumps.get(t, (0.0, 0.0, 0.0)), order=1, mode="constant")
+        for t in range(9)
+    ]
+    plate = _write_plate(tmp_path / "projected.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        source="GFP",
+        reference="neighbours",
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    _run(plate, config, output)
+    for t, row in enumerate(_inverse_translations(output)):
+        np.testing.assert_allclose(row, jumps.get(t, (0.0, 0.0, 0.0)), atol=0.5)
