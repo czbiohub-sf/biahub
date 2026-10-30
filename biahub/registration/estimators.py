@@ -56,10 +56,12 @@ class EstimationError(RuntimeError):
     """`estimate()` could not produce a transform (too few nodes or matches, degenerate fit)."""
 
 
-def fit_pairs(src, dst, transform_type: str = "affine") -> np.ndarray:
+def fit_pairs(
+    src, dst, transform_type: str = "affine", solver: str = "least_squares"
+) -> np.ndarray:
     """Return `Transform.fit`'s matrix; a fit that fails is a failed estimate."""
     try:
-        return Transform.fit(src, dst, transform_type).matrix
+        return Transform.fit(src, dst, transform_type, solver).matrix
     except ValueError as error:
         raise EstimationError(str(error)) from error
 

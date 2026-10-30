@@ -314,7 +314,7 @@ def transform_from_matches(
     ndim: int = 3,
     verbose: bool = False,
 ) -> tuple[Transform, Transform]:
-    """Return the (forward, inverse) transform fitted to matched peaks (`Transform.fit`).
+    """Return the (forward, inverse) transform fitted to matched peaks (`Transform.fit`, skimage).
 
     `matches` are (moving, reference) index pairs into the (N, D) peaks; the transform
     type is the settings'. `ndim` is not needed (the peaks give it) and kept for callers.
@@ -326,6 +326,7 @@ def transform_from_matches(
         np.asarray(mov_peaks)[matches[:, 0]],
         np.asarray(ref_peaks)[matches[:, 1]],
         affine_transform_settings.transform_type,
+        solver="skimage",
     )
     return fwd_transform, fwd_transform.invert()
 
@@ -571,6 +572,7 @@ class NodeGraphEstimator:
                     mov_nodes[matches[:, 0]],
                     ref_nodes[matches[:, 1]],
                     self.affine_transform_settings.transform_type,
+                    solver="skimage",  # the beads method's fit (see Transform.fit)
                 )
             )
         if not np.all(np.isfinite(correction.matrix)):

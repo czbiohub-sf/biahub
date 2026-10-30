@@ -252,16 +252,24 @@ class Transform:
         src: NDArray[np.floating],
         dst: NDArray[np.floating],
         transform_type: TransformType = "affine",
+        solver: Literal["least_squares", "skimage"] = "least_squares",
     ) -> Transform:
-        """Return the least-squares transform of `transform_type` with T(src_i) ~ dst_i.
+        """Return the transform of `transform_type` that best maps src_i onto dst_i.
 
-        `src` and `dst` are matched (N, D) points, D 2 or 3. "affine" is a plain least
-        squares (N >= D + 1); "similarity" and "euclidean" / "rigid" use scikit-image's
-        estimators. Raises ValueError when the fit fails (too few or degenerate pairs).
+        `src` and `dst` are matched (N, D) points, D 2 or 3. "similarity" and "euclidean" /
+        "rigid" use scikit-image's estimators. "affine" depends on `solver`:
+        "least_squares" (default) fits each destination coordinate by ordinary least
+        squares (N >= D + 1), minimizing the distances in `dst`; "skimage" uses
+        scikit-image's `AffineTransform` estimator (an SVD of the homogeneous system),
+        what the beads method has always fitted with -- the two agree on exact
+        correspondences and differ slightly (sub-pixel) on noisy ones. Raises ValueError
+        when the fit fails (too few or degenerate pairs).
         """
         src = np.asarray(src, dtype=float)
         dst = np.asarray(dst, dtype=float)
-        if transform_type == "affine":
+        if solver not in ("least_squares", "skimage"):
+            raise ValueError(f"solver must be 'least_squares' or 'skimage', got {solver!r}")
+        if transform_type == "affine" and solver == "least_squares":
             ndim = src.shape[1]
             design = np.hstack([src, np.ones((len(src), 1))])
             coeffs, *_ = np.linalg.lstsq(design, dst, rcond=None)
@@ -269,11 +277,16 @@ class Transform:
             matrix[:ndim, :ndim] = coeffs[:ndim].T
             matrix[:ndim, ndim] = coeffs[ndim]
         else:
-            from skimage.transform import EuclideanTransform, SimilarityTransform
-
-            model_class = (
-                SimilarityTransform if transform_type == "similarity" else EuclideanTransform
+            from skimage.transform import (
+                AffineTransform,
+                EuclideanTransform,
+                SimilarityTransform,
             )
+
+            model_class = {
+                "affine": AffineTransform,
+                "similarity": SimilarityTransform,
+            }.get(transform_type, EuclideanTransform)
             model = model_class.from_estimate(src, dst)
             if not model:
                 raise ValueError(f"{transform_type} fit failed on {len(src)} pairs")

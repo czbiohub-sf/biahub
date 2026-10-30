@@ -93,3 +93,27 @@ def test_fit_recovers_a_transform_from_matched_points(ndim, transform_type):
 def test_fit_says_when_it_cannot():
     with pytest.raises(ValueError, match="similarity fit failed on 1 pairs"):
         Transform.fit(np.zeros((1, 3)), np.ones((1, 3)), "similarity")
+
+
+def test_fit_can_use_scikit_images_affine_estimator():
+    # exact pairs: both solvers agree; noisy pairs: "skimage" is scikit-image's estimator
+    from skimage.transform import AffineTransform
+
+    rng = np.random.default_rng(1)
+    src = rng.uniform(0, 100, (30, 3))
+    truth = np.eye(4)
+    truth[:3, :3] = np.diag([0.95, 1.02, 0.98])
+    truth[:3, 3] = [2.0, -3.0, 1.0]
+    exact = Transform(truth).apply_points(src)
+    np.testing.assert_allclose(
+        Transform.fit(src, exact, solver="skimage").matrix,
+        Transform.fit(src, exact).matrix,
+        atol=1e-8,
+    )
+    noisy = exact + rng.normal(0, 0.5, exact.shape)
+    np.testing.assert_allclose(
+        Transform.fit(src, noisy, solver="skimage").matrix,
+        AffineTransform.from_estimate(src, noisy).params,
+    )
+    with pytest.raises(ValueError, match="solver"):
+        Transform.fit(src, noisy, solver="ransac")
