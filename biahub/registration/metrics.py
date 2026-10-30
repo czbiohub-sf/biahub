@@ -6,7 +6,7 @@ analyses with all of them (residuals in voxels or µm); both call them from here
 Two families, because the pipeline registers across modalities:
 
 - Bead metrics (`bead_alignment_metrics`, `residual_score`) need beads visible in both
-  channels. They complement `beads.overlap_score`, which is a bead-count ratio quantized
+  channels. They complement `bead_matching.overlap_score`, which is a bead-count ratio quantized
   at ~1/N per bead, with continuous residuals in voxels.
 - Intensity metrics work on any pair of channels. Plain correlation is meaningless
   between, say, phase and fluorescence (the correct transform can score ~0.1), so
@@ -42,7 +42,7 @@ class BeadAlignmentMetrics:
     n_mov_peaks: int
     n_ref_peaks: int
     n_matched: int  # reference peaks with a warped moving peak within `radius`
-    overlap: float  # beads.overlap_score
+    overlap: float  # bead_matching.overlap_score
     median_residual: float  # voxels (or µm with ref_um), over matched pairs; nan when none
     rms_residual: float
 
@@ -100,7 +100,7 @@ def residual_score(
     ref: ArrayLike,
     beads_match_settings: BeadsMatchSettings,
 ) -> float:
-    """Continuous bead score in [0, 1]: overlap weighted by how tightly matched beads sit.
+    """Continuous bead score: overlap weighted by how tightly matched beads sit (>= 0).
 
     `overlap * (1 - median_residual / radius)`: the same quantity `overlap_score`
     measures, but a transform whose matched beads land 0.5 voxel off outscores one whose

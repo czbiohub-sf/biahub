@@ -22,7 +22,7 @@ class LocalPCCEstimator:
     """TransformEstimator from local phase cross-correlation: tile shifts fitted in yx.
 
     The moving volume, warped by the current transform, is phase-correlated with the
-    reference on a grid of tiles of their max projections (`evaluate.tile_residuals`);
+    reference on a grid of tiles of their max projections (`metrics.tile_residuals`);
     the shifts are fitted with the transform type in yx and the fit corrects the current
     transform. Max projections hold no depth, so z stays the seed's.
 

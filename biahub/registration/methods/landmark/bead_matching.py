@@ -85,7 +85,9 @@ def overlap_score(
     Returns
     -------
     float
-        Overlap fraction in [0, 1]. Returns np.nan if either peak set is empty.
+        Reference peaks with a moving peak within `radius`, over the smaller peak count:
+        usually in [0, 1], but above 1 when the reference has more peaks than the moving
+        volume (e.g. 3.0 for 1 moving and 3 reference peaks). np.nan if either set is empty.
     """
     if len(mov_peaks) == 0 or len(ref_peaks) == 0:
         click.echo("No peaks found, returning nan metrics")
@@ -124,7 +126,7 @@ def peaks_from_beads(
     ref_peaks_settings: DetectPeaksSettings,
     verbose: bool = False,
     mask_path: Path = None,
-) -> tuple[ArrayLike, ArrayLike]:
+) -> tuple[ArrayLike, ArrayLike] | None:
     """
     Detect peaks in moving and reference channels using the detect_peaks function.
 

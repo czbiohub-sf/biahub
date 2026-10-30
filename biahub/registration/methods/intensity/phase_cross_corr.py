@@ -77,7 +77,7 @@ def phase_cross_corr_padding(
     normalization: Literal["magnitude", "classic"] | None = None,
     output_path: Path | None = None,
     verbose: bool = False,
-) -> tuple[int, ...]:
+) -> tuple[tuple[int, ...], np.ndarray]:
     """
     Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
@@ -91,7 +91,7 @@ def phase_cross_corr_padding(
     mov_img : ArrayLike
         Moved image.
     maximum_shift : float, optional
-        Maximum location shift normalized by axis size, by default 1.0
+        Maximum location shift normalized by axis size, by default 1.2
 
     Returns
     -------
@@ -158,7 +158,7 @@ def phase_cross_corr(
     output_path: Path | None = None,
     verbose: bool = False,
     upsample_factor: int = 1,
-) -> tuple[int, ...]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Borrowing from Jordao dexpv2.crosscorr https://github.com/royerlab/dexpv2.
 
@@ -182,8 +182,9 @@ def phase_cross_corr(
 
     Returns
     -------
-    Tuple[int, ...]
-        Shift between reference and moved image.
+    tuple[np.ndarray, np.ndarray]
+        The shift of the moved image relative to the reference (whole pixels, or
+        sub-pixel with `upsample_factor` > 1), and the correlation volume.
     """
     Fimg1 = np.fft.rfftn(ref_img)
     Fimg2 = np.fft.rfftn(mov_img)
