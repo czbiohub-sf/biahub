@@ -1296,7 +1296,7 @@ DEFAULT_SCORE_METRIC: dict[str, str] = {
 }
 
 
-ReferenceFrame = Literal["cross", "first", "previous"]
+ReferenceFrame = Literal["cross", "first", "previous", "neighbours"]
 
 
 class ReferenceSettings(MyBaseModel):
@@ -1304,7 +1304,10 @@ class ReferenceSettings(MyBaseModel):
 
     `frame: cross` -- `channel` of the reference store at the same timepoint
     (registration). `frame: first` / `previous` -- the moving channel's own first /
-    previous timepoint (stabilization); `channel` is then omitted.
+    previous timepoint (stabilization); `channel` is then omitted. `frame: neighbours` --
+    the median of the moving channel's frames within t +- `window` (t excluded): absolute
+    transforms that measure single-frame jumps without a chain, while slow drift moves
+    the median with it.
 
     `previous` chains each step onto the run's first frame, so a step's error is carried
     by every later frame: on long series, whole-pixel phase correlation drifted by about
@@ -1314,6 +1317,8 @@ class ReferenceSettings(MyBaseModel):
 
     frame: ReferenceFrame = "cross"
     channel: str | None = None
+    # frames on each side of t for `frame: neighbours` (read by no other frame)
+    window: PositiveInt = 6
 
     @model_validator(mode="after")
     def check_channel(self) -> "ReferenceSettings":
@@ -1504,6 +1509,11 @@ class EstimateTransformSettings(MyBaseModel):
             raise ValueError(
                 "reference.frame 'previous' needs several timepoints (each is a step from "
                 f"the one before it); got time_indices {ts!r}. Use 'first' for one timepoint."
+            )
+        if self.reference.frame == "neighbours" and single:
+            raise ValueError(
+                "reference.frame 'neighbours' needs several timepoints (each is compared "
+                f"with the frames around it); got time_indices {ts!r}"
             )
         return self
 
@@ -1715,7 +1725,7 @@ class TransformSettings(MyBaseModel):
     method: str = "bead_matching"
     # What the matrices are relative to: 'previous' means each was chained onto the first
     # frame (cumulative). None: not recorded (files written before this field).
-    reference_frame: Literal["cross", "first", "previous"] | None = None
+    reference_frame: Literal["cross", "first", "previous", "neighbours"] | None = None
     voxel_size: list[float] | None = None
     transforms: list[TransformEntry] | None = None
     positions: dict[str, list[TransformEntry]] | None = None

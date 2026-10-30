@@ -70,8 +70,13 @@ Beads matching is deterministic but depends on where it starts: on a drifting se
   drifted -384 px in y (~0.5 px per frame) while the sample never left +-30 px of the
   centre; single-frame jumps that snap back are counted twice (out and back). Before
   applying a long `previous` chain, compare its cumulative translation with the sample's
-  centroid over time; prefer `first`, and keep chains short. A neighbour-median
-  reference (no chain) is planned.
+  centroid over time; prefer `first` or `neighbours`, and keep chains short.
+- `neighbours` (`reference: {frame: neighbours, window: 6}`): each timepoint against the
+  voxel-wise median of the frames within t +- window (t excluded). A one-frame jump does
+  not move the median, so it is measured on its own; the transforms are absolute, so
+  nothing accumulates. Slow drift moves the median with it, so it stays (an anchor for it
+  is coming). Each timepoint reads 2 x window frames: plan memory for the median.
+  `phase_cross_corr.upsample_factor` (e.g. 4) measures fractions of a pixel.
 
 ## One transform for the plate, or one per position: `pool` and `transform.seed_file`
 

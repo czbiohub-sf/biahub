@@ -63,6 +63,7 @@ from biahub.registration.policies import (
     CrossChannel,
     FixedFrame,
     FixedSeed,
+    NeighbourMedian,
     PreviousFrame,
     ReferencePolicy,
     SeedPolicy,
@@ -640,6 +641,8 @@ def _compares_with_itself(reference_policy: ReferencePolicy, mov, t: int) -> boo
         return t == reference_policy.reference_index(mov)
     if isinstance(reference_policy, PreviousFrame):
         return reference_policy.reference_index(mov, t) is None
+    if isinstance(reference_policy, NeighbourMedian):
+        return not reference_policy.neighbour_indices(mov, t)
     return False
 
 
@@ -926,8 +929,11 @@ def _reference_policy(settings: EstimateTransformSettings, ref) -> ReferencePoli
         return CrossChannel(ref)
     if settings.reference.frame == "first":
         return FixedFrame(0)
+    run = resolve_time_indices(settings.time_indices, len(ref))
+    if settings.reference.frame == "neighbours":
+        return NeighbourMedian(settings.reference.window, first=min(run), last=max(run))
     # the chain starts at the run's first timepoint: nothing before it is compared
-    return PreviousFrame(first=min(resolve_time_indices(settings.time_indices, len(ref))))
+    return PreviousFrame(first=min(run))
 
 
 def _seed(settings: EstimateTransformSettings) -> Transform:
@@ -977,9 +983,9 @@ def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSett
         approx_transform=seed_inverse,
         use_prev_t_transform=False,
         compute_approx_transform=fit.seed_from_shapes,
-        t_reference="first"
-        if settings.reference.frame == "cross"
-        else settings.reference.frame,
+        # the legacy field knows first / previous: a cross registration and a neighbour
+        # median give absolute transforms, like first
+        t_reference="previous" if settings.reference.frame == "previous" else "first",
     )
 
 

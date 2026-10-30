@@ -1004,3 +1004,41 @@ def test_a_first_frame_reference_skips_an_empty_frame_zero(tmp_path):
     rows = _inverse_translations(output)
     np.testing.assert_allclose(rows[1], [0.0, 0.0, 0.0], atol=0.5)
     np.testing.assert_allclose(rows[2], APPLIED_SHIFT_ZYX, atol=0.5)
+
+
+def test_a_neighbour_median_reference_removes_single_frame_jumps(tmp_path):
+    # A sample that stays put but jumps for one frame at t=3 and t=6 (a fish slipping):
+    # against the median of its neighbours each jump is measured on its own, and the
+    # other timepoints stay at zero -- no chain, nothing accumulates.
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    jumps = {3: (0.0, 4.0, 0.0), 6: (0.0, -3.0, 2.0)}
+    frames = [
+        ndi_shift(ref, shift=jumps.get(t, (0.0, 0.0, 0.0)), order=1, mode="constant")
+        for t in range(9)
+    ]
+    plate = _write_plate(tmp_path / "jumps.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        source="GFP",
+        reference="neighbours",
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    _run(plate, config, output)
+    assert load_transform_settings(output).reference_frame == "neighbours"
+    for t, row in enumerate(_inverse_translations(output)):
+        np.testing.assert_allclose(row, jumps.get(t, (0.0, 0.0, 0.0)), atol=0.5)
+
+
+def test_a_neighbour_median_reference_needs_several_timepoints():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="neighbours' needs several timepoints"):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "neighbours", "window": 3},
+            method="phase_cross_corr",
+            time_indices=4,
+        )
