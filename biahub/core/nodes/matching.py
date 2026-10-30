@@ -325,11 +325,11 @@ class GraphMatcher:
             Reference graph
         angle_threshold : float, optional
             Maximum deviation from dominant angle (degrees, 2D only).
-            If None, skip 2D angle filtering.
+            0 or None skips 2D angle filtering.
         direction_threshold : float, optional
             Maximum angular deviation from dominant direction (degrees, 2D/3D).
             Uses dot product between normalized vectors.
-            If None, skip direction filtering.
+            0 or None skips direction filtering.
         min_distance_quantile : float
             Lower quantile cutoff for distances
         max_distance_quantile : float
@@ -369,7 +369,7 @@ class GraphMatcher:
                 click.echo(f"Matches after distance filtering: {len(matches)}")
 
         # Direction filtering (2D/3D) - NEW
-        if direction_threshold != 0:
+        if direction_threshold:  # 0 or None: no direction filter
             vectors = reference.nodes[matches[:, 1]] - moving.nodes[matches[:, 0]]
 
             # Normalize vectors
@@ -394,7 +394,7 @@ class GraphMatcher:
                 click.echo(f"Matches after direction filtering: {len(matches)}")
 
         # Angle filtering (2D only, legacy)
-        if angle_threshold != 0 and moving.dim == 2:
+        if angle_threshold and moving.dim == 2:  # 0 or None: no angle filter
             vectors = reference.nodes[matches[:, 1]] - moving.nodes[matches[:, 0]]
             angles_rad = np.arctan2(vectors[:, 1], vectors[:, 0])
             angles_deg = np.degrees(angles_rad)

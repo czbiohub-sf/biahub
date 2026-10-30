@@ -61,3 +61,19 @@ def test_mutual_nearest_pairs_nodes_that_are_each_others_closest():
     b = np.array([[0.5, 0.0], [10.4, 0.0], [10.8, 0.0], [50.0, 0.0]])
     i, j = mutual_nearest(a, b, radius=1.0)
     assert list(zip(i.tolist(), j.tolist(), strict=True)) == [(0, 0), (1, 1)]  # 2: none near
+
+
+def test_filter_matches_skips_a_filter_whose_threshold_is_none_or_zero():
+    # documented "None skips"; None ran the filter and crashed on `angles <= None`
+    mov, ref = _clouds()
+    mg, rg = Graph.from_nodes(mov, mode="knn", k=5), Graph.from_nodes(ref, mode="knn", k=5)
+    matcher = GraphMatcher(algorithm="hungarian")
+    matches = matcher.match(mg, rg)
+    for threshold in (None, 0):
+        kept = matcher.filter_matches(
+            matches, mg, rg, angle_threshold=threshold, direction_threshold=threshold
+        )
+        np.testing.assert_array_equal(
+            kept,
+            matcher.filter_matches(matches, mg, rg, angle_threshold=0, direction_threshold=0),
+        )
