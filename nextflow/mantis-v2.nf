@@ -23,22 +23,23 @@ nextflow.enable.dsl = 2
 //  workflow body for why that is possible and what it buys.
 //
 //  Flat-field → deskew → reconstruct → virtual-stain → assemble → project →
-//  segment → track → pyramid → QC is the full chain: assemble concatenates the
-//  deskew/reconstruct/virtual-stain channels into one plate, project reduces
-//  that 3D plate to the 2D (Z=1) plate 2D segmentation needs, segment writes
-//  cellpose labels into it, track links those labels and writes the tracked
-//  labels beside them, pyramid adds the coarser resolution levels to the
-//  assembled and projected plates once nothing else writes pixels or labels
-//  into them, and QC, the very last step, reads the finished stores. Follow the
+//  segment → track → pyramid → QC → DCA finalize is the full chain: assemble
+//  concatenates the deskew/reconstruct/virtual-stain channels into one plate,
+//  project reduces that 3D plate to the 2D (Z=1) plate 2D segmentation needs,
+//  segment writes cellpose labels into it, track links those labels and writes
+//  the tracked labels beside them, pyramid adds the coarser resolution levels
+//  to the assembled and projected plates once nothing else writes pixels or
+//  labels into them, QC reads the finished stores, and DCA finalize writes the
+//  DCA metadata onto the assembled plate from its QC statistics. Follow the
 //  chaining below for the pattern.
 //
-//  Assemble, project, segment, track and QC are OPTIONAL and selected by
-//  whether their config is given, so a run performs the prefix it asks for:
-//  A549 wants assemble + project + segment + track + QC, a neuromast run wants
-//  assemble + QC and no segmentation or tracking (issue #306). Pyramids are on
-//  by default for whichever of the two plates exist (--pyramid_levels 1 turns
-//  them off). A skipped step never renumbers the directories of the ones
-//  around it.
+//  Assemble, project, segment, track, QC and DCA finalize are OPTIONAL and
+//  selected by whether their config is given, so a run performs the prefix it
+//  asks for: A549 wants assemble + project + segment + track + QC, a neuromast
+//  run wants assemble + QC and no segmentation or tracking (issue #306).
+//  Pyramids are on by default for whichever of the two plates exist
+//  (--pyramid_levels 1 turns them off). A skipped step never renumbers the
+//  directories of the ones around it.
 // ---------------------------------------------------------------------------
 
 params.input = null   // raw source — may not be a zarr store
@@ -62,6 +63,9 @@ params.max_positions = 0
 params.qc_config = null
 params.qc_project_config = null
 params.qc_track_config = null  // removed; refused below
+// DCA finalize, off by default: --dca_config nextflow/configs/<family>/dca_finalize.yml
+// writes the DCA metadata onto the assembled store and validates it, after QC.
+params.dca_config = null
 // Resolution levels of the assembled and projected plates, counting level 0:
 // 3 is the DCA v0.2 target (issue #359) and adds a 2x and a 4x level, in Y and X
 // (and Z when the plate has more than one plane), to every image and label
@@ -78,6 +82,7 @@ include { project_init_wf; project_run_wf } from './modules/project'
 include { segment_init_wf; segment_run_wf } from './modules/segment'
 include { track_init_wf; track_run_wf } from './modules/tracking'
 include { qc_plan_wf; qc_compute_wf; qc_report_wf; qc_report_spec } from './modules/qc'
+include { dca_finalize_wf } from './modules/dca'
 // One module, two plates: a process can only be invoked once per workflow
 // context, so the assembled and projected plates get their own aliases.
 include { pyramid_init_wf as pyramid_assembled_init_wf;
@@ -170,6 +175,7 @@ workflow {
     def qc_image_on   = params.qc_config as boolean
     def qc_project_on = params.qc_project_config as boolean
     def qc_on         = qc_image_on || qc_project_on
+    def dca_on        = params.dca_config as boolean
     // Pyramids go on the deliverable plates, so without assemble there is
     // nothing to pyramid and the default is silently moot rather than an error.
     def pyramid_levels = params.pyramid_levels as int
@@ -204,6 +210,9 @@ workflow {
               "reads, and --qc_project_config counts them there " +
               "(see nextflow/configs/a549/qc_project.yaml)."
     }
+    if (dca_on && !qc_image_on) {
+        error "--dca_config needs --qc_config: finalize reads the QC stage-5 statistics."
+    }
 
     // Whether this run deletes its intermediates once it finishes. Resolved now
     // from --cleanup_intermediates and concatenate.yml (see cleanup_decision),
@@ -219,9 +228,13 @@ workflow {
         workflow.session.config.cleanup = true
     }
 
-    // Tasks call `biahub`/`viscy`/`imaging-qc` bare, so fail now if the env isn't
-    // activated. `imaging-qc` is only required when QC is actually wired in.
-    check_environment(qc_on ? ['biahub', 'viscy', 'imaging-qc'] : ['biahub', 'viscy'])
+    // Tasks call `biahub`/`viscy`/`imaging-qc`/`dca-validate` bare, so fail now if
+    // the env isn't activated. `imaging-qc` and `dca-validate` are only required
+    // when their step is actually wired in.
+    def tools = ['biahub', 'viscy']
+    if (qc_on)  tools << 'imaging-qc'
+    if (dca_on) tools << 'dca-validate'
+    check_environment(tools)
 
     def ds  = dataset_name()
     def out = params.output
@@ -515,7 +528,7 @@ workflow {
     }
 
     // ----- QC compute -------------------------------------------------------
-    // THE VERY LAST STEP. Planned in the init phase; the compute it planned is
+    // The last step except DCA finalize. Planned in the init phase; the compute it planned is
     // gated on the last writer of each store: its pyramid when pyramids are on,
     // else the last of segment and track where they write into that store (the
     // projected plate, or the assembled one without project), else the step
@@ -553,6 +566,17 @@ workflow {
 
         qc = qc_compute_wf(qc_plan.items, qc_plan.stores, qc_compute_ready)
         qc_report = qc_report_wf(qc.done, spec, qc_report_dir)
+    }
+
+    // ----- DCA finalize -----------------------------------------------------
+    // After QC, which itself waits for the assembled plate's last writer (its
+    // pyramid, or segment/track when they write there), so the QC report is the
+    // one signal that nothing else will write the plate and its stage tables are
+    // final. Finalize rewrites every position's zarr.json and reads the assembled
+    // store's QC statistics. The validator's report lands next to the plate as
+    // <stem>.dca-validate.json.
+    if (dca_on) {
+        dca = dca_finalize_wf([assemble_output], params.dca_config, qc_report.done)
     }
 
     // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------
@@ -597,6 +621,7 @@ workflow {
             if (project_on) final_signals << pyramid_projected_done.done
         }
         if (qc_on)    final_signals << qc_report.done
+        if (dca_on)   final_signals << dca.done
         final_gate = channel.empty()
         final_signals.each { signal -> final_gate = final_gate.mix(signal) }
 
@@ -650,6 +675,7 @@ workflow {
         }
     }
     if (qc_on)       step_events << [label: 'QC',       done: qc_report.done,     output: qc_report_dir]
+    if (dca_on)      step_events << [label: 'DCA finalize', done: dca.done,       output: assemble_output]
     if (cleanup_on)  step_events << [label: 'cleanup intermediates', done: cleanup_run.done, output: cleanup_record]
 
     steps = step_events.collect { event -> event.label }
