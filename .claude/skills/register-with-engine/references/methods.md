@@ -74,9 +74,19 @@ Beads matching is deterministic but depends on where it starts: on a drifting se
 - `neighbours` (`reference: {frame: neighbours, window: 6}`): each timepoint against the
   voxel-wise median of the frames within t +- window (t excluded). A one-frame jump does
   not move the median, so it is measured on its own; the transforms are absolute, so
-  nothing accumulates. Slow drift moves the median with it, so it stays (an anchor for it
-  is coming). Each timepoint reads 2 x window frames: plan memory for the median.
-  `phase_cross_corr.upsample_factor` (e.g. 4) measures fractions of a pixel.
+  nothing accumulates. Slow drift moves the median with it, so it stays; add
+  `reference.anchor` to remove it. Each timepoint reads 2 x window frames: plan memory
+  for the median. `phase_cross_corr.upsample_factor` (e.g. 4) measures fractions of a
+  pixel.
+- `reference.anchor` (with `neighbours` only): each timepoint's intensity centroid is
+  recorded, smoothed over time, and (frame centre - smoothed centroid) is added to every
+  transform, so the sample is moved to the centre and held there. All values are given;
+  the neuromast timelapse used
+  `{type: centroid, bg_percentile: 90, downsample: 2, blur_sigma: 2.0, smooth_median: 9,
+  smooth_sigma: 3.0}` (the sample filled < 10% of the volume, hence the 90th percentile).
+  The report's `anchor` holds each timepoint's centroid, smoothed centroid and the
+  translation added. Where the sample changes shape or breaks up, the centroid follows it:
+  check the track before applying, and leave those timepoints out of the run.
 
 ## One transform for the plate, or one per position: `pool` and `transform.seed_file`
 
