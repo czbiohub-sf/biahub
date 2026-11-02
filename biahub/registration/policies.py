@@ -163,6 +163,53 @@ class NeighbourMedian:
         return self._median if self._median is not None else np.asarray(mov[t])
 
 
+def intensity_centroid(
+    volume: ArrayLike, *, bg_percentile: float, downsample: int, blur_sigma: float
+) -> np.ndarray:
+    """Return the ZYX centroid of `volume`'s signal, in full-resolution voxels.
+
+    The anchor's measure of where the sample is (dynatrack's intensity centre of mass):
+    the volume binned by `downsample` (an axis shorter than it, e.g. a projection's z,
+    is not binned), blurred by `blur_sigma` binned voxels, and weighted by its intensity
+    above the `bg_percentile` percentile. NaN when nothing is above it.
+    """
+    from scipy import ndimage
+
+    v = np.asarray(volume, dtype=np.float32)
+    factors = [downsample if n >= downsample else 1 for n in v.shape]
+    v = v[tuple(slice(0, n // f * f) for n, f in zip(v.shape, factors, strict=True))]
+    shape = [x for n, f in zip(v.shape, factors, strict=True) for x in (n // f, f)]
+    v = v.reshape(shape).mean(axis=(1, 3, 5))
+    v = ndimage.gaussian_filter(v, blur_sigma)
+    weights = np.clip(v - np.percentile(v, bg_percentile), 0, None)
+    if not weights.sum() > 0:
+        return np.full(3, np.nan)
+    factors = np.asarray(factors, dtype=float)
+    # binned index i covers full-resolution voxels i*f .. i*f + f - 1
+    return np.asarray(ndimage.center_of_mass(weights)) * factors + (factors - 1) / 2
+
+
+def smooth_track(track: ArrayLike, *, median: int, sigma: float) -> np.ndarray:
+    """Return a (T, 3) centroid track smoothed over time, the anchor's slow component.
+
+    NaN rows (frames with no centroid) are interpolated from their neighbours; a median
+    over `median` timepoints drops single-frame jumps, then a Gaussian of `sigma`
+    timepoints smooths what is left. Rows are taken in order, one per timepoint.
+    """
+    from scipy import ndimage
+
+    track = np.array(track, dtype=float)
+    rows = np.arange(len(track))
+    for axis in range(track.shape[1]):
+        known = np.isfinite(track[:, axis])
+        if not known.any():
+            raise ValueError("no timepoint has a centroid to anchor on")
+        track[:, axis] = np.interp(rows, rows[known], track[known, axis])
+        track[:, axis] = ndimage.median_filter(track[:, axis], median, mode="nearest")
+        track[:, axis] = ndimage.gaussian_filter1d(track[:, axis], sigma, mode="nearest")
+    return track
+
+
 @runtime_checkable
 class SeedPolicy(Protocol):
     """Returns the initial transform guess for timepoint `t`."""

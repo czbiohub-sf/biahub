@@ -104,3 +104,36 @@ def test_a_neighbour_median_holds_its_frames_once():
     tracemalloc.stop()
     assert peak <= (2 * 6 + 2) * frame_bytes * 1.05
     policy.neighbour_indices(frames, 6)  # the same timepoint: no second read
+
+
+def test_an_intensity_centroid_finds_the_sample_above_its_background():
+    # the prototype's measure: binned, blurred, weighted by intensity above a percentile
+    from biahub.registration.policies import intensity_centroid
+
+    volume = np.full((20, 40, 40), 10.0, dtype=np.float32)  # a flat background
+    volume[8:12, 20:26, 10:14] = 100.0  # its centre is (9.5, 22.5, 11.5) in full-res voxels
+    centroid = intensity_centroid(volume, bg_percentile=90, downsample=2, blur_sigma=1.0)
+    np.testing.assert_allclose(centroid, (9.5, 22.5, 11.5), atol=0.3)
+    # a projection (Z = 1) is binned in yx only, and its z is 0
+    projected = volume.max(axis=0, keepdims=True)
+    centroid = intensity_centroid(projected, bg_percentile=90, downsample=2, blur_sigma=1.0)
+    np.testing.assert_allclose(centroid, (0.0, 22.5, 11.5), atol=0.3)
+    # nothing above the background: no centroid
+    flat = np.full((20, 40, 40), 10.0, dtype=np.float32)
+    assert np.isnan(
+        intensity_centroid(flat, bg_percentile=90, downsample=2, blur_sigma=1.0)
+    ).all()
+
+
+def test_a_smoothed_track_drops_single_frame_jumps_and_fills_gaps():
+    from biahub.registration.policies import smooth_track
+
+    track = np.column_stack([np.linspace(0.0, 10.0, 21)] * 3)  # a slow drift, 0.5 / frame
+    track[10] += 50.0  # a one-frame jump
+    track[5] = np.nan  # a frame with no centroid
+    smoothed = smooth_track(track, median=3, sigma=1.0)
+    assert np.isfinite(smoothed).all()
+    # the jump is gone; the median skips its frame, so t=10 lands within a frame's drift
+    np.testing.assert_allclose(smoothed[10], 5.0, atol=0.5)
+    np.testing.assert_allclose(smoothed[5], 2.5, atol=0.3)
+    np.testing.assert_allclose(smoothed[3:18, 0], np.linspace(1.5, 8.5, 15), atol=0.5)
