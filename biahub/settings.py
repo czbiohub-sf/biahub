@@ -1299,6 +1299,25 @@ DEFAULT_SCORE_METRIC: dict[str, str] = {
 ReferenceFrame = Literal["cross", "first", "previous", "neighbours"]
 
 
+class AnchorSettings(MyBaseModel):
+    """`reference.anchor`: the slow component the neighbour median follows, removed.
+
+    Each timepoint's centroid (`type: centroid`: the moving volume binned by
+    `downsample`, blurred by `blur_sigma` binned voxels, weighted by its intensity above
+    the `bg_percentile` percentile) is smoothed over time (a median of `smooth_median`
+    timepoints, then a Gaussian of `smooth_sigma`), and the translation (frame centre -
+    smoothed centroid) is added to every timepoint's transform: the sample is moved to
+    the centre and held there. Every value is given; none has a default.
+    """
+
+    type: Literal["centroid"]
+    bg_percentile: float = Field(ge=0, lt=100)
+    downsample: PositiveInt
+    blur_sigma: float = Field(ge=0)
+    smooth_median: PositiveInt  # timepoints
+    smooth_sigma: float = Field(ge=0)  # timepoints
+
+
 class ReferenceSettings(MyBaseModel):
     """What the moving channel is aligned onto.
 
@@ -1313,12 +1332,16 @@ class ReferenceSettings(MyBaseModel):
     by every later frame: on long series, whole-pixel phase correlation drifted by about
     0.5 px per frame (-384 px over 761 frames on a neuromast timelapse) while the sample
     stayed in place. Check the chained translation against the sample before applying.
+
+    `anchor` (with `neighbours` only) adds the slow component back as a move to the
+    frame centre: see `AnchorSettings`. On a `previous` chain it would hide the drift.
     """
 
     frame: ReferenceFrame = "cross"
     channel: str | None = None
     # frames on each side of t for `frame: neighbours` (read by no other frame)
     window: PositiveInt = 6
+    anchor: AnchorSettings | None = None
 
     @model_validator(mode="after")
     def check_channel(self) -> "ReferenceSettings":
@@ -1328,6 +1351,10 @@ class ReferenceSettings(MyBaseModel):
             raise ValueError(
                 f"reference frame '{self.frame}' aligns the moving channel onto itself; "
                 "drop reference.channel"
+            )
+        if self.anchor is not None and self.frame != "neighbours":
+            raise ValueError(
+                f"reference.anchor needs reference.frame 'neighbours'; got '{self.frame}'"
             )
         return self
 

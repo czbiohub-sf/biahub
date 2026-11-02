@@ -67,7 +67,9 @@ from biahub.registration.policies import (
     PreviousFrame,
     ReferencePolicy,
     SeedPolicy,
+    intensity_centroid,
     is_empty,
+    smooth_track,
 )
 from biahub.registration.preprocess import (
     PreprocessedEstimator,
@@ -78,6 +80,7 @@ from biahub.registration.preprocess import (
 from biahub.registration.utils import get_aprox_transform, resolve_time_indices
 from biahub.settings import (
     AffineTransformSettings,
+    AnchorSettings,
     BeadsMatchSettings,
     EstimateTransformSettings,
     FlagSettings,
@@ -532,6 +535,10 @@ class SeriesResult:
     blocks: dict[int, list[dict]] = field(default_factory=dict)
     # With a seed file: "seed_file" (its transform kept as it is) or "seed_file+refined".
     seeded_from: dict[int, str] = field(default_factory=dict)
+    # With reference.anchor: each timepoint's centroid from its record (None: none found),
+    # and the anchor `finalize_run` added (centroid, smoothed, translation).
+    centroids: dict[int, list[float] | None] = field(default_factory=dict)
+    anchors: dict[int, dict[str, list[float] | None]] = field(default_factory=dict)
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -1161,6 +1168,20 @@ def _report_metrics(
     return report
 
 
+def _anchor_centroid(settings: EstimateTransformSettings, mov, t: int) -> list[float] | None:
+    """Return frame t's centroid for `reference.anchor` (None: no anchor, or no signal)."""
+    anchor = settings.reference.anchor
+    if anchor is None:
+        return None
+    centroid = intensity_centroid(
+        mov[t],
+        bg_percentile=anchor.bg_percentile,
+        downsample=anchor.downsample,
+        blur_sigma=anchor.blur_sigma,
+    )
+    return centroid.tolist() if np.isfinite(centroid).all() else None
+
+
 class _JobInputs(NamedTuple):
     settings: EstimateTransformSettings
     mov: object
@@ -1238,6 +1259,7 @@ def _estimate_timepoint_job(
         "report": _report_metrics(
             settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
         ),
+        "centroid": _anchor_centroid(settings, mov, t),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
@@ -1286,6 +1308,7 @@ def _estimate_propagated_job(
             "report": _report_metrics(
                 settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
             ),
+            "centroid": _anchor_centroid(settings, mov, t),
         }
         _write_json(records_dir / f"{t}.json", record)
         records[t] = record
@@ -1405,6 +1428,8 @@ def _load_series(
             result.blocks[t] = record["blocks"]
         if record.get("seeded_from"):
             result.seeded_from[t] = record["seeded_from"]
+        if "centroid" in record:
+            result.centroids[t] = record["centroid"]
         if record["error"]:
             result.errors[t] = record["error"]
     return result
@@ -1747,6 +1772,11 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
         "provenance": {str(t): source for t, source in sorted(result.provenance.items())},
         "stand_ins": {str(t): source for t, source in sorted(result.filled_from.items())},
         **({"blocks": _blocks_summary(result.blocks)} if result.blocks else {}),
+        **(
+            {"anchor": {str(t): a for t, a in result.anchors.items()}}
+            if result.anchors
+            else {}
+        ),
     }
 
 
@@ -1927,6 +1957,7 @@ def init_run(
 
     plan = {
         "time_indices": time_indices,
+        "frame_shape": [Z, Y, X],
         "propagated": propagated,
         "uses_seed": bool(getattr(estimator, "uses_seed", True)),
         "interactive": "manual" in settings.method_names,
@@ -2132,6 +2163,10 @@ def finalize_run(
 
     # Before the report: this records which timepoints got a stand-in.
     transforms = transforms_for_file(result, time_indices, seed, settings.reference.frame)
+    if settings.reference.anchor is not None:
+        transforms = anchor_transforms(
+            result, time_indices, transforms, settings.reference.anchor, plan["frame_shape"]
+        )
     result.journal.save(output_dir / "run_journal.json")
     _write_json(
         output_dir / "estimate_transform_report.json", _report(result, time_indices), indent=2
@@ -2429,6 +2464,35 @@ def transforms_for_file(
             result.filled_from[t] = "identity"
     steps = [result.transforms.get(t, Transform.identity()) for t in time_indices]
     return chain_to_first_frame(steps, time_indices)
+
+
+def anchor_transforms(
+    result: SeriesResult,
+    time_indices: list[int],
+    transforms: list[Transform],
+    anchor: AnchorSettings,
+    frame_shape: list[int],
+) -> list[Transform]:
+    """Add the centroid anchor to each timepoint's transform: the sample to the centre.
+
+    The neighbour median follows slow drift, so its transforms hold only the jumps. The
+    centroids (a timepoint without one is interpolated) are smoothed over the run's
+    timepoints, in order, and the translation (frame centre - smoothed centroid) is
+    composed after each transform, stand-ins included -- a forward translation is the
+    shift applied to the volume. Records each timepoint's anchor in `result.anchors`.
+    """
+    track = [result.centroids.get(t) or [np.nan] * 3 for t in time_indices]
+    smoothed = smooth_track(track, median=anchor.smooth_median, sigma=anchor.smooth_sigma)
+    centre = (np.asarray(frame_shape, dtype=float) - 1) / 2
+    out = []
+    for t, transform, slow in zip(time_indices, transforms, smoothed, strict=True):
+        out.append(Transform.from_translation(centre - slow) @ transform)
+        result.anchors[t] = {
+            "centroid": result.centroids.get(t),
+            "smoothed": slow.tolist(),
+            "translation": (centre - slow).tolist(),
+        }
+    return out
 
 
 def chain_to_first_frame(

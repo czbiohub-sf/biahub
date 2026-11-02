@@ -89,7 +89,9 @@ def _write_config(
         )
     settings = EstimateTransformSettings(
         moving=ChannelSettings(channel=source),
-        reference=ReferenceSettings(
+        reference=reference
+        if isinstance(reference, ReferenceSettings)
+        else ReferenceSettings(
             frame=reference, channel=target if reference == "cross" else None
         ),
         method=method,
@@ -1090,3 +1092,67 @@ def test_a_neighbour_median_reference_stabilizes_a_projected_plate(tmp_path):
     _run(plate, config, output)
     for t, row in enumerate(_inverse_translations(output)):
         np.testing.assert_allclose(row, jumps.get(t, (0.0, 0.0, 0.0)), atol=0.5)
+
+
+ANCHOR = {
+    "type": "centroid",
+    "bg_percentile": 90.0,
+    "downsample": 2,
+    "blur_sigma": 1.0,
+    "smooth_median": 3,
+    "smooth_sigma": 1.0,
+}
+
+
+def test_a_centroid_anchor_removes_the_slow_drift_the_neighbours_follow(tmp_path):
+    # A sample drifting slowly in y (0.2 voxel / frame) with one-frame jumps at t=4 and
+    # t=8: the neighbour median follows the drift, so alone it measures only the jumps;
+    # the anchor adds (FOV centre - smoothed centroid), so each frame's translation is
+    # where its sample is minus the centre: centred and still.
+    from biahub.registration.policies import intensity_centroid
+
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    jumps = {4: (0.0, 4.0, 0.0), 8: (0.0, 0.0, -3.0)}
+    where = [np.add((0.0, 0.2 * t, 0.0), jumps.get(t, (0.0, 0.0, 0.0))) for t in range(12)]
+    frames = [ndi_shift(ref, shift=w, order=1, mode="constant") for w in where]
+    plate = _write_plate(tmp_path / "drift.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        source="GFP",
+        reference=ReferenceSettings(frame="neighbours", window=2, anchor=ANCHOR),
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    _run(plate, config, output)
+    centre = (np.asarray(SHAPE) - 1) / 2
+    sample = intensity_centroid(
+        ref, **{k: ANCHOR[k] for k in ("bg_percentile", "downsample", "blur_sigma")}
+    )
+    rows = _inverse_translations(output)
+    for t, row in enumerate(rows):
+        np.testing.assert_allclose(row, sample + where[t] - centre, atol=0.6)
+    # each timepoint's anchor is in the report: its centroid, smoothed, and what was added
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
+    anchor = report["anchor"]["4"]
+    assert set(anchor) == {"centroid", "smoothed", "translation"}
+    np.testing.assert_allclose(anchor["centroid"], sample + where[4], atol=0.6)
+    np.testing.assert_allclose(
+        anchor["translation"], centre - np.asarray(anchor["smoothed"]), atol=1e-9
+    )
+
+
+def test_a_centroid_anchor_needs_a_neighbour_median_reference():
+    from pydantic import ValidationError
+
+    with pytest.raises(
+        ValidationError, match="reference.anchor needs reference.frame 'neighbours'"
+    ):
+        ReferenceSettings(frame="previous", anchor=ANCHOR)
+    with pytest.raises(ValidationError, match="smooth_sigma"):  # no hidden defaults
+        ReferenceSettings(
+            frame="neighbours", anchor={k: v for k, v in ANCHOR.items() if k != "smooth_sigma"}
+        )
