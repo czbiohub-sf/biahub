@@ -355,12 +355,12 @@ class _Run:
         # reg/transforms/), so estimates written to one folder never share or clear them.
         self.output_dir = self.output_filepath.with_suffix("")
         self.settings = load_estimate_transform_settings(config_filepath)
-        seed_file = self.settings.transform.seed_file
+        seed_file = self.settings.transform.initial_file
         if seed_file is not None:  # relative to the config, wherever the run starts from
             seed_file = (Path(config_filepath).parent / seed_file).resolve()
             if not seed_file.is_file():
-                raise click.UsageError(f"seed_file {seed_file} does not exist")
-            self.settings.transform.seed_file = str(seed_file)
+                raise click.UsageError(f"transform.initial.file {seed_file} does not exist")
+            self.settings.transform.initial.file = str(seed_file)
         digest = hashlib.sha256(self.settings.model_dump_json().encode())
         if seed_file is not None:  # its content too: a changed file is a different run
             digest.update(seed_file.read_bytes())

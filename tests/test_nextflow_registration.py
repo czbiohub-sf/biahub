@@ -401,12 +401,12 @@ def test_registration_nf_applies_a_channel_whose_name_has_an_apostrophe(tmp_path
 
 
 def test_registration_nf_reruns_the_estimate_when_its_seed_file_is_edited(tmp_path):
-    # transform.seed_file is named by the config; the seed file itself is staged too, so
+    # transform.initial.file is named by the config; the file itself is staged too, so
     # rewriting it in place reruns the estimate instead of reusing the old seed's results.
     import json
 
     from biahub.core.transform import Transform
-    from biahub.settings import TransformEntry, TransformSettings
+    from biahub.settings import InitialTransformSettings, TransformEntry, TransformSettings
     from biahub.utils.config import yaml_to_model
 
     plate = _beads_plate(tmp_path)
@@ -429,7 +429,7 @@ def test_registration_nf_reruns_the_estimate_when_its_seed_file_is_edited(tmp_pa
     write_seed(APPLIED_SHIFT_ZYX)
     config = _write_config(tmp_path)
     settings = yaml_to_model(config, EstimateTransformSettings)
-    settings.transform.seed_file = "plate.yml"  # relative to the config
+    settings.transform.initial = InitialTransformSettings(from_="file", file="plate.yml")
     model_to_yaml(settings, config)
     params = (
         "--moving", store, "--reference", store, "--estimate_config", config,

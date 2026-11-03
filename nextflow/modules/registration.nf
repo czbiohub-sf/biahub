@@ -58,7 +58,7 @@ def step_error_strategy(task) {
     return task.exitStatus in (130..145) + [Integer.MAX_VALUE] ? 'retry' : 'terminate'
 }
 
-// The estimate config and the files it reads (transform.seed_file), staged as each
+// The estimate config and the files it reads (transform.initial.file), staged as each
 // task's `config_file` so an edit to any of them reruns the tasks (#397): the seed file is
 // an earlier result the estimate starts from, and the config only names it.
 def estimate_config_files(config) {
@@ -66,7 +66,12 @@ def estimate_config_files(config) {
     def settings = new org.yaml.snakeyaml.Yaml().load(file(config).text)
     def seed = null
     if (settings instanceof Map && settings.transform instanceof Map) {
-        seed = settings.transform.seed_file
+        def initial = settings.transform.initial
+        if (initial instanceof Map && initial.from == 'file') {
+            seed = initial.file
+        } else {
+            seed = settings.transform.seed_file  // the first schema's key, still read
+        }
     }
     if (seed) {
         def seed_path = seed.toString()

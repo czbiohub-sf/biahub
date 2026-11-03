@@ -262,6 +262,7 @@ class ShapesInitialTransform:
             pre_affine_fliplr=fliplr,
         )
         # get_aprox_transform's matrix maps reference to moving coordinates (inverse)
+        self.inverse_matrix = approx.matrix
         self.transform = Transform.from_inverse(approx.matrix, transform_type)
 
     def initial_for(self, t: int) -> Transform:

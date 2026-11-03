@@ -1005,52 +1005,124 @@ class ChannelSettings(MyBaseModel):
     channel: str
 
 
-class TransformFitSettings(MyBaseModel):
-    """What kind of transform to fit and where to start.
+InitialSource = Literal["matrix", "shapes", "file"]
+# transform.* keys of the first schema, now transform.initial
+OLD_INITIAL_KEYS = ("seed", "seed_direction", "seed_from_shapes", "seed_from", "seed_file")
 
-    `seed` is a 4x4 matrix in `seed_direction`: "inverse" (reference -> moving, the
-    convention of every transform on disk and of the legacy `approx_transform`) or
-    "forward" (moving -> reference, the engine's own convention).
 
-    `seed_from` says where each timepoint starts: `input` -- the seed, for every
-    timepoint (independent estimates, fanned out per timepoint); `previous_timepoint` --
-    the previous timepoint's result, with the input seed competing on the first pass
-    (sequential, as the legacy `use_prev_t_transform`).
+class InitialTransformSettings(MyBaseModel):
+    """`transform.initial`: where every estimate starts (absent, or no `from`: identity).
 
-    `seed_file`: a transforms file (an earlier result, e.g. a pooled plate transform)
-    whose transform for each position and timepoint is the seed there. The estimate from
-    it competes with it as it is: the file's transform is kept unless the estimate scores
-    strictly better (or fails), and the entry records `seeded_from`. It replaces `seed`.
+    `from: matrix` -- `matrix` (4x4) in `direction`: "inverse" (reference -> moving, the
+    convention of every transform on disk) or "forward" (moving -> reference).
+    `from: shapes` -- the approximate transform from the two stores' shapes and voxel
+    sizes (their OME-NGFF scale), after `rotate90` quarter turns in yx and `fliplr`.
+    `from: file` -- each position and timepoint's transform in a transforms `file` (an
+    earlier result, e.g. a pooled plate transform): the estimate from it is kept only
+    when it scores strictly better, and the entry records `seeded_from`.
+
+    `propagate`: each timepoint starts from the previous one's result, the initial
+    transform competing on the first pass (sequential, as the legacy
+    `use_prev_t_transform`). A file gives every timepoint its own, so not with `file`.
     """
 
-    type: Literal["euclidean", "similarity", "affine"] = "euclidean"
-    seed: list = np.eye(4).tolist()
-    seed_direction: TransformDirection = "inverse"
-    seed_from_shapes: bool = False
-    seed_from: Literal["input", "previous_timepoint"] = "input"
-    seed_file: str | None = None
+    model_config = ConfigDict(
+        extra="forbid", serialize_by_alias=True, validate_by_name=True, validate_by_alias=True
+    )
 
-    @field_validator("seed")
-    @classmethod
-    def check_seed(cls, v):
-        if np.asarray(v, dtype=float).shape != (4, 4):
-            raise ValueError("seed must be a 4x4 matrix")
-        return v
+    from_: InitialSource | None = Field(None, alias="from")
+    matrix: list | None = None
+    direction: TransformDirection | None = None
+    rotate90: int | None = None
+    fliplr: bool | None = None
+    file: str | None = None
+    propagate: bool = False
 
     @model_validator(mode="after")
-    def check_seed_file(self) -> "TransformFitSettings":
-        if self.seed_file is None:
-            return self
-        if self.seed_from_shapes or not np.allclose(self.seed, np.eye(4)):
+    def check_source(self) -> "InitialTransformSettings":
+        needs = {
+            "matrix": ("matrix", "direction"),
+            "shapes": ("rotate90", "fliplr"),
+            "file": ("file",),
+        }
+        for source, fields in needs.items():
+            for name in fields:
+                given = getattr(self, name) is not None
+                if self.from_ == source and not given:
+                    raise ValueError(f"transform.initial from {source} needs {name}")
+                if self.from_ != source and given:
+                    raise ValueError(
+                        f"transform.initial.{name} is for from: {source}; got from: {self.from_}"
+                    )
+        if self.matrix is not None and np.asarray(self.matrix, dtype=float).shape != (4, 4):
+            raise ValueError("transform.initial.matrix must be a 4x4 matrix")
+        if self.from_ == "file" and self.propagate:
+            raise ValueError(
+                "transform.initial from a file starts every timepoint from the file; it does "
+                "not combine with propagate"
+            )
+        return self
+
+
+def _initial_from_old_keys(data: dict) -> dict:
+    """Map the first schema's transform.seed* keys onto transform.initial."""
+    old = {k: data.pop(k) for k in OLD_INITIAL_KEYS if k in data}
+    if not old:
+        return data
+    if data.get("initial") is not None:
+        raise ValueError(f"give transform.initial or the old keys {sorted(old)}, not both")
+    seed = old.get("seed")
+    identity = seed is None or np.allclose(np.asarray(seed, dtype=float), np.eye(4))
+    if old.get("seed_file") is not None:
+        if old.get("seed_from_shapes") or not identity:
             raise ValueError(
                 "give one seed: seed_file or a seed matrix / seed_from_shapes, not both"
             )
-        if self.seed_from == "previous_timepoint":
+        if old.get("seed_from") == "previous_timepoint":
             raise ValueError(
                 "seed_file seeds every timepoint from the file; it does not combine with "
                 "seed_from: previous_timepoint"
             )
-        return self
+        initial = {"from": "file", "file": old["seed_file"]}
+    elif old.get("seed_from_shapes"):
+        # the engine always built the shapes seed with these (the mantis orientation)
+        initial = {"from": "shapes", "rotate90": -1, "fliplr": False}
+    elif not identity:
+        initial = {
+            "from": "matrix",
+            "matrix": seed,
+            "direction": old.get("seed_direction", "inverse"),
+        }
+    else:
+        initial = {}
+    if old.get("seed_from") == "previous_timepoint":
+        initial["propagate"] = True
+    if initial:
+        data["initial"] = initial
+    return data
+
+
+class TransformFitSettings(MyBaseModel):
+    """What kind of transform to fit (`type`), and where it starts (`initial`)."""
+
+    type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    initial: InitialTransformSettings | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def map_old_keys(cls, data):
+        return _initial_from_old_keys(dict(data)) if isinstance(data, dict) else data
+
+    @property
+    def propagates(self) -> bool:
+        """Each timepoint starts from the previous one's result (`initial.propagate`)."""
+        return self.initial is not None and self.initial.propagate
+
+    @property
+    def initial_file(self) -> str | None:
+        """The transforms file every timepoint starts from (`from: file`), else None."""
+        init = self.initial
+        return init.file if init is not None and init.from_ == "file" else None
 
 
 class FlagSettings(MyBaseModel):

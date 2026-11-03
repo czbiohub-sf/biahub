@@ -47,7 +47,7 @@ def test_each_block_becomes_an_ordinary_single_method_config():
     assert [b.kind for b in ants.preprocess] == ["sobel"]
     # a block's transform type, else the run's; the rest of the run is shared
     assert (pcc.transform.type, ants.transform.type) == ("euclidean", "similarity")
-    assert pcc.transform.seed_from == ants.transform.seed_from == "previous_timepoint"
+    assert pcc.transform.propagates and ants.transform.propagates
     assert not pcc.is_stack
 
 

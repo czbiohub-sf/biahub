@@ -38,14 +38,13 @@ def test_estimate_registration_converts_to_a_cross_reference_estimate():
     assert isinstance(unified, EstimateTransformSettings)
     assert unified.reference.frame == "cross" and unified.reference.channel == "Phase3D"
     assert unified.moving.channel == "GFP" and unified.method == "bead_matching"
-    assert (
-        unified.transform.seed == INVERSE.tolist()
-        and unified.transform.seed_direction == "inverse"
-    )
+    initial = unified.transform.initial
+    assert initial.from_ == "matrix"
+    assert initial.matrix == INVERSE.tolist() and initial.direction == "inverse"
     assert unified.transform.type == "affine" and unified.time_indices == [0, 5]
     assert unified.bead_matching is not None
     # legacy use_prev_t_transform (default true) is propagation, no longer dropped
-    assert unified.transform.seed_from == "previous_timepoint"
+    assert unified.transform.propagates
     assert not any("use_prev_t_transform" in n for n in notes)
 
 
@@ -193,7 +192,7 @@ def test_estimate_registration_without_propagation_converts_to_independent_estim
         affine_transform_settings={"use_prev_t_transform": False},
     )
     unified, _ = convert_settings(legacy)
-    assert unified.transform.seed_from == "input"
+    assert not unified.transform.propagates
 
 
 @pytest.mark.parametrize(
@@ -233,7 +232,7 @@ def test_estimate_registration_without_propagation_converts_to_independent_estim
 )
 def test_use_prev_t_transform_maps_to_propagation_only_for_beads(legacy, expected):
     unified, _ = convert_settings(legacy)
-    assert unified.transform.seed_from == expected
+    assert unified.transform.propagates is (expected == "previous_timepoint")
 
 
 def test_legacy_manual_time_index_becomes_time_indices():

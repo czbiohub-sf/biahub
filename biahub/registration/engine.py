@@ -64,12 +64,14 @@ from biahub.registration.metrics import (
 from biahub.registration.policies import (
     ConsensusInitialTransform,
     CrossChannel,
+    FileInitialTransform,
     FixedFrame,
     FixedInitialTransform,
     InitialTransformPolicy,
     NeighbourMedian,
     PreviousFrame,
     ReferencePolicy,
+    ShapesInitialTransform,
     intensity_centroid,
     is_empty,
     smooth_track,
@@ -80,7 +82,6 @@ from biahub.registration.preprocess import (
     apply_image_blocks,
     blocks_footprint,
 )
-from biahub.registration.seed import get_aprox_transform
 from biahub.registration.utils import resolve_time_indices
 from biahub.settings import (
     AffineTransformSettings,
@@ -88,6 +89,7 @@ from biahub.settings import (
     BeadsMatchSettings,
     EstimateTransformSettings,
     FlagSettings,
+    InitialTransformSettings,
 )
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
@@ -947,11 +949,38 @@ def _reference_policy(settings: EstimateTransformSettings, ref) -> ReferencePoli
     return PreviousFrame(first=min(run))
 
 
-def _seed(settings: EstimateTransformSettings) -> Transform:
-    fit = settings.transform
-    if fit.seed_direction == "forward":
-        return Transform(np.asarray(fit.seed, dtype=float), transform_type=fit.type)
-    return Transform.from_inverse(fit.seed, fit.type)
+def _static_initial(settings: EstimateTransformSettings) -> Transform:
+    """Return the run's one initial transform: `transform.initial.matrix`, else identity.
+
+    `init_run` makes a `from: shapes` initial a matrix; a file's per-timepoint transforms
+    are `_initial_policy`'s.
+    """
+    fit, init = settings.transform, settings.transform.initial
+    if init is None or init.from_ != "matrix":
+        return Transform.from_inverse(np.eye(4).tolist(), fit.type)
+    if init.direction == "forward":
+        return Transform(np.asarray(init.matrix, dtype=float), transform_type=fit.type)
+    return Transform.from_inverse(init.matrix, fit.type)
+
+
+def _initial_policy(
+    settings: EstimateTransformSettings, run_dir: Path
+) -> InitialTransformPolicy:
+    """Return where each timepoint starts: the run's file, else the one initial transform.
+
+    `init_run` wrote a file's transform for each timepoint beside the run's settings.
+    """
+    if settings.transform.initial_file is not None:
+        by_t = json.loads((Path(run_dir) / SEEDS_FILENAME).read_text())
+        return FileInitialTransform(
+            {
+                int(t): Transform(
+                    np.asarray(m, dtype=float), transform_type=settings.transform.type
+                )
+                for t, m in by_t.items()
+            }
+        )
+    return FixedInitialTransform(_static_initial(settings))
 
 
 def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
@@ -983,17 +1012,19 @@ def _metric_fn(settings: EstimateTransformSettings, metric: str, prepare=None) -
 
 def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSettings:
     """Build the legacy `AffineTransformSettings` the estimators' constructors still take."""
-    fit = settings.transform
-    seed_inverse = (
-        fit.seed
-        if fit.seed_direction == "inverse"
-        else np.linalg.inv(np.asarray(fit.seed, dtype=float)).tolist()
-    )
+    fit, init = settings.transform, settings.transform.initial
+    seed_inverse = np.eye(4).tolist()
+    if init is not None and init.from_ == "matrix":
+        seed_inverse = (
+            init.matrix
+            if init.direction == "inverse"
+            else np.linalg.inv(np.asarray(init.matrix, dtype=float)).tolist()
+        )
     return AffineTransformSettings(
         transform_type=fit.type,
         approx_transform=seed_inverse,
         use_prev_t_transform=False,
-        compute_approx_transform=fit.seed_from_shapes,
+        compute_approx_transform=init is not None and init.from_ == "shapes",
         # the legacy field knows first / previous: a cross registration and a neighbour
         # median give absolute transforms, like first
         t_reference="previous" if settings.reference.frame == "previous" else "first",
@@ -1068,11 +1099,11 @@ def build_estimator(
         score_fn = _score_fn(settings)
         names = [f"{k}:{m}" for k, m in enumerate(settings.method_names, start=1)]
         chain = ChainedEstimator(blocks, score_fn=score_fn, names=names)
-        return chain, score_fn, _seed(settings)
+        return chain, score_fn, _static_initial(settings)
     score_fn = _score_fn(settings)
     # the bead estimators' own choices score the raw volumes, not the prepared ones
     method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn
-    seed = _seed(settings)
+    seed = _static_initial(settings)
     affine = _affine_settings(settings)
     if settings.method == "bead_matching":
         estimator: TransformEstimator = build_beads_estimator(
@@ -1210,13 +1241,8 @@ class _JobInputs(NamedTuple):
     ref_voxel_size: tuple
     estimator: TransformEstimator
     score_fn: ScoreFn
-    seed: Transform
-    # With a seed file: each timepoint's seed from it (forward), else None.
-    seeds: dict[int, Transform] | None = None
-
-    def seed_at(self, t: int) -> Transform:
-        """Return timepoint `t`'s seed: the seed file's, else the config seed."""
-        return self.seed if self.seeds is None else self.seeds.get(t, self.seed)
+    # where each timepoint starts (`transform.initial`)
+    initial: InitialTransformPolicy
 
 
 def _job_inputs(
@@ -1227,21 +1253,12 @@ def _job_inputs(
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
     ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
-    estimator, score_fn, seed = build_estimator(
+    estimator, score_fn, _ = build_estimator(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
-    seeds = None
-    if settings.transform.seed_file is not None:  # resolved by init_run, beside the settings
-        seeds = {
-            int(t): Transform(
-                np.asarray(m, dtype=float), transform_type=settings.transform.type
-            )
-            for t, m in json.loads(
-                (Path(settings_path).parent / SEEDS_FILENAME).read_text()
-            ).items()
-        }
+    initial = _initial_policy(settings, Path(settings_path).parent)
     return _JobInputs(
-        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, seed, seeds
+        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, initial
     )
 
 
@@ -1261,10 +1278,10 @@ def _estimate_timepoint_job(
         mov,
         _reference_policy(settings, ref),
         estimator,
-        FixedInitialTransform(job.seed_at(t)),
+        FixedInitialTransform(job.initial.initial_for(t)),
         score_fn,
         [t],
-        keep_seed=job.seeds is not None,
+        keep_seed=getattr(job.initial, "keep_unless_beaten", False),
     )
     record = {
         "t": t,
@@ -1302,7 +1319,8 @@ def _estimate_propagated_job(
     """
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
-    estimator, score_fn, seed = job.estimator, job.score_fn, job.seed
+    estimator, score_fn = job.estimator, job.score_fn
+    seed = _static_initial(settings)
     done = {}
     if resume:
         for t in time_indices:
@@ -1355,7 +1373,7 @@ def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: 
     def resolved(path):
         return None if path is None else str(Path(path).resolve())
 
-    seed_file = settings.transform.seed_file
+    seed_file = settings.transform.initial_file
     return {
         "settings_sha256": digest,
         "moving": resolved(source),
@@ -1472,7 +1490,7 @@ def _repair_timepoint_job(
     """Repair one flagged timepoint against the frozen whole-run history."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
-    estimator, score_fn, seed = job.estimator, job.score_fn, job.seed_at(t)
+    estimator, score_fn, seed = job.estimator, job.score_fn, job.initial.initial_for(t)
     repair_settings = settings.fallback.repair
 
     # This run's estimate records (the driver cleared any earlier run's).
@@ -1530,7 +1548,7 @@ def _sweep_timepoint_job(
     """Sweep one flagged timepoint against its own pre-fallback estimate."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
-    score_fn, seed = job.score_fn, job.seed_at(t)
+    score_fn, seed = job.score_fn, job.initial.initial_for(t)
     trials = {
         name: build_estimator(
             trial, tuple(mov.shape[-3:]), job.mov_voxel_size, job.ref_voxel_size
@@ -1725,14 +1743,19 @@ def _run_propagated(
 
 
 def _one_transform_per_timepoint(
-    result: SeriesResult, time_indices: list[int], fallback: Transform | dict[int, Transform]
+    result: SeriesResult,
+    time_indices: list[int],
+    initial: Transform | InitialTransformPolicy,
 ) -> list[Transform]:
     """Return one transform per requested timepoint.
 
-    The accepted transform, else `fallback` -- the input seed (e.g. the approximate
-    transform), as the legacy pipeline returned when refinement failed; a dict holds each
-    timepoint's own seed (a seed file's). Each stand-in is recorded in `result.filled_from`.
+    The accepted transform, else the timepoint's initial transform (e.g. the approximate
+    transform, or a file's own for that timepoint), as the legacy pipeline returned when
+    refinement failed. Each stand-in is recorded in `result.filled_from`.
     """
+    if isinstance(initial, Transform):
+        initial = FixedInitialTransform(initial)
+    from_file = getattr(initial, "keep_unless_beaten", False)
     out = []
     for t in time_indices:
         if t in result.transforms:
@@ -1742,25 +1765,9 @@ def _one_transform_per_timepoint(
             result.filled_from[t] = source
             out.append(transform)
         else:
-            result.filled_from[t] = "seed_file" if isinstance(fallback, dict) else "seed"
-            out.append(_at(fallback, t))
+            result.filled_from[t] = "seed_file" if from_file else "seed"
+            out.append(initial.initial_for(t))
     return out
-
-
-def _at(seed: Transform | dict[int, Transform], t: int) -> Transform:
-    """Return timepoint `t`'s seed: its own from a dict (a seed file's), else the one seed."""
-    return seed[t] if isinstance(seed, dict) else seed
-
-
-def _run_seeds(output_dir: Path, settings: EstimateTransformSettings) -> dict | None:
-    """Return each timepoint's seed from the run's seed file (`init_run` wrote them), or None."""
-    if settings.transform.seed_file is None:
-        return None
-    seeds = json.loads((Path(output_dir) / SEEDS_FILENAME).read_text())
-    return {
-        int(t): Transform(np.asarray(m, dtype=float), transform_type=settings.transform.type)
-        for t, m in seeds.items()
-    }
 
 
 def _pass_report(outcome: PassResult) -> dict:
@@ -1933,33 +1940,41 @@ def init_run(
             )
 
     settings = settings.model_copy(deep=True)
-    if settings.transform.seed_from_shapes:
-        approx = get_aprox_transform(
+    init = settings.transform.initial
+    if init is not None and init.from_ == "shapes":
+        # the run's settings hold the matrix it computed, so every job reads the same one
+        shapes = ShapesInitialTransform(
             mov_shape=(Z, Y, X),
             ref_shape=tuple(ref_shape),
-            pre_affine_90degree_rotation=-1,
-            pre_affine_fliplr=False,
-            verbose=settings.verbose,
-            ref_voxel_size=ref_voxel_size,
             mov_voxel_size=mov_voxel_size,
+            ref_voxel_size=ref_voxel_size,
+            rotate90=init.rotate90,
+            fliplr=init.fliplr,
+            transform_type=settings.transform.type,
         )
-        settings.transform.seed = approx.to_list()
-        settings.transform.seed_direction = "inverse"
-        click.echo(f"Computed seed from the store shapes:\n{approx.matrix}")
+        settings.transform.initial = InitialTransformSettings(
+            from_="matrix",
+            matrix=shapes.inverse_matrix.tolist(),
+            direction="inverse",
+            propagate=init.propagate,
+        )
+        click.echo(f"Computed seed from the store shapes:\n{shapes.inverse_matrix}")
     estimator, _score_fn, _seed_transform = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
     )
     seeds = (
         None
-        if settings.transform.seed_file is None
-        else _seeds_from_file(settings.transform.seed_file, position_key(source), time_indices)
+        if settings.transform.initial_file is None
+        else _seeds_from_file(
+            settings.transform.initial_file, position_key(source), time_indices
+        )
     )
     _start_run(output_dir, settings, source, target, resume)
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
     if seeds is not None:
         _write_json(output_dir / SEEDS_FILENAME, seeds, indent=2)
 
-    propagated = settings.transform.seed_from == "previous_timepoint"
+    propagated = settings.transform.propagates
     # a stack's jobs run every block: plan for the heaviest
     # a neighbour median holds 2 x window frames, the one being read and the median,
     # besides the method's volumes
@@ -2123,7 +2138,7 @@ def finalize_run(
     transform_type = settings.transform.type
     # a timepoint without a transform of its own falls back to where it started: the seed
     # file's transform for it, else the config seed
-    seed = _run_seeds(output_dir, settings) or _seed(settings)
+    initial = _initial_policy(settings, output_dir)
     _, repairs_dir, sweeps_dir = _record_dirs(output_dir)
     if flags is None:
         flags = _flags(output_dir)
@@ -2146,7 +2161,7 @@ def finalize_run(
             if record is None:  # never ran (or unreadable)
                 return None
         return _load_pass(
-            record, transform_type, fallback=result.transforms.get(t, _at(seed, t))
+            record, transform_type, fallback=result.transforms.get(t, initial.initial_for(t))
         )
 
     for t in flags["repair"]:
@@ -2200,7 +2215,7 @@ def finalize_run(
         )
 
     # Before the report: this records which timepoints got a stand-in.
-    transforms = transforms_for_file(result, time_indices, seed, settings.reference.frame)
+    transforms = transforms_for_file(result, time_indices, initial, settings.reference.frame)
     if settings.reference.anchor is not None:
         transforms = anchor_transforms(
             result, time_indices, transforms, settings.reference.anchor, plan["frame_shape"]
@@ -2489,7 +2504,7 @@ def estimate_transform_series(
 def transforms_for_file(
     result: SeriesResult,
     time_indices: list[int],
-    seed: Transform | dict[int, Transform],
+    initial: Transform | InitialTransformPolicy,
     frame: str,
 ) -> list[Transform]:
     """One transform per timepoint, onto the reference grid, for the transforms file.
@@ -2500,7 +2515,7 @@ def transforms_for_file(
     every later timepoint -- and the steps are chained onto the first frame.
     """
     if frame != "previous":
-        return _one_transform_per_timepoint(result, time_indices, seed)
+        return _one_transform_per_timepoint(result, time_indices, initial)
     for t in time_indices:
         if t not in result.transforms:
             result.filled_from[t] = "identity"
