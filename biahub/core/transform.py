@@ -185,6 +185,70 @@ class Transform:
 
         return cls(matrix, transform_type="euclidean")
 
+    @staticmethod
+    def _yx_centres(start_shape: tuple, end_shape: tuple | None) -> tuple:
+        cy_start, cx_start = np.array(start_shape)[-2:] / 2
+        cy_end, cx_end = (
+            (cy_start, cx_start) if end_shape is None else np.array(end_shape)[-2:] / 2
+        )
+        return cy_start, cx_start, cy_end, cx_end
+
+    @classmethod
+    def from_scaling(
+        cls, factors_zyx: tuple, start_shape: tuple, end_shape: tuple | None = None
+    ) -> Transform:
+        """Scale z, y and x from a `start_shape` grid onto an `end_shape` grid (3D, forward).
+
+        y and x are scaled about the start grid's yx centre, which lands on the end grid's
+        (default: the same shape); z is scaled about plane 0.
+        """
+        cy_start, cx_start, cy_end, cx_end = cls._yx_centres(start_shape, end_shape)
+        sz, sy, sx = factors_zyx[-3], factors_zyx[-2], factors_zyx[-1]
+        matrix = np.array(
+            [
+                [sz, 0, 0, 0],
+                [0, sy, 0, -cy_start * sy + cy_end],
+                [0, 0, sx, -cx_start * sx + cx_end],
+                [0, 0, 0, 1],
+            ]
+        )
+        return cls(matrix, transform_type="affine")
+
+    @classmethod
+    def from_rotation_yx(
+        cls, angle_deg: float, start_shape: tuple, end_shape: tuple | None = None
+    ) -> Transform:
+        """Rotate in the yx plane by `angle_deg` about the yx centres (3D, forward; z kept).
+
+        The start grid's yx centre lands on the end grid's (default: the same shape).
+        """
+        cy_start, cx_start, cy_end, cx_end = cls._yx_centres(start_shape, end_shape)
+        theta = np.radians(angle_deg)
+        cos, sin = np.cos(theta), np.sin(theta)
+        matrix = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, cos, -sin, -cy_start * cos + sin * cx_start + cy_end],
+                [0, sin, cos, -cy_start * sin - cx_start * cos + cx_end],
+                [0, 0, 0, 1],
+            ]
+        )
+        return cls(matrix, transform_type="euclidean")
+
+    @classmethod
+    def from_flip_x(cls, start_shape: tuple, end_shape: tuple | None = None) -> Transform:
+        """Flip x (left-right) about the end grid's x centre (3D, forward; default: start)."""
+        _, _, _, cx_end = cls._yx_centres(start_shape, end_shape)
+        matrix = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, -1, 2 * cx_end],
+                [0, 0, 0, 1],
+            ]
+        )
+        return cls(matrix, transform_type="affine")
+
     @classmethod
     def from_skimage(
         cls,

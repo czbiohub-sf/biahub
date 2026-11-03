@@ -12,11 +12,6 @@ from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.core.transform import Transform
-from biahub.registration.seed import (
-    get_3D_fliplr_matrix,
-    get_3D_rescaling_matrix,
-    get_3D_rotation_matrix,
-)
 
 NA_DETECTION_SOURCE = 1.35
 
@@ -157,23 +152,18 @@ def user_assisted_registration(
     source_zyx_ants = ants.from_numpy(source_channel_volume.astype(np.float32))
     target_zyx_ants = ants.from_numpy(target_channel_volume.astype(np.float32))
 
-    scaling_affine = get_3D_rescaling_matrix(
-        (target_channel_Z, target_channel_Y, target_channel_X),
-        (scaling_factor_z, scaling_factor_yx, scaling_factor_yx),
-        (target_channel_Z, target_channel_Y, target_channel_X),
-    )
-    rotate90_affine = get_3D_rotation_matrix(
-        (source_channel_Z, source_channel_Y, source_channel_X),
-        90 * pre_affine_90degree_rotation,
-        (target_channel_Z, target_channel_Y, target_channel_X),
-    )
+    ref_shape_zyx = (target_channel_Z, target_channel_Y, target_channel_X)
+    mov_shape_zyx = (source_channel_Z, source_channel_Y, source_channel_X)
+    scaling_affine = Transform.from_scaling(
+        (scaling_factor_z, scaling_factor_yx, scaling_factor_yx), ref_shape_zyx, ref_shape_zyx
+    ).matrix
+    rotate90_affine = Transform.from_rotation_yx(
+        90 * pre_affine_90degree_rotation, mov_shape_zyx, ref_shape_zyx
+    ).matrix
 
     # Apply flip transformation if requested (flip happens first)
     if pre_affine_fliplr:
-        fliplr_affine = get_3D_fliplr_matrix(
-            (source_channel_Z, source_channel_Y, source_channel_X),
-            (target_channel_Z, target_channel_Y, target_channel_X),
-        )
+        fliplr_affine = Transform.from_flip_x(mov_shape_zyx, ref_shape_zyx).matrix
     else:
         fliplr_affine = np.eye(4)
 

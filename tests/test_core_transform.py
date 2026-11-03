@@ -168,3 +168,28 @@ def test_the_output_voxel_size_is_one_output_step_in_the_input_um():
     np.testing.assert_allclose(
         Transform.from_inverse(rotate).output_voxel_size((0.5, 0.15, 0.15)), (0.5, 0.15, 0.15)
     )
+
+
+def test_scaling_rotation_and_flip_constructors_keep_the_centre_where_it_belongs():
+    # from_scaling / from_rotation_yx / from_flip_x (forward, start grid -> end grid): the
+    # start grid's yx centre lands on the end grid's yx centre; z is scaled about plane 0
+    start, end = (10, 40, 60), (20, 80, 100)
+    centre = lambda shape: np.array([0.0, shape[1] / 2, shape[2] / 2])  # noqa: E731
+    scaled = Transform.from_scaling((2.0, 0.5, 0.5), start, end)
+    np.testing.assert_allclose(scaled.apply_points(centre(start)[None])[0], centre(end))
+    np.testing.assert_allclose(scaled.apply_points(np.array([[3.0, 20, 30]]))[0, 0], 6.0)
+    assert scaled.transform_type == "affine"
+    turned = Transform.from_rotation_yx(90, start, end)
+    np.testing.assert_allclose(turned.apply_points(centre(start)[None])[0], centre(end))
+    # a quarter turn: one step along x becomes one step along y
+    step = turned.apply_points(centre(start)[None] + [0.0, 0.0, 1.0])[0] - centre(end)
+    np.testing.assert_allclose(step, (0.0, -1.0, 0.0), atol=1e-12)
+    flipped = Transform.from_flip_x(start)
+    np.testing.assert_allclose(
+        flipped.apply_points(np.array([[1.0, 5.0, 10.0]]))[0], (1, 5, 50)
+    )
+    # the same shape twice: the end grid defaults to the start
+    np.testing.assert_array_equal(
+        Transform.from_rotation_yx(90, start).matrix,
+        Transform.from_rotation_yx(90, start, start).matrix,
+    )
