@@ -20,13 +20,6 @@ import numpy as np
 from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
 
-# TODO: see if at some point these globals should be hidden or exposed.
-NA_DETECTION_SOURCE = 1.35
-NA_DETECTION_TARGET = 1.35
-WAVELENGTH_EMISSION_SOURCE_CHANNEL = 0.45  # in um
-WAVELENGTH_EMISSION_TARGET_CHANNEL = 0.6  # in um
-FOCUS_SLICE_ROI_WIDTH = 150  # size of central ROI used to find focal slice
-
 
 def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
     registered_zyx = np.asarray(registered_zyx, dtype=bool)
