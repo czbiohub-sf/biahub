@@ -1312,7 +1312,7 @@ def _estimate_propagated_job(
     records_dir: Path,
     resume: bool,
 ) -> dict[int, dict]:
-    """All timepoints in order (`seed_from: previous_timepoint`), one record per timepoint.
+    """All timepoints in order (`transform.initial.propagate`), one record per timepoint.
 
     Each record is written as soon as its timepoint is done, so an interrupted job
     resumes the chain where it stopped.
@@ -1898,7 +1898,7 @@ def _seeds_from_file(seed_file, key: str, time_indices: list[int]) -> dict[str, 
     transforms = load_transform_settings(seed_file)
     if transforms.per_position and key not in transforms.positions:
         raise click.UsageError(
-            f"seed_file {seed_file} has no transforms for position {key} (it has "
+            f"transform.initial.file {seed_file} has no transforms for position {key} (it has "
             f"{sorted(transforms.positions)})"
         )
     return {str(t): transforms.transform_for(t, key).to_list() for t in time_indices}
@@ -1916,7 +1916,7 @@ def init_run(
     Resolves the settings the jobs read (a seed from the store shapes is computed once,
     here), writes them with the run manifest -- clearing an earlier run's records unless
     `resume` -- and plans the run: the timepoints, whether they are estimated in one
-    sequential job (`seed_from: previous_timepoint`), whether the method uses a seed
+    sequential job (`transform.initial.propagate`), whether the method uses a seed
     (repair needs one), and each phase's resources. Reads only store metadata.
     """
     output_dir = Path(output_dir)
@@ -2246,7 +2246,7 @@ def run_timepoint_jobs(
 
     `step` is `estimate`, `repair` or `sweep`; `timepoints` defaults to every timepoint
     the phase has (all for estimate, the flagged ones for repair / sweep). A propagated
-    estimate (`seed_from: previous_timepoint`) is one job over the whole series. With
+    estimate (`transform.initial.propagate`) is one job over the whole series. With
     `resume`, timepoints that already have a record are skipped.
     """
     output_dir = Path(output_dir)
@@ -2259,7 +2259,7 @@ def run_timepoint_jobs(
     if step == "estimate" and plan["propagated"]:
         if timepoints is not None:
             raise click.UsageError(
-                "seed_from: previous_timepoint estimates the whole series in one job, in "
+                "transform.initial.propagate estimates the whole series in one job, in "
                 "order; drop --timepoints"
             )
         try:

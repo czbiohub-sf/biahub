@@ -592,7 +592,7 @@ def estimate_transform_step(
     """Run one step of a run `--init` started, in this process, for the given positions.
 
     `estimate`, `repair` and `sweep` do the given `timepoints` (default: all the step
-    has); `estimate` of a `seed_from: previous_timepoint` run does the whole series, in
+    has); `estimate` of a `transform.initial.propagate` run does the whole series, in
     order; they return `{"failed": {position: [t, ...]}}` for jobs that raised (recorded,
     so the run can carry on). `flag` prints `PLAN:{position: {repair, sweep}}`.
     `finalize` writes the transforms file and needs every position of the run.

@@ -1,6 +1,6 @@
 """The approximate seed: a transform from the two stores' shapes and voxel sizes.
 
-`get_aprox_transform` (the engine's `transform.seed_from_shapes`) and the matrix builders
+`get_aprox_transform` (`transform.initial: {from: shapes}`) and the matrix builders
 it composes -- rescaling, a 90-degree rotation and a left-right flip, each about the
 volume's centre. ZYX order; 4x4 homogeneous matrices.
 """

@@ -8,7 +8,7 @@
 // THE CLI OWNS THE LOGIC, NEXTFLOW OWNS THE FAN-OUT. `biahub estimate-transform
 // --init` checks the config, plans every position and prints a PLAN line: the
 // positions, the timepoints, whether they are estimated in one sequential task
-// (`seed_from: previous_timepoint`), and each phase's resources. Each task then
+// (`transform.initial.propagate`), and each phase's resources. Each task then
 // runs one `--step` in-process (`--cluster debug`): estimate one timepoint (or one
 // position's whole series), flag one position (its PLAN line names the timepoints
 // to repair and sweep), repair / sweep one timepoint, and finalize, which writes
