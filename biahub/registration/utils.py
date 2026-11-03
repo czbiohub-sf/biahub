@@ -14,72 +14,9 @@ Key conventions
 """
 
 import click
-import largestinteriorrectangle as lir
 import numpy as np
 
-from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
-
-
-def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
-    registered_zyx = np.asarray(registered_zyx, dtype=bool)
-
-    # Find the lir in YX at Z//2
-    registered_yx = registered_zyx[registered_zyx.shape[0] // 2].copy()
-    coords_yx = lir.lir(registered_yx)
-    coords_yx = list(map(int, coords_yx))
-
-    x, y, width, height = coords_yx
-    x_start, x_stop = x, x + width
-    y_start, y_stop = y, y + height
-    x_slice = slice(x_start, x_stop)
-    y_slice = slice(y_start, y_stop)
-
-    # Iterate over ZX and ZY slices to find optimal Z cropping params
-    _coords = []
-    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop - 1):
-        registered_zy = registered_zyx[:, y_slice, _x].copy()
-        coords_zy = lir.lir(registered_zy)
-        _, z, _, depth = coords_zy
-        z_start, z_stop = z, z + depth
-        _coords.append((z_start, z_stop))
-    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop - 1):
-        registered_zx = registered_zyx[:, _y, x_slice].copy()
-        coords_zx = lir.lir(registered_zx)
-        _, z, _, depth = coords_zx
-        z_start, z_stop = z, z + depth
-        _coords.append((z_start, z_stop))
-
-    _coords = np.asarray(_coords)
-    z_start = int(_coords.max(axis=0)[0])
-    z_stop = int(_coords.min(axis=0)[1])
-    z_slice = slice(z_start, z_stop)
-
-    if plot:
-        xy_corners = ((x, y), (x + width, y), (x + width, y + height), (x, y + height))
-        rectangle_yx = plt.Polygon(
-            xy_corners,
-            closed=True,
-            fill=None,
-            edgecolor="r",
-        )
-        # Add the rectangle to the plot
-        _, ax = plt.subplots(nrows=1, ncols=2)
-        ax[0].imshow(registered_yx)
-        ax[0].add_patch(rectangle_yx)
-
-        zx_corners = ((x, z), (x + width, z), (x + width, z + depth), (x, z + depth))
-        rectangle_zx = plt.Polygon(
-            zx_corners,
-            closed=True,
-            fill=None,
-            edgecolor="r",
-        )
-        ax[1].imshow(registered_zx)
-        ax[1].add_patch(rectangle_zx)
-        plt.savefig("./lir.png")
-
-    return (z_slice, y_slice, x_slice)
 
 
 def pad_to_shape(

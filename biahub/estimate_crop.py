@@ -5,11 +5,13 @@ from pathlib import Path
 
 import click
 import dask.array as da
+import largestinteriorrectangle as lir
 import numpy as np
 import pandas as pd
 import submitit
 
 from iohub import open_ome_zarr
+from matplotlib import pyplot as plt
 
 from biahub.cli.parsing import (
     config_filepath,
@@ -19,10 +21,196 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
-from biahub.registration.utils import find_lir
+from biahub.core.transform import Transform
 from biahub.settings import ConcatenateSettings
 from biahub.utils.cluster import estimate_resources, get_submitit_cluster
 from biahub.utils.config import model_to_yaml, yaml_to_model
+
+# Cropping: the largest box inside an overlap. Two searches, both kept: `find_lir` (the
+# rectangle at the middle z slice, z clipped to where it still fits; estimate-crop's) and
+# `largest_box` (exact over every z-range, on a coarse grid; apply-transform's canvas).
+
+
+def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
+    registered_zyx = np.asarray(registered_zyx, dtype=bool)
+
+    # Find the lir in YX at Z//2
+    registered_yx = registered_zyx[registered_zyx.shape[0] // 2].copy()
+    coords_yx = lir.lir(registered_yx)
+    coords_yx = list(map(int, coords_yx))
+
+    x, y, width, height = coords_yx
+    x_start, x_stop = x, x + width
+    y_start, y_stop = y, y + height
+    x_slice = slice(x_start, x_stop)
+    y_slice = slice(y_start, y_stop)
+
+    # Iterate over ZX and ZY slices to find optimal Z cropping params
+    _coords = []
+    for _x in (x_start, x_start + (x_stop - x_start) // 2, x_stop - 1):
+        registered_zy = registered_zyx[:, y_slice, _x].copy()
+        coords_zy = lir.lir(registered_zy)
+        _, z, _, depth = coords_zy
+        z_start, z_stop = z, z + depth
+        _coords.append((z_start, z_stop))
+    for _y in (y_start, y_start + (y_stop - y_start) // 2, y_stop - 1):
+        registered_zx = registered_zyx[:, _y, x_slice].copy()
+        coords_zx = lir.lir(registered_zx)
+        _, z, _, depth = coords_zx
+        z_start, z_stop = z, z + depth
+        _coords.append((z_start, z_stop))
+
+    _coords = np.asarray(_coords)
+    z_start = int(_coords.max(axis=0)[0])
+    z_stop = int(_coords.min(axis=0)[1])
+    z_slice = slice(z_start, z_stop)
+
+    if plot:
+        xy_corners = ((x, y), (x + width, y), (x + width, y + height), (x, y + height))
+        rectangle_yx = plt.Polygon(
+            xy_corners,
+            closed=True,
+            fill=None,
+            edgecolor="r",
+        )
+        # Add the rectangle to the plot
+        _, ax = plt.subplots(nrows=1, ncols=2)
+        ax[0].imshow(registered_yx)
+        ax[0].add_patch(rectangle_yx)
+
+        zx_corners = ((x, z), (x + width, z), (x + width, z + depth), (x, z + depth))
+        rectangle_zx = plt.Polygon(
+            zx_corners,
+            closed=True,
+            fill=None,
+            edgecolor="r",
+        )
+        ax[1].imshow(registered_zx)
+        ax[1].add_patch(rectangle_zx)
+        plt.savefig("./lir.png")
+
+    return (z_slice, y_slice, x_slice)
+
+
+Slices = tuple[slice, slice, slice]
+
+
+def _coarse(shape_zyx: tuple[int, int, int], f: int) -> tuple[int, int, int]:
+    return tuple(max(1, int(np.ceil(s / f))) for s in shape_zyx)
+
+
+def overlap_mask(
+    source_shape_zyx: tuple[int, int, int],
+    target_shape_zyx: tuple[int, int, int],
+    inverse_matrix: np.ndarray,
+    downsample: int = 4,
+) -> np.ndarray:
+    """Target-grid voxels the warped source covers, on a `downsample`-times coarser grid.
+
+    `Transform.coverage` (the warp's own edge, without warping) of the matrix rescaled to
+    the coarse grid: the same geometry at any resolution, so a 240-timepoint series stays
+    cheap.
+    """
+    f = max(1, int(downsample))
+    scale = np.diag([1.0 / f, 1.0 / f, 1.0 / f, 1.0])
+    coarse = scale @ np.asarray(inverse_matrix, dtype=float) @ np.linalg.inv(scale)
+    return Transform.from_inverse(coarse).coverage(
+        _coarse(source_shape_zyx, f), _coarse(target_shape_zyx, f)
+    )
+
+
+def largest_box(mask: np.ndarray) -> Slices:
+    """Exact largest axis-aligned box of True voxels in a (Z, Y, X) mask.
+
+    For every z-range the slices are ANDed and the exact largest 2D rectangle found
+    (`largestinteriorrectangle`); the largest volume wins. `find_lir` (above) is a
+    heuristic (rectangle at the middle slice, z clipped to where that rectangle still
+    fits) and on a sheared overlap gives up most of z; this is O(Z^2) 2D searches, which
+    on the canvas's coarse grid is a few seconds.
+    """
+    mask = np.asarray(mask, dtype=bool)
+    best, best_volume = None, 0
+    for z0 in range(mask.shape[0]):
+        combined = mask[z0].copy()
+        for z1 in range(z0, mask.shape[0]):
+            combined &= mask[z1]
+            if not combined.any():
+                break
+            depth = z1 - z0 + 1
+            if depth * combined.sum() <= best_volume:
+                continue  # even the full remaining area cannot beat the best box
+            x, y, width, height = map(int, lir.lir(combined))
+            volume = depth * width * height
+            if volume > best_volume:
+                best, best_volume = (
+                    (slice(z0, z1 + 1), slice(y, y + height), slice(x, x + width)),
+                    volume,
+                )
+    if best is None:
+        raise ValueError("empty mask")
+    return best
+
+
+def _mask_box(
+    mask: np.ndarray, target_shape_zyx: tuple[int, int, int], downsample: int
+) -> Slices:
+    """Largest box inside a coarse mask, rounded inward onto the full-resolution grid."""
+    f = max(1, int(downsample))
+    if not mask.any():
+        raise click.UsageError(
+            "the transform leaves no overlapping region between source and target; "
+            "drop --crop-to-overlap or check the transform"
+        )
+    z, y, x = largest_box(mask)
+    return tuple(
+        slice(min(int(np.ceil(s.start * f)), dim), min(int(np.floor(s.stop * f)), dim))
+        for s, dim in zip((z, y, x), target_shape_zyx, strict=True)
+    )
+
+
+def overlap_slices(
+    source_shape_zyx: tuple[int, int, int],
+    target_shape_zyx: tuple[int, int, int],
+    inverse_matrix: np.ndarray,
+    downsample: int = 4,
+) -> Slices:
+    """Largest box inside the overlap of the warped source and the target grid."""
+    mask = overlap_mask(source_shape_zyx, target_shape_zyx, inverse_matrix, downsample)
+    return _mask_box(mask, target_shape_zyx, downsample)
+
+
+def canvas(
+    source_shape_zyx: tuple[int, int, int],
+    target_shape_zyx: tuple[int, int, int],
+    inverse_matrices: list[np.ndarray],
+    keep_overhang: bool,
+    downsample: int = 4,
+) -> Slices:
+    """Find the one crop every timepoint shares: the LIR of the intersected overlap masks.
+
+    The masks are intersected first and the exact largest box found once
+    (`largest_box`). Finding a box per transform and intersecting the boxes is much
+    smaller: on a rotated overlap each timepoint's box trades the axes differently.
+
+    With `keep_overhang` the full target grid is kept (content the transform pushes
+    outside it is lost, content it pulls in from outside is blank).
+    """
+    if keep_overhang:
+        return tuple(slice(0, dim) for dim in target_shape_zyx)
+    unique = {
+        np.asarray(m, dtype=float).round(9).tobytes(): np.asarray(m, dtype=float)
+        for m in inverse_matrices
+    }
+    mask = None
+    for matrix in unique.values():
+        current = overlap_mask(source_shape_zyx, target_shape_zyx, matrix, downsample)
+        mask = current if mask is None else mask & current
+    if mask is None or not mask.any():
+        raise click.UsageError(
+            "the transforms share no overlapping region across timepoints; "
+            "drop --crop-to-overlap or check the transforms"
+        )
+    return _mask_box(mask, target_shape_zyx, downsample)
 
 
 def estimate_crop_one_position(

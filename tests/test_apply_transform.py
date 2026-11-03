@@ -5,13 +5,8 @@ import pytest
 from click.testing import CliRunner
 from iohub import open_ome_zarr
 
-from biahub.apply_transform import (
-    apply_transform,
-    apply_transform_cli,
-    canvas,
-    largest_box,
-    overlap_slices,
-)
+from biahub.apply_transform import apply_transform, apply_transform_cli
+from biahub.estimate_crop import canvas, largest_box, overlap_slices
 from biahub.settings import TransformEntry, TransformSettings
 from biahub.utils.config import model_to_yaml
 
