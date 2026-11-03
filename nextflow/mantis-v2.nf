@@ -30,8 +30,8 @@ nextflow.enable.dsl = 2
 //  the tracked labels beside them, pyramid adds the coarser resolution levels
 //  to the assembled and projected plates once nothing else writes pixels or
 //  labels into them, QC reads the finished stores, and DCA finalize writes the
-//  DCA metadata onto the assembled plate from its QC statistics. Follow the
-//  chaining below for the pattern.
+//  DCA metadata onto the assembled and projected plates from their QC
+//  statistics. Follow the chaining below for the pattern.
 //
 //  Assemble, project, segment, track, QC and DCA finalize are OPTIONAL and
 //  selected by whether their config is given, so a run performs the prefix it
@@ -64,7 +64,8 @@ params.qc_config = null
 params.qc_project_config = null
 params.qc_track_config = null  // removed; refused below
 // DCA finalize, off by default: --dca_config nextflow/configs/<family>/dca_finalize.yml
-// writes the DCA metadata onto the assembled store and validates it, after QC.
+// writes the DCA metadata onto the assembled plate (and the projected plate when
+// project runs) and validates each, after QC.
 params.dca_config = null
 // Resolution levels of the assembled and projected plates, counting level 0:
 // 3 is the DCA v0.2 target (issue #359) and adds a 2x and a 4x level, in Y and X
@@ -211,7 +212,12 @@ workflow {
               "(see nextflow/configs/a549/qc_project.yaml)."
     }
     if (dca_on && !qc_image_on) {
-        error "--dca_config needs --qc_config: finalize reads the QC stage-5 statistics."
+        error "--dca_config needs --qc_config: finalize reads the assembled plate's QC statistics."
+    }
+    if (dca_on && project_on && !qc_project_on) {
+        error "--dca_config with --project_config needs --qc_project_config: finalize " +
+              "reads the projected plate's QC statistics " +
+              "(see nextflow/configs/a549/qc_project.yaml)."
     }
 
     // Whether this run deletes its intermediates once it finishes. Resolved now
@@ -571,12 +577,22 @@ workflow {
     // ----- DCA finalize -----------------------------------------------------
     // After QC, which itself waits for the assembled plate's last writer (its
     // pyramid, or segment/track when they write there), so the QC report is the
-    // one signal that nothing else will write the plate and its stage tables are
-    // final. Finalize rewrites every position's zarr.json and reads the assembled
-    // store's QC statistics. The validator's report lands next to the plate as
+    // one signal that nothing else will write the plates and their stage tables
+    // are final. Finalize rewrites every position's zarr.json and reads each
+    // plate's own QC statistics: the assembled plate's from --qc_config, the
+    // projected plate's (which holds the segmentation and tracking labels) from
+    // --qc_project_config. The validator's report lands next to each plate as
     // <stem>.dca-validate.json.
+    //
+    // KNOWN FAILURE: the projected plate fails dca-validate today, on array
+    // layout rather than metadata. project.yml writes 256 x 256 single-frame
+    // float32 chunks (256 KB, the DCA v0.2 minimum is 512 KB) and 200 MB shards
+    // (arrays over 1 GB need shards of at least 1 GB), so its finalize task
+    // fails the run until project.yml's chunks_czyx and shards change.
     if (dca_on) {
-        dca = dca_finalize_wf([assemble_output], params.dca_config, qc_report.done)
+        def dca_stores = [assemble_output]
+        if (project_on) dca_stores << project_output
+        dca = dca_finalize_wf(dca_stores, params.dca_config, qc_report.done)
     }
 
     // ----- Cleanup of intermediates (--cleanup_intermediates) ---------------

@@ -1,12 +1,15 @@
 // DCA finalize: write the DCA v0.2 metadata onto every FOV of a finished plate,
 // then validate the plate against the spec. The last step of a run, after QC,
-// because finalize reads the plate's QC stage-5 statistics.
+// because finalize reads the plate's QC statistics, from the one position table
+// its tables/qc/manifest.json lists.
 //
 // `biahub dca-finalize` is metadata-only (it edits each position's zarr.json
 // attributes and reads no pixel), so one task per plate covers every position.
 // It is two-pass: if any FOV is missing a required value it writes nothing,
-// lists every gap and exits non-zero, which terminates the run. Fill the plate's
-// `<stem>.dca-confirmed.toml` and `-resume`.
+// lists every gap and exits non-zero, which terminates the run. Fill the
+// confirmed TOML it names and `-resume`. A projected plate (`<ds>_proj.zarr`)
+// shares the assembled plate's confirmed TOML and sample sheet. Its validation
+// currently fails on project.yml's chunk and shard sizes (see mantis-v2.nf).
 //
 // NEVER CACHED. What finalize reads (the base TOML, the confirmed TOML, the
 // sample sheet, the QC tables) is not in the task hash, so a cached task could
