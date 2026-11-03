@@ -131,3 +131,16 @@ def test_a_transform_copies_its_matrix_and_leaves_the_callers_writable():
     )  # and the transform is not changed
     with pytest.raises(ValueError, match="read-only"):
         transform._matrix[0, 3] = 1.0  # the transform's own copy stays immutable
+
+
+def test_an_inverse_matrix_moves_the_volume_the_other_way():
+    # apply-transform's files store the inverse (output -> input) matrix: a translation
+    # of (-3, 1, 4) in it moves the data by (+3, -1, -4)
+    inverse = np.eye(4)
+    inverse[:3, -1] = (-3, 1, 4)
+    out = Transform.from_inverse(inverse).apply(
+        np.ones((10, 10, 10), dtype=np.float32), reference=np.zeros((10, 10, 10), np.float32)
+    )
+    assert out.shape == (10, 10, 10)
+    assert np.all(out[3:10, 0:9, 0:6] == 1)
+    assert not out[:3].any() and not out[:, 9:].any() and not out[:, :, 6:].any()

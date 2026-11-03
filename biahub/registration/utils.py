@@ -5,7 +5,7 @@ Helper functions shared across registration methods (beads, ANTs, phase correlat
 Includes:
 - Transform validation and interpolation across timepoints.
 - Transform I/O (save/load from disk, convert between numpy and ANTs formats).
-- Volume utilities: LIR cropping, affine application, padding, and shape matching.
+- Volume utilities: LIR cropping, padding, and shape matching.
 
 Key conventions
 ---------------
@@ -146,48 +146,6 @@ def find_overlapping_volume(
 
 def rescale_voxel_size(affine_matrix, input_scale):
     return np.linalg.norm(affine_matrix, axis=1) * input_scale
-
-
-def apply_affine_transform(
-    zyx_data: np.ndarray,
-    matrix: np.ndarray,
-    output_shape_zyx: tuple,
-    method="ants",
-    interpolation: str = "linear",
-    crop_output_slicing: bool = None,
-) -> np.ndarray:
-    """Warp a ZYX (or CZYX, per channel) array by an inverse matrix onto `output_shape_zyx`.
-
-    `matrix` maps output to input coordinates (the inverse direction stored on disk). The
-    warp is `Transform.apply` -- the one resampler estimation, evaluation and
-    apply-transform share -- with `method` its backend ('ants' or 'scipy') and
-    `interpolation` 'linear' or 'nearest'. NaNs become 0. `crop_output_slicing` crops the
-    result to those ZYX slices.
-    """
-    from biahub.core.transform import Transform
-
-    if zyx_data.ndim == 4:
-        return np.stack(
-            [
-                apply_affine_transform(
-                    channel,
-                    matrix,
-                    output_shape_zyx,
-                    method,
-                    interpolation,
-                    crop_output_slicing,
-                )
-                for channel in zyx_data
-            ]
-        ).astype(np.float32)
-    zyx_data = np.nan_to_num(zyx_data, nan=0).astype(np.float32)
-    canvas = np.zeros(tuple(output_shape_zyx), dtype=np.float32)
-    registered_zyx = Transform.from_inverse(np.asarray(matrix, dtype=float)).apply(
-        zyx_data, reference=canvas, backend=method, interpolation=interpolation
-    )
-    if crop_output_slicing is not None:
-        registered_zyx = registered_zyx[tuple(crop_output_slicing)]
-    return registered_zyx
 
 
 def pad_to_shape(

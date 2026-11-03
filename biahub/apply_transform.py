@@ -41,7 +41,6 @@ from biahub.cli.parsing import (
 )
 from biahub.core.transform import Transform
 from biahub.registration.utils import (
-    apply_affine_transform,
     rescale_voxel_size,
     resolve_time_indices,
 )
@@ -181,13 +180,21 @@ def _apply_transform_czyx(
 ) -> np.ndarray:
     """Warp one (C, Z, Y, X) block with its timepoint's matrix (or the single matrix)."""
     matrix = np.asarray(matrices[input_time_index if len(matrices) > 1 else 0], dtype=float)
-    return apply_affine_transform(
-        czyx_data,
-        matrix,
-        output_shape_zyx,
-        interpolation=interpolation,
-        crop_output_slicing=crop_output_slicing,
-    )
+    transform = Transform.from_inverse(matrix)  # the file's matrix maps output to input
+    canvas = np.zeros(tuple(output_shape_zyx), dtype=np.float32)  # the grid to warp onto
+    warped = np.stack(
+        [
+            transform.apply(
+                np.nan_to_num(zyx, nan=0).astype(np.float32),
+                reference=canvas,
+                interpolation=interpolation,
+            )
+            for zyx in czyx_data
+        ]
+    ).astype(np.float32)
+    if crop_output_slicing is not None:
+        warped = warped[(slice(None), *crop_output_slicing)]
+    return warped
 
 
 def parse_time_indices(value: str) -> int | list[int] | str:
