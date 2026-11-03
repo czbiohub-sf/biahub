@@ -7,7 +7,7 @@ from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 
 from biahub.utils.config import settings_fingerprint
-from biahub.virtual_stain import _norm_meta_at_timepoint, _write_timepoints
+from biahub.virtual_stain import _write_timepoints
 
 T, C, Z, Y, X = 3, 2, 4, 8, 8
 
@@ -120,10 +120,17 @@ def _norm_meta():
     }
 
 
-def test_norm_meta_at_timepoint_selects_timepoint_only():
+def _resolve_timepoint_norm_meta():
+    """The VisCy helper virtual_stain_position uses (fails loudly if VisCy renames it)."""
+    sliding_window = pytest.importorskip("viscy_data.sliding_window")
+    return sliding_window.SlidingWindowDataset._resolve_timepoint_norm_meta
+
+
+def test_resolve_timepoint_norm_meta_selects_timepoint_only():
+    resolve = _resolve_timepoint_norm_meta()
     norm_meta = _norm_meta()
     levels = norm_meta["Phase3D"]
-    resolved = _norm_meta_at_timepoint(norm_meta, 2)["Phase3D"]
+    resolved = resolve(norm_meta, 2)["Phase3D"]
     assert resolved["timepoint_statistics"] is levels["timepoint_statistics"]["2"]
     assert resolved["fov_statistics"] is levels["fov_statistics"]
     assert resolved["dataset_statistics"] is levels["dataset_statistics"]
@@ -142,15 +149,14 @@ def test_norm_meta_at_timepoint_selects_timepoint_only():
 def test_normalize_sampled_with_resolved_norm_meta(level, expected_median):
     """Regression for #283: timepoint_statistics raised KeyError: 'median'."""
     viscy_transforms = pytest.importorskip("viscy_transforms")
+    resolve = _resolve_timepoint_norm_meta()
     normalize = viscy_transforms.NormalizeSampled(
         keys=["Phase3D"], level=level, subtrahend="median", divisor="iqr"
     )
     norm_meta = _norm_meta()
     for t in range(T):
         source = torch.full((1, 1, Z, Y, X), 200.0)
-        sample = normalize(
-            {"Phase3D": source, "norm_meta": _norm_meta_at_timepoint(norm_meta, t)}
-        )
+        sample = normalize({"Phase3D": source, "norm_meta": resolve(norm_meta, t)})
         expected = (200.0 - expected_median(t)) / (2.0 + 1e-8)
         torch.testing.assert_close(
             sample["Phase3D"], torch.full_like(source, expected), rtol=1e-5, atol=1e-5
