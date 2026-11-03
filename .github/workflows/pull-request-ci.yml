@@ -42,10 +42,10 @@ jobs:
       with:
         fetch-depth: 0  # Fetch all history for hatch-vcs
         persist-credentials: false
-    - uses: astral-sh/setup-uv@v10.3.0
+    - uses: astral-sh/setup-uv@v10.3.1
       with:
         enable-cache: true
-    - uses: actions/setup-python@v7.0.0
+    - uses: actions/setup-python@v7.1.0
       with:
         python-version: ${{ matrix.python-version }}
 
