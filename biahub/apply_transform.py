@@ -15,7 +15,6 @@ import json
 
 from pathlib import Path
 
-import ants
 import click
 import largestinteriorrectangle as lir
 import numpy as np
@@ -63,16 +62,16 @@ def overlap_mask(
 ) -> np.ndarray:
     """Target-grid voxels the warped source covers, on a `downsample`-times coarser grid.
 
-    The warp of an all-ones source is the same geometry at any resolution, so a
-    240-timepoint series stays cheap.
+    `Transform.coverage` (the warp's own edge, without warping) of the matrix rescaled to
+    the coarse grid: the same geometry at any resolution, so a 240-timepoint series stays
+    cheap.
     """
     f = max(1, int(downsample))
     scale = np.diag([1.0 / f, 1.0 / f, 1.0 / f, 1.0])
     coarse = scale @ np.asarray(inverse_matrix, dtype=float) @ np.linalg.inv(scale)
-    ones_source = ants.from_numpy(np.ones(_coarse(source_shape_zyx, f), dtype=np.float32))
-    ones_target = ants.from_numpy(np.ones(_coarse(target_shape_zyx, f), dtype=np.float32))
-    warped = Transform(coarse).to_ants().apply_to_image(ones_source, reference=ones_target)
-    return warped.numpy() > 0
+    return Transform.from_inverse(coarse).coverage(
+        _coarse(source_shape_zyx, f), _coarse(target_shape_zyx, f)
+    )
 
 
 def largest_box(mask: np.ndarray) -> Slices:
