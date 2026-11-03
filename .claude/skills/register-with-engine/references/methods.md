@@ -47,15 +47,25 @@ Every decision -- accept or flag, repair, the competitions -- uses one score per
   score blocks) and written next to its score in `transforms.yml` (`report: {...}`): a fixed
   yardstick across runs, never used for decisions.
 
-## Where each timepoint starts: `transform.seed_from`
+## Where each timepoint starts: `transform.initial`
 
-- `input` (default): every timepoint starts from `transform.seed` (the approximate
-  transform) and is estimated independently, one SLURM job per timepoint.
-- `previous_timepoint`: each timepoint starts from the previous one's result, with the seed
-  competing on the first pass; a failed timepoint passes its own seed on; empty frames are
-  skipped. One sequential job (budgeted ~10 min per timepoint, capped at 48 h; set an sbatch time limit for
-  large volumes). This is the legacy `use_prev_t_transform: true`, which most production
-  beads configs used; `convert-settings` maps it for beads only.
+`transform.type` is what is fitted; `transform.initial` is where each estimate starts (left
+out: identity):
+
+- `{from: matrix, matrix: [...], direction: inverse}`: one transform for every timepoint
+  (e.g. the previous run's `approx_transform`, inverse direction as on disk).
+- `{from: shapes, rotate90: -1, fliplr: false}`: built from the two stores' shapes and
+  voxel sizes, after a rotation and flip (the values shown are the mantis light-sheet's).
+- `{from: file, file: <transforms file>}`: each position and timepoint's transform from an
+  earlier result (see `pool` below).
+
+Without `propagate`, every timepoint is estimated independently from it, one SLURM job
+per timepoint. `propagate: true`: each timepoint starts from the previous one's result,
+with the initial transform competing on the first pass; a failed timepoint passes its own
+start on; empty frames are skipped. One sequential job (budgeted ~10 min per timepoint,
+capped at 48 h; set an sbatch time limit for large volumes). This is the legacy
+`use_prev_t_transform: true`, which most production beads configs used; `convert-settings`
+maps it for beads only.
 
 Beads matching is deterministic but depends on where it starts: on a drifting series,
 `previous_timepoint` finds better correspondences at hard timepoints.
@@ -97,7 +107,7 @@ Beads matching is deterministic but depends on where it starts: on a drifting se
   leaving the wander in. Judge drift from the anchor's track, jumps from this. Each job
   reserves memory for it (18 frames); `approximate` marks transforms that rotate or scale.
 
-## One transform for the plate, or one per position: `pool` and `transform.seed_file`
+## One transform for the plate, or one per position: `pool` and `transform.initial` from a file
 
 - `pool: {z: medoid | median}`: estimate on several positions and write ONE shared
   transform, the medoid of their accepted estimates (the one closest to all the others;
@@ -106,25 +116,25 @@ Beads matching is deterministic but depends on where it starts: on a drifting se
   position's own estimate stays in the run folder (`per_position.yml`) for
   `evaluate-transform`; the entry's note gives the median gap to the medoid and the
   widest pair. Choose spread-out positions (`survey_positions`, `select_positions`).
-- `transform.seed_file: <transforms file>`: start each position (and timepoint) from an
-  earlier result instead of `transform.seed`. The estimate from it wins only if it
-  scores strictly better, so a run never ends worse than the file; entries record
-  `seeded_from`. A relative path is read from the config's folder; an edited file reruns
-  the estimate (CLI fingerprint and Nextflow staging). Not with `seed_from:
-  previous_timepoint`.
+- `transform.initial: {from: file, file: <transforms file>}`: start each position (and
+  timepoint) from an earlier result. The estimate from it wins only if it scores strictly
+  better, so a run never ends worse than the file; entries record `seeded_from`. A
+  relative path is read from the config's folder; an edited file reruns the estimate (CLI
+  fingerprint and Nextflow staging). Not with `propagate`.
 
 Plate then positions: pool a few positions into `plate/transforms.yml`, evaluate it on
 held-out positions; if one transform is not enough (`transform_spread`'s `choice_z` /
-`choice_yx`), estimate every position with `seed_file: plate/transforms.yml`. Use a
+`choice_yx`), estimate every position with `initial: {from: file, file:
+plate/transforms.yml}`. Use a
 continuous score (`residual` for beads, an intensity metric otherwise) there: the beads
-`overlap` score ties corrections under its 6-voxel radius, and a tie keeps the seed.
+`overlap` score ties corrections under its 6-voxel radius, and a tie keeps the file's.
 
 ## ANTs
 
 **How it works.** ANTs registers the moving volume onto the reference starting from
-`transform.seed`: the seed is handed to ANTs as its starting transform (the moving volume is
+`transform.initial`: it is handed to ANTs as its starting transform (the moving volume is
 never warped first), ANTs optimizes on top of it, and the result includes it. ANTs only
-searches near where it starts, so **the seed decides which answer it finds**.
+searches near where it starts, so **the initial transform decides which answer it finds**.
 
 **Settings.**
 
@@ -143,8 +153,8 @@ top. Identity is right when both channels share a camera grid. Otherwise estimat
 and scale first: an earlier run's matrix of the same instrument, or a quick measurement --
 phase cross-correlation of max projections on a grid of tiles, an affine fit of the tile
 shifts for y/x, and a 3D phase cross-correlation for z (what registered the DragonFly data,
-within ~0.4 µm before ANTs ran). `seed_from_shapes` builds a seed from the store shapes
-with the mantis light-sheet rotation built in: mantis only.
+within ~0.4 µm before ANTs ran). `initial: {from: shapes, rotate90: -1, fliplr: false}`
+builds one from the store shapes with the mantis light-sheet rotation: mantis only.
 
 **Judging the result.** The score is a correlation; a correct cross-modal transform often
 scores 0.1-0.3 and comes out `unreliable` against the bead-tuned thresholds (read it as

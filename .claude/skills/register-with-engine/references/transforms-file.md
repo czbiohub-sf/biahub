@@ -11,8 +11,8 @@
 
 `inverse = forward^-1` (ANTs calls them the forward and inverse transforms). Every file
 declares its direction and the code converts on demand, so mixing files is safe. To compare
-matrices by hand, bring both to the same direction first. `transform.seed_direction`
-(default `inverse`) says how the seed in an estimate config is written. Files written with
+matrices by hand, bring both to the same direction first. `transform.initial.direction`
+says how an initial matrix in an estimate config is written. Files written with
 the old name `pull` load as `inverse`.
 
 ## Layout

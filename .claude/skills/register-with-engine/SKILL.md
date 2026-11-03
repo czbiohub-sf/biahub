@@ -42,7 +42,8 @@ method -- for ants, pick one FOV with good structure); several give one list eac
 ## 0. Load context
 
 - `references/methods.md`: which method for which job, the `preprocess` blocks, the
-  `score` (metric, blocks, report), ANTs and its seed, `seed_from` (propagation),
+  `score` (metric, blocks, report), ANTs and its initial transform, `transform.initial`
+  (where each estimate starts, propagation),
   thresholds and their caveats.
 - `references/transforms-file.md`: forward vs inverse direction, statuses, shared vs
   per-position lists.
@@ -98,10 +99,10 @@ convert it instead: `biahub convert-settings -c <old>.yml -o <new>.yml` (it keep
 the detection settings and, for beads, propagation; old ANTs fields become blocks). Then
 set:
 
-- `transform.seed`: the previous run's `approx_transform` (inverse direction, as on disk)
-  when the instrument geometry is the same.
-- `transform.seed_from`: `previous_timepoint` for drifting bead series (what most
-  production configs used), `input` to estimate every timepoint independently.
+- `transform.initial`: `{from: matrix, matrix: <the previous run's approx_transform>,
+  direction: inverse}` when the instrument geometry is the same; add `propagate: true`
+  for drifting bead series (what most production configs used), leave it out to estimate
+  every timepoint independently.
 - `time_indices`: `all` for production, a short contiguous range for a smoke run.
 - `preprocess`: what to do to the volumes before the method, chosen from what you see
   (`references/methods.md`: a symptom -> block table); empty for beads.
