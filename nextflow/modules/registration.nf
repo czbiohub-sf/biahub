@@ -69,8 +69,6 @@ def estimate_config_files(config) {
         def initial = settings.transform.initial
         if (initial instanceof Map && initial.from == 'file') {
             seed = initial.file
-        } else {
-            seed = settings.transform.seed_file  // the first schema's key, still read
         }
     }
     if (seed) {

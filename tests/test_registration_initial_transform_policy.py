@@ -115,3 +115,25 @@ def test_a_file_initial_transform_gives_each_timepoints_and_asks_to_be_kept_unle
     with pytest.raises(KeyError, match="no initial transform for t=2"):
         policy.initial_for(2)
     assert isinstance(policy, InitialTransformPolicy)
+
+
+@pytest.mark.parametrize(
+    "old, pointer",
+    [
+        ({"seed": np.eye(4).tolist()}, "transform.initial: {from: matrix"),
+        ({"seed_direction": "forward"}, "transform.initial: {from: matrix"),
+        (
+            {"seed_from_shapes": True},
+            "transform.initial: {from: shapes, rotate90: -1, fliplr: false}",
+        ),
+        ({"seed_from": "previous_timepoint"}, "transform.initial.propagate: true"),
+        ({"seed_file": "plate.yml"}, "transform.initial: {from: file, file: plate.yml}"),
+    ],
+)
+def test_the_first_schemas_seed_keys_are_refused_with_where_they_moved(old, pointer):
+    from pydantic import ValidationError
+
+    from biahub.settings import TransformFitSettings
+
+    with pytest.raises(ValidationError, match=pointer.replace("{", r"\{").replace("}", r"\}")):
+        TransformFitSettings(type="euclidean", **old)

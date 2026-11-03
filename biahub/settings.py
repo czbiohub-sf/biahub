@@ -1006,7 +1006,7 @@ class ChannelSettings(MyBaseModel):
 
 
 InitialSource = Literal["matrix", "shapes", "file"]
-# transform.* keys of the first schema, now transform.initial
+# transform.* keys of the first schema, now transform.initial (refused, with a pointer)
 OLD_INITIAL_KEYS = ("seed", "seed_direction", "seed_from_shapes", "seed_from", "seed_file")
 
 
@@ -1064,42 +1064,23 @@ class InitialTransformSettings(MyBaseModel):
         return self
 
 
-def _initial_from_old_keys(data: dict) -> dict:
-    """Map the first schema's transform.seed* keys onto transform.initial."""
-    old = {k: data.pop(k) for k in OLD_INITIAL_KEYS if k in data}
+def _refuse_old_initial_keys(data: dict) -> dict:
+    """Refuse the first schema's transform.seed* keys, saying what to write instead."""
+    old = [k for k in OLD_INITIAL_KEYS if k in data]
     if not old:
         return data
-    if data.get("initial") is not None:
-        raise ValueError(f"give transform.initial or the old keys {sorted(old)}, not both")
-    seed = old.get("seed")
-    identity = seed is None or np.allclose(np.asarray(seed, dtype=float), np.eye(4))
-    if old.get("seed_file") is not None:
-        if old.get("seed_from_shapes") or not identity:
-            raise ValueError(
-                "give one seed: seed_file or a seed matrix / seed_from_shapes, not both"
-            )
-        if old.get("seed_from") == "previous_timepoint":
-            raise ValueError(
-                "seed_file seeds every timepoint from the file; it does not combine with "
-                "seed_from: previous_timepoint"
-            )
-        initial = {"from": "file", "file": old["seed_file"]}
-    elif old.get("seed_from_shapes"):
-        # the engine always built the shapes seed with these (the mantis orientation)
-        initial = {"from": "shapes", "rotate90": -1, "fliplr": False}
-    elif not identity:
-        initial = {
-            "from": "matrix",
-            "matrix": seed,
-            "direction": old.get("seed_direction", "inverse"),
-        }
-    else:
-        initial = {}
-    if old.get("seed_from") == "previous_timepoint":
-        initial["propagate"] = True
-    if initial:
-        data["initial"] = initial
-    return data
+    where = {
+        "seed": "transform.initial: {from: matrix, matrix: [...], direction: inverse}",
+        "seed_direction": "transform.initial: {from: matrix, matrix: [...], direction: ...}",
+        "seed_from_shapes": "transform.initial: {from: shapes, rotate90: -1, fliplr: false}",
+        "seed_from": "transform.initial.propagate: true (previous_timepoint; leave it out "
+        "for input)",
+        "seed_file": f"transform.initial: {{from: file, file: {data.get('seed_file')}}}",
+    }
+    raise ValueError(
+        "transform.seed* moved to transform.initial: "
+        + "; ".join(f"{k} -> {where[k]}" for k in old)
+    )
 
 
 class TransformFitSettings(MyBaseModel):
@@ -1110,8 +1091,8 @@ class TransformFitSettings(MyBaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def map_old_keys(cls, data):
-        return _initial_from_old_keys(dict(data)) if isinstance(data, dict) else data
+    def refuse_old_keys(cls, data):
+        return _refuse_old_initial_keys(data) if isinstance(data, dict) else data
 
     @property
     def propagates(self) -> bool:
