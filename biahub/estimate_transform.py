@@ -92,7 +92,7 @@ def transform_entries(
                 score=float(score) if finite else None,
                 report=result.reports.get(t) if filled_from is None else None,
                 repaired_from=result.provenance.get(t),
-                seeded_from=None if replaced else result.seeded_from.get(t),
+                initialized_from=None if replaced else result.initialized_from.get(t),
                 status="unreliable" if unreliable else "accepted",
                 filled_from=filled_from,
                 # why there is no transform of its own (estimate error, job cancelled, ...),

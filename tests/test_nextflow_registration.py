@@ -437,13 +437,15 @@ def test_registration_nf_reruns_the_estimate_when_its_seed_file_is_edited(tmp_pa
     )  # fmt: skip
 
     def seed_x():
-        seeds = json.loads((tmp_path / "run" / "transforms" / "seeds.json").read_text())
+        seeds = json.loads(
+            (tmp_path / "run" / "transforms" / "initial_transforms.json").read_text()
+        )
         return seeds["0"][2][3]  # forward x translation the run started from
 
     _nextflow(tmp_path, *params)
     assert seed_x() == pytest.approx(-APPLIED_SHIFT_ZYX[2])
     entries = load_transform_settings(tmp_path / "run" / "transforms.yml").transforms
-    assert {e.seeded_from for e in entries} <= {"seed_file", "seed_file+refined"}
+    assert {e.initialized_from for e in entries} <= {"file", "file+refined"}
 
     write_seed((0.0, 0.0, 0.0))  # same path, new contents
     _nextflow(tmp_path, *params)

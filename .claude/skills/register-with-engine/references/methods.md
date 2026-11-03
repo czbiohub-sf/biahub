@@ -118,9 +118,9 @@ Beads matching is deterministic but depends on where it starts: on a drifting se
   widest pair. Choose spread-out positions (`survey_positions`, `select_positions`).
 - `transform.initial: {from: file, file: <transforms file>}`: start each position (and
   timepoint) from an earlier result. The estimate from it wins only if it scores strictly
-  better, so a run never ends worse than the file; entries record `seeded_from`. A
-  relative path is read from the config's folder; an edited file reruns the estimate (CLI
-  fingerprint and Nextflow staging). Not with `propagate`.
+  better, so a run never ends worse than the file; entries record `initialized_from`
+  (`file` or `file+refined`). A relative path is read from the config's folder; an edited
+  file reruns the estimate (CLI fingerprint and Nextflow staging). Not with `propagate`.
 
 Plate then positions: pool a few positions into `plate/transforms.yml`, evaluate it on
 held-out positions; if one transform is not enough (`transform_spread`'s `choice_z` /

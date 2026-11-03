@@ -96,7 +96,7 @@ from biahub.utils.config import model_to_yaml, yaml_to_model
 
 ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
 # A seed file's transform for each timepoint of the run's position, read by every job.
-SEEDS_FILENAME = "seeds.json"
+INITIAL_FILENAME = "initial_transforms.json"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 
 
@@ -534,15 +534,15 @@ class SeriesResult:
     # How an accepted fallback transform was reached, e.g. "consensus_full+polish1".
     provenance: dict[int, str] = field(default_factory=dict)
     # Timepoints with no transform of their own, and where the stand-in written for them
-    # came from ("t=81", "seed", "identity"); set by `transforms_for_file`.
+    # came from ("t=81", "initial", "identity"); set by `transforms_for_file`.
     filled_from: dict[int, str] = field(default_factory=dict)
     # A stand-in decided while estimating (propagation: a failed timepoint returns the
     # seed it started from), with its source; used instead of the input seed.
     stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
     # A stack's blocks at each estimated t, from its record (see ChainedEstimator).
     blocks: dict[int, list[dict]] = field(default_factory=dict)
-    # With a seed file: "seed_file" (its transform kept as it is) or "seed_file+refined".
-    seeded_from: dict[int, str] = field(default_factory=dict)
+    # From a file: "file" (its transform kept as it is) or "file+refined".
+    initialized_from: dict[int, str] = field(default_factory=dict)
     # With reference.anchor: each timepoint's centroid from its record (None: none found),
     # and the anchor `finalize_run` added (centroid, smoothed, translation).
     centroids: dict[int, list[float] | None] = field(default_factory=dict)
@@ -567,12 +567,13 @@ def estimate_series(
     time_indices: Iterable[int],
     journal: RunJournal | None = None,
     on_timepoint: OnTimepoint | None = None,
-    keep_seed: bool = False,
+    keep_initial: bool = False,
 ) -> SeriesResult:
     """One estimate per timepoint, in the given order (propagation: `estimate_propagated`).
 
-    An `EstimationError` records nan plus the message for that timepoint and moves on. With `keep_seed` (a seed file:
-    the seed is an earlier result) the seed competes as it is (`_keep_seed`).
+    An `EstimationError` records nan plus the message for that timepoint and moves on.
+    With `keep_initial` (an initial transform from a file, an earlier result) it competes
+    as it is (`_keep_initial`).
     """
     result = SeriesResult(journal=journal if journal is not None else RunJournal())
     for t in time_indices:
@@ -595,8 +596,8 @@ def estimate_series(
         else:
             transform = _gap_rule(estimator, reference_policy, mov, t, transform)
             estimate = (transform, float(score_fn(transform, mov_t, ref_t)))
-        if keep_seed:
-            estimate, result.seeded_from[t] = _keep_seed(
+        if keep_initial:
+            estimate, result.initialized_from[t] = _keep_initial(
                 estimator, estimate, seed, score_fn, mov_t, ref_t
             )
         if estimate is None:
@@ -609,19 +610,19 @@ def estimate_series(
     return result
 
 
-def _keep_seed(estimator, estimate, seed, score_fn, mov, ref) -> tuple[tuple, str]:
+def _keep_initial(estimator, estimate, seed, score_fn, mov, ref) -> tuple[tuple, str]:
     """Return the estimate if it scores strictly better than the seed as it is, else the seed.
 
     The seed is an earlier result (a seed file), so a run from it never ends worse than
     it: a failed or no better estimate keeps it. Returns ((transform, score), source),
-    source "seed_file+refined" or "seed_file". A kept seed was not produced by the stack,
+    source "file+refined" or "file". A kept seed was not produced by the stack,
     so its blocks are forgotten.
     """
     kept = (seed, float(score_fn(seed, mov, ref)))
     if estimate is not None and _beats(estimate[1], kept[1]):
-        return estimate, "seed_file+refined"
+        return estimate, "file+refined"
     _forget_blocks(estimator)
-    return kept, "seed_file"
+    return kept, "file"
 
 
 def _across_gap(reference_policy: ReferencePolicy, mov, t: int) -> bool:
@@ -756,7 +757,7 @@ def estimate_propagated(
                 except EstimationError as e:
                     result.scores[t] = float("nan")
                     result.errors[t] = f"{type(e).__name__}: {e}"
-                    source = f"t={previous_t}" if previous is not None else "seed"
+                    source = f"t={previous_t}" if previous is not None else "initial"
                     result.stand_ins[t] = (seed, source)
                     previous = seed
                 else:
@@ -779,7 +780,7 @@ def _record_into(result: SeriesResult, t: int, record: dict) -> Transform | None
         return result.transforms[t]
     if record.get("stand_in") is not None:
         stand_in = Transform(np.asarray(record["stand_in"], dtype=float))
-        result.stand_ins[t] = (stand_in, record.get("stand_in_from", "seed"))
+        result.stand_ins[t] = (stand_in, record.get("stand_in_from", "initial"))
         return stand_in
     return None
 
@@ -971,7 +972,7 @@ def _initial_policy(
     `init_run` wrote a file's transform for each timepoint beside the run's settings.
     """
     if settings.transform.initial_file is not None:
-        by_t = json.loads((Path(run_dir) / SEEDS_FILENAME).read_text())
+        by_t = json.loads((Path(run_dir) / INITIAL_FILENAME).read_text())
         return FileInitialTransform(
             {
                 int(t): Transform(
@@ -1281,14 +1282,14 @@ def _estimate_timepoint_job(
         FixedInitialTransform(job.initial.initial_for(t)),
         score_fn,
         [t],
-        keep_seed=getattr(job.initial, "keep_unless_beaten", False),
+        keep_initial=getattr(job.initial, "keep_unless_beaten", False),
     )
     record = {
         "t": t,
         "matrix": result.transforms[t].to_list() if t in result.transforms else None,
         "score": _finite_or_none(result.scores.get(t)),
         "error": result.errors.get(t),
-        "seeded_from": result.seeded_from.get(t),
+        "initialized_from": result.initialized_from.get(t),
         "arm": getattr(estimator, "last_winner", None),
         # a stack: what each block did (its transform, score, error) and which won
         "blocks": getattr(estimator, "last_stages", None),
@@ -1461,13 +1462,13 @@ def _load_series(
                 Transform(
                     np.asarray(record["stand_in"], dtype=float), transform_type=transform_type
                 ),
-                record.get("stand_in_from") or "seed",
+                record.get("stand_in_from") or "initial",
             )
         result.scores[t] = float("nan") if record["score"] is None else record["score"]
         if record.get("blocks"):
             result.blocks[t] = record["blocks"]
-        if record.get("seeded_from"):
-            result.seeded_from[t] = record["seeded_from"]
+        if record.get("initialized_from"):
+            result.initialized_from[t] = record["initialized_from"]
         if "centroid" in record:
             result.centroids[t] = record["centroid"]
         if record.get("raw_shift"):
@@ -1765,7 +1766,7 @@ def _one_transform_per_timepoint(
             result.filled_from[t] = source
             out.append(transform)
         else:
-            result.filled_from[t] = "seed_file" if from_file else "seed"
+            result.filled_from[t] = "file" if from_file else "initial"
             out.append(initial.initial_for(t))
     return out
 
@@ -1972,7 +1973,7 @@ def init_run(
     _start_run(output_dir, settings, source, target, resume)
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
     if seeds is not None:
-        _write_json(output_dir / SEEDS_FILENAME, seeds, indent=2)
+        _write_json(output_dir / INITIAL_FILENAME, seeds, indent=2)
 
     propagated = settings.transform.propagates
     # a stack's jobs run every block: plan for the heaviest

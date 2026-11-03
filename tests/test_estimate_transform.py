@@ -342,7 +342,7 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     assert failures["consensus_full"].startswith(
         "ValueError: Consensus seed: only 2 timepoints"
     )
-    assert report["stand_ins"] == {"2": "seed"}
+    assert report["stand_ins"] == {"2": "initial"}
     assert (output.with_suffix("") / "repairs" / "2.json").exists()
 
     journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
@@ -354,7 +354,7 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     np.testing.assert_allclose(entries[2].matrix, np.eye(4))  # the input seed (identity here)
     assert entries[2].score is None and entries[0].score > 0.5
     # ... and the file says so, with the failure, instead of passing as an estimate
-    assert entries[2].status == "unreliable" and entries[2].filled_from == "seed"
+    assert entries[2].status == "unreliable" and entries[2].filled_from == "initial"
     assert "EstimationError" in entries[2].note
     assert [e.status for e in entries[:2]] == ["accepted", "accepted"]
 

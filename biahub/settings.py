@@ -1775,12 +1775,27 @@ class TransformEntry(MyBaseModel):
     # (an entry substituted in from another method's run by `substitute-transforms`).
     method: str | None = None
     status: EntryStatus = "accepted"
-    # Where a stand-in matrix came from, e.g. "t=81", "seed", "seed_file", "identity".
+    # Where a stand-in matrix came from, e.g. "t=81", "initial", "file", "identity".
     filled_from: str | None = None
-    # With transform.seed_file: "seed_file" (its transform, kept as it is) or
-    # "seed_file+refined" (the estimate from it, which scored better).
-    seeded_from: Literal["seed_file", "seed_file+refined"] | None = None
+    # With transform.initial from a file: "file" (its transform, kept as it is) or
+    # "file+refined" (the estimate from it, which scored better).
+    initialized_from: Literal["file", "file+refined"] | None = None
     note: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_older_names(cls, data):
+        """Entries written before transform.initial: seeded_from, 'seed' / 'seed_file'."""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        older = {"seed_file": "file", "seed_file+refined": "file+refined", "seed": "initial"}
+        if "seeded_from" in data:
+            value = data.pop("seeded_from")
+            data.setdefault("initialized_from", older.get(value, value))
+        if data.get("filled_from") in older:
+            data["filled_from"] = older[data["filled_from"]]
+        return data
 
     @field_validator("matrix")
     @classmethod

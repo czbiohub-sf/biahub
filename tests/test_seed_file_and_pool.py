@@ -124,7 +124,7 @@ def test_each_position_refines_from_the_seed_file(three_positions, tmp_path):
         inverse = model.matrix_for(0, "inverse", f"A/1/{fov}")[:3, 3]
         np.testing.assert_allclose(inverse, shift, atol=0.5)
         entry = model.entry_for(0, f"A/1/{fov}")
-        assert entry.seeded_from in ("seed_file", "seed_file+refined")
+        assert entry.initialized_from in ("file", "file+refined")
         assert entry.status == "accepted"
 
 
@@ -146,7 +146,7 @@ def test_a_failed_estimate_keeps_the_seed_files_transform(three_positions, tmp_p
         reference_position_dirpaths=three_positions[:1], cluster="debug",
     )  # fmt: skip
     entry = load_transform_settings(output).transforms[0]
-    assert entry.seeded_from == "seed_file"
+    assert entry.initialized_from == "file"
     np.testing.assert_allclose(np.asarray(entry.matrix)[:3, 3], -np.asarray(SHIFTS["0"]))
 
 
@@ -215,5 +215,5 @@ def test_a_timepoint_without_an_estimate_falls_back_to_its_seed_from_the_file(tm
     )
     model = load_transform_settings(output)
     stand_in = model.entry_for(1)
-    assert stand_in.status == "unreliable" and stand_in.filled_from == "seed_file"
+    assert stand_in.status == "unreliable" and stand_in.filled_from == "file"
     np.testing.assert_allclose(model.matrix_for(1, "inverse")[:3, 3], SHIFTS["0"], atol=1e-6)

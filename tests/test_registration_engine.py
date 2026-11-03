@@ -465,7 +465,7 @@ def test_transforms_for_file_absolute_frames_fill_with_the_input_seed():
     result = SeriesResult(transforms={0: _shift_x(5), 2: _shift_x(7)})
     filled = transforms_for_file(result, [0, 1, 2], _shift_x(-3), "first")
     assert [t.translation[2] for t in filled] == [5.0, -3.0, 7.0]
-    assert result.filled_from == {1: "seed"}
+    assert result.filled_from == {1: "initial"}
 
 
 class _StepX:

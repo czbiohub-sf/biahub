@@ -152,3 +152,29 @@ def test_repair_tries_the_initial_transform_as_the_candidate_initial():
     candidates = neighbour_consensus_initial_candidates(initial)(5, {}, {}, set())
     assert list(candidates) == ["consensus_full", "initial"]
     assert candidates["initial"].initial_for(5) is initial
+
+
+def test_older_transforms_files_load_with_the_new_names():
+    # entries written before the rename: seeded_from and the 'seed' / 'seed_file' sources
+    from biahub.settings import TransformEntry
+
+    old = TransformEntry(
+        matrix=np.eye(4).tolist(),
+        status="unreliable",  # a stand-in (filled_from) is never accepted
+        seeded_from="seed_file+refined",
+        filled_from="seed_file",
+    )
+    assert old.initialized_from == "file+refined" and old.filled_from == "file"
+    assert (
+        TransformEntry(
+            matrix=np.eye(4).tolist(), status="unreliable", filled_from="seed"
+        ).filled_from
+        == "initial"
+    )
+    assert (
+        TransformEntry(
+            matrix=np.eye(4).tolist(), status="unreliable", filled_from="t=81"
+        ).filled_from
+        == "t=81"
+    )
+    assert "seeded_from" not in TransformEntry(matrix=np.eye(4).tolist()).model_dump()

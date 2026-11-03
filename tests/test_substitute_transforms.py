@@ -55,14 +55,14 @@ def test_a_substituted_entry_keeps_its_status():
     # A stand-in from the other run stays unreliable, so apply-transform still reports it.
     stand_in = _single(2, 50.0, method="ants")
     stand_in.transforms[0] = stand_in.transforms[0].model_copy(
-        update={"status": "unreliable", "filled_from": "seed", "note": "job failed"}
+        update={"status": "unreliable", "filled_from": "initial", "note": "job failed"}
     )
     combined, _ = substitute_transforms(_beads(), [("ants.yml", stand_in)])
 
     entry = combined.transforms[2]
     assert (entry.status, entry.filled_from, entry.note) == (
         "unreliable",
-        "seed",
+        "initial",
         "job failed",
     )
 
