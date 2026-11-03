@@ -13,15 +13,12 @@ Key conventions
 - Transforms are 4x4 homogeneous matrices.
 """
 
-import ants
 import click
 import largestinteriorrectangle as lir
 import numpy as np
 
 from matplotlib import pyplot as plt
 from numpy.typing import ArrayLike
-
-from biahub.core.transform import Transform
 
 # TODO: see if at some point these globals should be hidden or exposed.
 NA_DETECTION_SOURCE = 1.35
@@ -88,58 +85,6 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
         ax[1].imshow(registered_zx)
         ax[1].add_patch(rectangle_zx)
         plt.savefig("./lir.png")
-
-    return (z_slice, y_slice, x_slice)
-
-
-def find_overlapping_volume(
-    input_zyx_shape: tuple,
-    target_zyx_shape: tuple,
-    transformation_matrix: np.ndarray,
-    method: str = "LIR",
-    plot: bool = False,
-) -> tuple:
-    """
-    Find the overlapping rectangular volume after registration of two 3D datasets.
-
-    Parameters
-    ----------
-    input_zyx_shape : Tuple
-        shape of input array
-    target_zyx_shape : Tuple
-        shape of target array
-    transformation_matrix : np.ndarray
-        affine transformation matrix
-    method : str, optional
-        method of finding the overlapping volume, by default 'LIR'
-
-    Returns
-    -------
-    Tuple
-        ZYX slices of the overlapping volume after registration
-
-    """
-    # Make dummy volumes
-    moving_volume = np.ones(tuple(input_zyx_shape), dtype=np.float32)
-    fixed_volume = np.ones(tuple(target_zyx_shape), dtype=np.float32)
-
-    # Convert to ants objects
-    fixed_volume_ants = ants.from_numpy(fixed_volume)
-    moving_volume_ants = ants.from_numpy(moving_volume)
-
-    tform_ants = Transform(transformation_matrix).to_ants()
-
-    # Now apply the transform using this grid
-    registered_volume = tform_ants.apply_to_image(
-        moving_volume_ants, reference=fixed_volume_ants
-    ).numpy()
-    if method == "LIR":
-        click.echo("Starting Largest interior rectangle (LIR) search")
-        mask = (registered_volume > 0) & (fixed_volume > 0)
-        z_slice, y_slice, x_slice = find_lir(mask, plot=plot)
-
-    else:
-        raise ValueError(f"Unknown method {method}")
 
     return (z_slice, y_slice, x_slice)
 

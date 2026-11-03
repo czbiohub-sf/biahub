@@ -7,7 +7,6 @@ from pathlib import Path
 from iohub import open_ome_zarr
 import napari
 from biahub.core.transform import Transform
-from biahub.registration.utils import find_overlapping_volume
 from skimage import exposure, filters
 from biahub.utils.config import model_to_yaml, yaml_to_model
 # the retired stabilize schema (apply-transform and the stabilize alias convert it)
