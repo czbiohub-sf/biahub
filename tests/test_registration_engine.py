@@ -6,7 +6,7 @@ from biahub.registration.engine import (
     RunJournal,
     estimate_series,
     flag_series,
-    neighbour_consensus_config_candidates,
+    neighbour_consensus_initial_candidates,
     polish,
     repair_timepoint,
     sweep_timepoint,
@@ -267,20 +267,20 @@ def test_polish_improves_on_a_nan_score():
     assert transform is better and score == 0.5 and rounds == 1
 
 
-def test_neighbour_consensus_config_candidates_skips_flagged_neighbours():
+def test_neighbour_consensus_initial_candidates_skips_flagged_neighbours():
     history = {t: Transform.from_translation([float(t), 0.0, 0.0]) for t in range(7)}
     scores = {t: 0.9 for t in range(7)}
     config_seed = Transform.from_translation([-1.0, 0.0, 0.0])
-    factory = neighbour_consensus_config_candidates(config_seed)
+    factory = neighbour_consensus_initial_candidates(config_seed)
 
     middle = factory(4, history, scores, flagged={3, 4})
-    assert list(middle) == ["t+1", "consensus_full", "config_seed"]
+    assert list(middle) == ["t+1", "consensus_full", "initial"]
     assert middle["t+1"].initial_for(4) is history[5]
     assert isinstance(middle["consensus_full"], ConsensusInitialTransform)
-    assert middle["config_seed"].initial_for(4) is config_seed
+    assert middle["initial"].initial_for(4) is config_seed
 
     first = factory(0, history, scores, flagged={0})
-    assert list(first) == ["t+1", "consensus_full", "config_seed"]
+    assert list(first) == ["t+1", "consensus_full", "initial"]
 
 
 class _StepEstimator:

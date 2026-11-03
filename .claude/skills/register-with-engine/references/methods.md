@@ -173,9 +173,9 @@ thread counts.
 ## Flagging, repair and thresholds
 
 After estimating, timepoints below the run's `median - 2*MAD` (and below `floor`), or below
-`hard_fail`, are flagged and re-estimated from other seeds (`fallback.repair`: neighbours,
-consensus, the seed). Repair is skipped for methods that ignore the seed
-(`phase_cross_corr`, `focus_finding`, `manual`).
+`hard_fail`, are flagged and re-estimated from other starts (`fallback.repair.candidates`:
+`t-1`, `t+1`, `consensus`, `initial`). Repair is skipped for methods that ignore where
+they start (`phase_cross_corr`, `focus_finding`, `manual`).
 
 The absolute values (`floor: 0.8`, `hard_fail: 0.4`) are tuned for the bead-overlap score;
 for correlation scores see "Judging the result" above.

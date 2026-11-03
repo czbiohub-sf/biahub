@@ -1118,21 +1118,32 @@ class FlagSettings(MyBaseModel):
     hard_fail: float = 0.40
 
 
-RepairCandidate = Literal["t-1", "t+1", "consensus", "seed"]
+RepairCandidate = Literal["t-1", "t+1", "consensus", "initial"]
 
 
 class RepairSettings(MyBaseModel):
-    """Repair pass over flagged timepoints: candidate seeds in the order they are tried.
+    """Repair pass over flagged timepoints: where to start again, in the order tried.
 
-    `polish_rounds`: after a candidate is accepted, re-estimate seeded from it up to this
-    many times, keeping a round only on a strict score gain (0 disables).
+    `t-1` / `t+1`: a non-flagged neighbour's transform; `consensus`: the run's median over
+    well-scoring timepoints; `initial`: the run's `transform.initial`. `polish_rounds`:
+    after a candidate is accepted, re-estimate seeded from it up to this many times,
+    keeping a round only on a strict score gain (0 disables).
     """
 
-    candidates: list[RepairCandidate] = ["t-1", "t+1", "consensus", "seed"]
+    candidates: list[RepairCandidate] = ["t-1", "t+1", "consensus", "initial"]
     consensus_threshold: float = 0.75
     consensus_min_good: int = 5
     max_timepoints: int | None = None
     polish_rounds: NonNegativeInt = 3
+
+    @field_validator("candidates", mode="before")
+    @classmethod
+    def refuse_seed(cls, v):
+        if isinstance(v, list) and "seed" in v:
+            raise ValueError(
+                "repair candidate 'seed' is now 'initial' (the run's transform.initial)"
+            )
+        return v
 
 
 class SweepSettings(MyBaseModel):

@@ -137,3 +137,18 @@ def test_the_first_schemas_seed_keys_are_refused_with_where_they_moved(old, poin
 
     with pytest.raises(ValidationError, match=pointer.replace("{", r"\{").replace("}", r"\}")):
         TransformFitSettings(type="euclidean", **old)
+
+
+def test_repair_tries_the_initial_transform_as_the_candidate_initial():
+    from pydantic import ValidationError
+
+    from biahub.registration.engine import neighbour_consensus_initial_candidates
+    from biahub.settings import RepairSettings
+
+    assert RepairSettings().candidates == ["t-1", "t+1", "consensus", "initial"]
+    with pytest.raises(ValidationError, match="repair candidate 'seed' is now 'initial'"):
+        RepairSettings(candidates=["t-1", "seed"])
+    initial = Transform.from_translation([1.0, 0.0, 0.0])
+    candidates = neighbour_consensus_initial_candidates(initial)(5, {}, {}, set())
+    assert list(candidates) == ["consensus_full", "initial"]
+    assert candidates["initial"].initial_for(5) is initial

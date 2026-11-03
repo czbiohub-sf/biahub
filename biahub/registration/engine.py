@@ -305,16 +305,16 @@ RepairCandidates = Callable[
 ]
 
 
-def neighbour_consensus_config_candidates(
-    config_seed: Transform,
+def neighbour_consensus_initial_candidates(
+    initial: Transform,
     consensus_score_threshold: float = 0.75,
     consensus_min_good: int = 5,
-    order: tuple[str, ...] = ("t-1", "t+1", "consensus", "seed"),
+    order: tuple[str, ...] = ("t-1", "t+1", "consensus", "initial"),
 ) -> RepairCandidates:
     """Build the repair candidate set in the given order.
 
     "t-1" / "t+1": non-flagged neighbours; "consensus": the run's consensus geometry
-    (named `consensus_full` in results); "seed": the config seed (`config_seed`).
+    (named `consensus_full` in results); "initial": the timepoint's initial transform.
     """
 
     def candidates(
@@ -333,8 +333,8 @@ def neighbour_consensus_config_candidates(
                     score_threshold=consensus_score_threshold,
                     min_good=consensus_min_good,
                 )
-            elif name == "seed":
-                out["config_seed"] = FixedInitialTransform(config_seed)
+            elif name == "initial":
+                out["initial"] = FixedInitialTransform(initial)
             else:
                 raise ValueError(f"unknown repair candidate {name!r}")
         return out
@@ -1505,7 +1505,7 @@ def _repair_timepoint_job(
         estimator,
         score_fn,
         series,
-        neighbour_consensus_config_candidates(
+        neighbour_consensus_initial_candidates(
             seed,
             consensus_score_threshold=repair_settings.consensus_threshold,
             consensus_min_good=repair_settings.consensus_min_good,

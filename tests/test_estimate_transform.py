@@ -336,11 +336,9 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     repair = report["repairs"]["2"]
     assert repair["accepted"] is False
     # No beads in the frame: every candidate fails the same way, and each failure is named.
-    assert set(repair["candidate_failures"]) == {"t-1", "consensus_full", "config_seed"}
+    assert set(repair["candidate_failures"]) == {"t-1", "consensus_full", "initial"}
     failures = repair["candidate_failures"]
-    assert (
-        "EstimationError" in failures["t-1"] and "EstimationError" in failures["config_seed"]
-    )
+    assert "EstimationError" in failures["t-1"] and "EstimationError" in failures["initial"]
     assert failures["consensus_full"].startswith(
         "ValueError: Consensus seed: only 2 timepoints"
     )
@@ -631,7 +629,7 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
         ),
         fallback={
             "flag": {"k_mad": 2.0, "floor": 0.8, "hard_fail": 0.4},
-            "repair": {"candidates": ["seed"]},
+            "repair": {"candidates": ["initial"]},
         },
     )
     config = tmp_path / "unified.yml"
@@ -644,10 +642,10 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
         (output.with_suffix("") / "estimate_transform_report.json").read_text()
     )
     assert report["flagged"] == [2]
-    # Only the seed candidate was configured, so only it was tried.
+    # Only the initial candidate was configured, so only it was tried.
     assert set(report["repairs"]["2"]["candidate_failures"]) | set(
         report["repairs"]["2"]["candidate_scores"]
-    ) == {"config_seed"}
+    ) == {"initial"}
 
 
 @pytest.fixture

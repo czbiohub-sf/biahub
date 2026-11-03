@@ -40,7 +40,7 @@ fallback:
     - t-1
     - t+1
     - consensus
-    - seed
+    - initial
     consensus_threshold: 0.75
     consensus_min_good: 5
     max_timepoints: null
