@@ -1,6 +1,7 @@
 """What happens to the tracks after linking.
 
-The sibling filter and the one-child merge.
+The sibling filter, the one-child merge, and mapping tracks found on downsampled inputs
+back to full resolution.
 """
 
 import click
@@ -66,3 +67,29 @@ def _merge_single_children(
             lut[child] = root(child)
     tracks = tracks.sort_values(["track_id", "t"]).reset_index(drop=True)
     return tracks, lut[labels]
+
+
+def _upsample_result(
+    tracked_small: np.ndarray,
+    tracks: pd.DataFrame,
+    labels_small: np.ndarray,
+    labels: np.ndarray,
+    factor: int,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Map tracks found on downsampled labels back to the full-resolution labels.
+
+    Each original label id takes the track id it got on the downsampled frame, so the
+    tracked labels keep the full-resolution masks; positions are rescaled by ``factor``.
+    """
+    tracked = np.zeros(labels.shape, dtype=np.int32)
+    for t in range(labels.shape[0]):
+        small, ids = labels_small[t].ravel(), tracked_small[t].ravel()
+        both = (small > 0) & (ids > 0)
+        if not both.any():
+            continue
+        pairs = np.unique(np.stack([small[both], ids[both]]), axis=1)
+        lut = np.zeros(int(labels[t].max()) + 1, dtype=np.int32)
+        lut[pairs[0]] = pairs[1]
+        tracked[t] = lut[labels[t]]
+    tracks = tracks.assign(y=tracks.y * factor, x=tracks.x * factor)
+    return tracked, tracks

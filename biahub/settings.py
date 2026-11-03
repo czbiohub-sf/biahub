@@ -148,6 +148,11 @@ class HoctConfig(MyBaseModel):
     # channel the label image was segmented from, recorded by `biahub segment`; set it
     # to override that, or when the label image has no segment provenance.
     image_channel: str | None = None
+    # Shrink the labels and image by this integer factor before HOCT and map the tracks
+    # back to the full-resolution labels. HOCT's models were trained on small nuclei
+    # (~11 px across); on A549 at 0.1133 um/px (nuclei 80-130 px) a factor of 6 tracked
+    # divisions better than full resolution. 1 (default) tracks at full resolution.
+    downsample: PositiveInt = 1
     distance_threshold_um: PositiveFloat = 33.99
     n_neighbors: PositiveInt = 5
     max_delta_t: PositiveInt = 3
@@ -177,6 +182,9 @@ class TrackastraConfig(MyBaseModel):
     mode: Literal["greedy", "greedy_nodiv", "ilp"] = "greedy"
     # The image Trackastra reads with the labels; as for hoct_config.image_channel.
     image_channel: str | None = None
+    # As hoct_config.downsample. On A549, pretrained general_2d did no better downsampled,
+    # but a model fine-tuned at 4x must be run at 4 (the scale it was trained at).
+    downsample: PositiveInt = 1
 
 
 class TrackingSettings(MyBaseModel):

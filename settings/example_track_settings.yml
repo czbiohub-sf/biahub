@@ -63,10 +63,12 @@ labels_sigma: 5.0
 #   n_neighbors: 5
 #   max_delta_t: 3                 # frames an edge may skip
 #   solver: {}                     # HOCT ILPSolverConfig overrides
+#   downsample: 1                  # shrink labels/image first (trained on ~11 px nuclei; A549: 6)
 # trackastra_config:
 #   model: general_2d              # pretrained name (general_2d, ctc) or a model folder
 #   mode: greedy                   # greedy | greedy_nodiv | ilp
 #   image_channel: null            # default: the channel segment recorded
+#   downsample: 1                  # a fine-tuned model: the factor it was trained at
 
 # ---------------------------------------------------------------------------
 # Alternative: segmentation_method: foreground_contour (legacy)

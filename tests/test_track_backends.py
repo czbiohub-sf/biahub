@@ -754,3 +754,75 @@ def test_hoct_reads_the_image_its_labels_were_segmented_from(dividing_plate, mon
         TrackastraConfig(),
     )
     np.testing.assert_array_equal(seen["image"], _dividing_movie(T=6, size=64)[1])
+
+
+# --- downsample (HOCT / Trackastra trained on small nuclei) ---------------------------
+
+
+@pytest.mark.parametrize("config", [HoctConfig, TrackastraConfig])
+def test_downsample_defaults_to_full_resolution(config):
+    assert config().downsample == 1
+    with pytest.raises(ValidationError):
+        config(downsample=0)
+
+
+def test_hoct_downsamples_labels_image_and_distances(monkeypatch):
+    """HOCT's models were trained on small nuclei (~11 px across); `downsample` shrinks the
+    labels and image before HOCT and maps the tracks back to the full-resolution labels."""
+    import hoct
+    import hoct.features
+
+    from biahub.track import _solve_tracksdata, run_hoct
+
+    labels, image = _dividing_movie(size=64)
+    calls = {}
+    real_create_graph = hoct.features.create_graph
+
+    def create_graph(labels_, **kw):
+        calls.update(labels=labels_, **kw)
+        return real_create_graph(labels_, **kw)
+
+    def predict(model, *, graph, **kw):
+        return _solve_tracksdata(calls["labels"], TracksdataConfig(), pixel_size=1.0)
+
+    monkeypatch.setattr(hoct.features, "create_graph", create_graph)
+    monkeypatch.setattr(hoct, "load_model", lambda model, device="cpu": ("model", model))
+    monkeypatch.setattr(hoct, "predict", predict)
+
+    tracked, tracks = run_hoct(
+        labels, image, HoctConfig(distance_threshold_um=3.0, downsample=2), pixel_size=0.5
+    )
+
+    assert calls["labels"].shape == (6, 32, 32) and calls["images"].shape == (6, 32, 32)
+    assert calls["distance_threshold"] == pytest.approx(3.0)  # 3 um at 0.5 um/px x 2
+    assert tracked.shape == labels.shape
+    # every original object keeps its full-resolution mask, painted with its track id
+    assert np.array_equal(tracked > 0, labels > 0)
+    _check_one_division(tracks, tracked)
+
+
+def test_trackastra_downsamples_labels_and_image(monkeypatch):
+    import trackastra.model
+
+    calls = {}
+
+    class Model:
+        def track(self, imgs, masks, mode="greedy", **kw):
+            calls.update(imgs=imgs, masks=masks)
+            return _trackastra_graph(masks), masks
+
+    monkeypatch.setattr(
+        trackastra.model.Trackastra,
+        "from_pretrained",
+        staticmethod(lambda name, device=None, **kw: Model()),
+    )
+    from biahub.track import run_trackastra
+
+    labels, image = _dividing_movie(size=64)
+
+    tracked, tracks = run_trackastra(labels, image, TrackastraConfig(downsample=2))
+
+    assert calls["masks"].shape == (6, 32, 32) and calls["imgs"].shape == (6, 32, 32)
+    assert tracked.shape == labels.shape
+    assert np.array_equal(tracked > 0, labels > 0)
+    _check_one_division(tracks, tracked)

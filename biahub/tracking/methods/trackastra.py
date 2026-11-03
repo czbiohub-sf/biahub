@@ -8,7 +8,8 @@ import pandas as pd
 
 from biahub.settings import TrackastraConfig
 from biahub.tracking.methods.tracksdata import _empty_result, _isolated_tracks
-from biahub.tracking.postprocess import _merge_single_children
+from biahub.tracking.postprocess import _merge_single_children, _upsample_result
+from biahub.tracking.preprocess import _downsample
 
 
 def warm_trackastra_weights(model: str) -> None:
@@ -20,6 +21,22 @@ def warm_trackastra_weights(model: str) -> None:
 
 
 def run_trackastra(
+    labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with Trackastra.
+
+    With ``config.downsample`` > 1 the labels and image are shrunk first and the result
+    is mapped back to full resolution (as :func:`run_hoct`).
+    """
+    factor = config.downsample
+    if factor == 1:
+        return _run_trackastra(labels, images, config)
+    labels_small, images_small = _downsample(labels, images, factor)
+    tracked, tracks = _run_trackastra(labels_small, images_small, config)
+    return _upsample_result(tracked, tracks, labels_small, labels, factor)
+
+
+def _run_trackastra(
     labels: np.ndarray, images: np.ndarray, config: TrackastraConfig
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Link fixed (T, Y, X) instance labels with Trackastra.

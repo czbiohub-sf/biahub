@@ -1,6 +1,7 @@
 """What happens to the tracking inputs before linking.
 
-Blank frames and ultrack's foreground/contour inputs.
+Blank frames, ultrack's foreground/contour inputs, and downsampling for trackers trained
+on small nuclei.
 """
 
 import ast
@@ -297,3 +298,22 @@ def run_preprocessing_pipeline(
                     viewer.add_image(data_dict[channel_name], name=channel_name)
 
     return data_dict
+
+
+def _downsample(
+    labels: np.ndarray, images: np.ndarray, factor: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Shrink (T, Y, X) labels and images by an integer factor.
+
+    Labels are strided (every ``factor``-th pixel), which keeps the label ids; images are
+    block-averaged. Objects smaller than the stride can vanish (they stay untracked).
+    """
+    T, Y, X = labels.shape
+    Yc, Xc = Y // factor * factor, X // factor * factor
+    small_images = (
+        np.asarray(images)[:, :Yc, :Xc]
+        .reshape(T, Yc // factor, factor, Xc // factor, factor)
+        .mean(axis=(2, 4))
+        .astype(np.float32)
+    )
+    return np.ascontiguousarray(labels[:, :Yc:factor, :Xc:factor]), small_images

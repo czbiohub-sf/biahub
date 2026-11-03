@@ -10,6 +10,8 @@ from biahub.tracking.methods.tracksdata import (
     _select_every_detection,
     _solution_to_tracks,
 )
+from biahub.tracking.postprocess import _upsample_result
+from biahub.tracking.preprocess import _downsample
 
 
 def _import_hoct():
@@ -65,6 +67,22 @@ def _select_sparse_links(graph):
 
 
 def run_hoct(
+    labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.
+
+    With ``config.downsample`` > 1 the labels and image are shrunk first (HOCT's models
+    were trained on small nuclei) and the result is mapped back to full resolution.
+    """
+    factor = config.downsample
+    if factor == 1:
+        return _run_hoct(labels, images, config, pixel_size)
+    labels_small, images_small = _downsample(labels, images, factor)
+    tracked, tracks = _run_hoct(labels_small, images_small, config, pixel_size * factor)
+    return _upsample_result(tracked, tracks, labels_small, labels, factor)
+
+
+def _run_hoct(
     labels: np.ndarray, images: np.ndarray, config: HoctConfig, pixel_size: float
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Link fixed (T, Y, X) instance labels with HOCT's edge model and ILP.

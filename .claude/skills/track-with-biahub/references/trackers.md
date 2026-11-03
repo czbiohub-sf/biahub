@@ -38,11 +38,13 @@ pixel settings at 0.1133 um/px (mantis v2).
   weights on the scale of 10-100 suppress divisions entirely.
 - **hoct**: `model` (`general_v1`, or a path), `image_channel` (below),
   `distance_threshold_um` (33.99), `n_neighbors` (5), `max_delta_t` (3: edges may skip up to
-  2 frames), `solver` (HOCT's `ILPSolverConfig` fields). HOCT runs in pixel space, as its
-  models were trained.
+  2 frames), `solver` (HOCT's `ILPSolverConfig` fields), `downsample` (1). HOCT runs in
+  pixel space and its models were trained on small nuclei (~11 px across): on A549 at
+  0.1133 um/px (nuclei 80-130 px), `downsample: 6` raised held-out division F1 0.47 -> 0.58.
 - **trackastra**: `model` (`general_2d`, `ctc`, or a trained model folder), `mode`
-  (`greedy`, `greedy_nodiv` for no divisions, `ilp`) and `image_channel` (below). No
-  distance settings.
+  (`greedy`, `greedy_nodiv` for no divisions, `ilp`), `image_channel` (below) and
+  `downsample` (1; pretrained `general_2d` did not gain from it on A549, but a model
+  fine-tuned on downsampled data must run at that factor). No distance settings.
 - **image_channel** (hoct, trackastra): the image they read with the labels. Default (null):
   the first channel `biahub segment` recorded in the label image's `biahub-segment`
   provenance (`nuclei_prediction` for A549). Set it to read another channel, or when the
