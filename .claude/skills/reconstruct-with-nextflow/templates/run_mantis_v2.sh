@@ -58,7 +58,7 @@ OUTPUT_DIR=""
 # after OUTPUT_DIR below, so it may reference it.
 CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
 
-# Delete the intermediates once the last step (QC) finishes: the flat-field,
+# Delete the intermediates once the last step (QC or DCA finalize) finishes: the flat-field,
 # deskew, reconstruct and virtual-stain directories, the final stores'
 # slurm_output/ and resume markers, and the Nextflow work directory
 # (biahub#292), recorded in nextflow/intermediates_cleaned.txt. A cleaned run
@@ -194,12 +194,14 @@ fi
 # Harmless when unset already, and nothing in the pipeline reads it.
 unset CLAUDECODE
 
-# The six config flags from --concatenate_config down are the OPTIONAL steps:
+# The seven config flags from --concatenate_config down are the OPTIONAL steps:
 # a step runs only if its config is passed (biahub#306). Defaults by family —
 #
-#   A549 / cell-line        assemble + project + segment + track + QC (all six, as written)
+#   A549 / cell-line        assemble + project + segment + track + QC + DCA finalize
+#                           (all seven, as written)
 #   zebrafish / neuromast   assemble + QC   (delete --project_config, --segment_config,
-#                                            --track_config and --qc_project_config)
+#                                            --track_config, --qc_project_config and
+#                                            --dca_config)
 #
 # --qc_track_config was removed: qc_project.yaml counts the labels tracking writes
 # into the projected plate, so passing the old flag errors at launch.
@@ -230,6 +232,7 @@ nextflow run "${PIPELINE}" \
     --track_config         "${CONFIGS}/track.yml" \
     --qc_config            "${CONFIGS}/qc.yaml" \
     --qc_project_config    "${CONFIGS}/qc_project.yaml" \
+    --dca_config           "${CONFIGS}/dca_finalize.yml" \
     --cleanup_intermediates "${CLEANUP_INTERMEDIATES}" \
     -resume \
     "$@"

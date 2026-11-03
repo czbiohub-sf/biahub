@@ -3,10 +3,11 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → project → segment → track → pyramid → QC) on the Bruno
-  HPC cluster. Assemble, project, segment, track and QC are optional and selected per
-  dataset family: A549 runs all of them, neuromast runs assemble + QC and no
-  segmentation or tracking; pyramids are on whenever assemble runs. Locates the raw
+  virtual-stain → assemble → project → segment → track → pyramid → QC → DCA
+  finalize) on the Bruno HPC cluster. Assemble, project, segment, track, QC and DCA
+  finalize are optional and selected per dataset family: A549 runs all of them,
+  neuromast runs assemble + QC and no segmentation, tracking or DCA finalize;
+  pyramids are on whenever assemble runs. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
   foreground so it can be watched, monitors it unattended every 30 minutes
@@ -31,7 +32,8 @@ user says go.
 Read `references/datasets.md` (directory and naming conventions) and
 `references/caveats.md` (pipeline-specific pitfalls) before writing any config.
 Read `references/recovery.md` when a run fails and `references/monitoring.md`
-when the run is live.
+when the run is live. Read `references/dca-finalize.md` for any run that passes
+`--dca_config`.
 
 ## 1. Confirm the environment
 
@@ -110,6 +112,21 @@ credential the user cannot self-serve: tell them to **ask a biahub developer
 rather than rewrite, and tell them to `source ~/.bashrc` before launching, since
 the value is read from the launching shell. Full instructions:
 `references/monitoring.md` § Setting it up.
+
+### 1a-quater. AirTable token, only when DCA metadata comes from AirTable
+
+A549 runs read the per-well DCA metadata from a sample sheet by default, and need
+nothing here. If the user says the plate's metadata lives in AirTable, check the
+token the run's `dca_finalize.yml` names (`token_env`, default `AIRTABLE_API_KEY`):
+
+```bash
+printenv AIRTABLE_API_KEY >/dev/null && echo "airtable token set" || echo "airtable token MISSING"
+```
+
+If it is missing, the user needs read access to the base (ask a biahub developer)
+and a personal access token from AirTable. Offer to append the export to
+`~/.bashrc` on the same terms as §1a-ter. Setup details:
+`references/dca-finalize.md` § AirTable instead of a sheet.
 
 ### 1b. The biahub checkout — run from `main`, up to date
 
@@ -358,13 +375,14 @@ Do not run anything yet. Show the user:
 
    | family | steps |
    |---|---|
-   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → segment → track → pyramid → QC** |
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → segment → track → pyramid → QC → DCA finalize** |
    | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → pyramid → QC** (no projection, segmentation or tracking) |
 
    Pyramid is on by default whenever assemble runs: it adds two coarser levels
    (3 in total, DCA v0.2) to every image and label image of the assembled and
    projected plates, in place, once segmentation and tracking have finished
-   writing into them. QC is the very last step and waits for the pyramids.
+   writing into them. QC waits for the pyramids, and DCA finalize, when on, runs
+   after QC as the last step.
    `--pyramid_levels 1` skips them.
 
    Write the list out in the plan rather than naming the family, and say which
@@ -402,8 +420,9 @@ Do not run anything yet. Show the user:
     rather than silently dropping it — the step set in item 6 has to match what
     is actually going to run.
 11. **Whether intermediates will be deleted** (`CLEANUP_INTERMEDIATES` in the run
-    script, biahub#292). With cleanup on, once the last step (QC) finishes the
-    pipeline deletes the flat-field, deskew, reconstruct and virtual-stain
+    script, biahub#292). With cleanup on, once the last step (QC, or DCA
+    finalize) finishes the pipeline deletes the flat-field, deskew, reconstruct
+    and virtual-stain
     directories, the `slurm_output/` placeholders and `.iohub-progress/` resume
     markers beside the final stores, and the Nextflow work directory. Only the
     assembled and projected stores (with the segmentation and tracking labels
@@ -423,6 +442,15 @@ Do not run anything yet. Show the user:
       to delete the intermediates anyway — the data cropped out of the assembled
       store exists nowhere else. Set `true` only on a clear yes; no answer means
       `false`.
+12. **The DCA metadata, when DCA finalize is in the step list.** Show the user the
+    base TOML's study, biosample, specimen and study-component values, the
+    confirmed TOML (experimenter, release date) and the per-well sample sheet, as
+    they will be written (`references/dca-finalize.md` § Show the metadata in the
+    plan). Finalize only checks that values are present and schema-valid, so this
+    is the one place a wrong value gets caught. Ask the user for the experimenter
+    and release date; never fill them in yourself. Also say that the projected
+    plate's validation fails today on `project.yml`'s chunk and shard sizes, so
+    the run will stop at that plate's finalize task.
 
 Get explicit approval.
 
@@ -432,10 +460,16 @@ Get explicit approval.
 mkdir -p <OUTPUT>/configs <OUTPUT>/nextflow
 cp <BIAHUB>/nextflow/configs/<family>/*.yml <BIAHUB>/nextflow/configs/<family>/*.yaml \
    <OUTPUT>/configs/
+cp <BIAHUB>/nextflow/configs/<family>/*.toml <OUTPUT>/configs/ 2>/dev/null || true
 chmod g+w <OUTPUT>/configs/*
 ```
 
-Both globs: the step configs are `.yml` and the QC configs are `.yaml`.
+All three globs: the step configs are `.yml`, the QC configs are `.yaml`, and
+A549's DCA base config is `dca_base.toml` (zebrafish has none, hence the `|| true`).
+For a DCA run, also write `<DATASET>.dca-confirmed.toml` and
+`<DATASET>.dca-metadata.csv` into `<OUTPUT>/configs/` from what the user approved
+in §6 item 12, and point the run's `dca_finalize.yml` at them
+(`references/dca-finalize.md` § The files a run reads).
 
 **Every file you place in `<OUTPUT>` must be group-writable** so the rest of
 the lab can edit configs and relaunch. The project directories are setgid with
@@ -444,15 +478,16 @@ copied file's group bits follow the *source* file's mode — `cp` from the repo
 (644) yields `rw-r--r--`. Hence the `chmod` after every copy. Plain `cp` only:
 `cp -p`/`-a` would also carry over the checkout's group.
 
-The run script passes all six optional configs — `--concatenate_config`,
+The run script passes all seven optional configs: `--concatenate_config`,
 `--project_config`, `--segment_config`, `--track_config`, `--qc_config`
-(`qc.yaml`), `--qc_project_config` (`qc_project.yaml`) — so an A549 run needs no
-edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
+(`qc.yaml`), `--qc_project_config` (`qc_project.yaml`) and `--dca_config`
+(`dca_finalize.yml`), so an A549 run needs no flag edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
 DELETE that flag's line** from the `nextflow run` call and note the skip in a
 comment above it, so the script still records what this run did. A neuromast
-run deletes `--project_config`, `--segment_config`, `--track_config` and
-`--qc_project_config`; none of `project.yml`, `segment.yml`, `track.yml` or
-`qc_project.yaml` need exist for that family, and none does for zebrafish.
+run deletes `--project_config`, `--segment_config`, `--track_config`,
+`--qc_project_config` and `--dca_config`; none of `project.yml`, `segment.yml`,
+`track.yml`, `qc_project.yaml` or `dca_finalize.yml` need exist for that family,
+and none does for zebrafish.
 `--qc_track_config` is gone: passing it errors at launch.
 
 Delete rather than comment: a `#` inside a backslash-continued command does not
@@ -637,6 +672,12 @@ Classify before acting — `references/recovery.md` has the decision table:
   deletion, and it only runs after every step has succeeded.
 - **Exit 1/2 with a Python traceback**: real bug or bad config. Fix, relaunch
   with `-resume`.
+- **`dca_finalize_store` exits 1**: finalize found a missing or invalid value,
+  wrote nothing, and listed every gap plus the file to fill; or `dca-validate`
+  failed and left `<stem>.dca-validate.json` beside the plate. Neither is
+  retried. Show the user the listed gaps, fix the named file with their answers,
+  and relaunch; `-resume` reruns only finalize. Table:
+  `references/dca-finalize.md` § When finalize fails.
 
 Restarts are always `bash ./run_mantis_v2.sh` — the script passes `-resume`.
 
@@ -651,6 +692,9 @@ directory (`<DATASET>_rerun`) over relaunching in place.
    beside it when project ran (`DATASET=<DATASET>_proj`, same directory), with
    `templates/rename_channels.py` (idempotent; `caveats.md` §2 — check first
    whether a `rename-channels` CLI has landed on main, making this obsolete).
+   If DCA finalize ran, rerun it and the validator on both plates afterwards,
+   since it wrote the pre-rename names (`references/dca-finalize.md` § Rerun
+   after the channel rename), and report each plate's validator result.
 2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
    unless earlier steps were skipped) opens with iohub; report shape, channels,
    size on disk. This is the deliverable for every family. When segmentation

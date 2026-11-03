@@ -445,7 +445,8 @@ Consequences worth knowing:
 
 `biahub pyramid` rewrites each position's `zarr.json` (the multiscales list and
 its `biahub-pyramid` record), as do tracking and imaging-qc, so the pipeline
-runs it after tracking and holds QC, the very last step, until it has finished.
+runs it after tracking and holds QC (the last step before DCA finalize) until it
+has finished.
 The module passes `--resume`: each shard of each level is a unit recorded under
 `.iohub-progress/` beside the plate, so a preempted task's retry recomputes only
 the shards it had not finished. A relaunch that recomputes earlier steps
