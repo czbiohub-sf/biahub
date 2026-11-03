@@ -152,6 +152,11 @@ deliberately (§2).
 Z=1 input). The A549 template runs cpsam_v2 at native resolution (`diameter: null`,
 `min_size: 300`), validated against annotated divisions; the earlier diameter 80
 (37.5 % resize) lost small daughter nuclei.
+`cpdino` / `cpdino-vitb` are opt-in: they need the `dinov3` package, which only
+biahub's `cpdino` extra installs (not on PyPI; DINOv3 License, not open source).
+Install it with `uv sync --extra cpdino` (or
+`pip install git+https://github.com/facebookresearch/dinov3`); without it,
+`biahub segment --init` stops with those commands.
 
 **`track.yml` — schema.** `TrackingSettings` forbids extra keys. Current
 fields: `output_mode`, `fov`, `blank_frames_path`, `segmentation_method`
