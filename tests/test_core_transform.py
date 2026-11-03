@@ -144,3 +144,27 @@ def test_an_inverse_matrix_moves_the_volume_the_other_way():
     assert out.shape == (10, 10, 10)
     assert np.all(out[3:10, 0:9, 0:6] == 1)
     assert not out[:3].any() and not out[:, 9:].any() and not out[:, :, 6:].any()
+
+
+def test_the_output_voxel_size_is_one_output_step_in_the_input_um():
+    # apply-transform writes it as the output's scale when the file gives none. An output
+    # step along axis j is the input step column j of the inverse matrix, in the input's
+    # µm; rescale_voxel_size took the rows, which swaps sizes when a rotation mixes axes
+    # of different voxel sizes.
+    um = (0.5, 0.1, 0.2)
+    two_planes = np.diag([2.0, 1.0, 1.0, 1.0])  # an output plane every two input planes
+    np.testing.assert_allclose(
+        Transform.from_inverse(two_planes).output_voxel_size(um), (1.0, 0.1, 0.2)
+    )
+    swap_yx = np.eye(4)
+    swap_yx[1:3, 1:3] = [[0.0, 1.0], [1.0, 0.0]]  # an output y step is an input x step
+    np.testing.assert_allclose(
+        Transform.from_inverse(swap_yx).output_voxel_size(um), (0.5, 0.2, 0.1)
+    )
+    # a rotation within an isotropic yx plane keeps its voxel size (mantis: 90 degrees)
+    theta = np.deg2rad(90)
+    rotate = np.eye(4)
+    rotate[1:3, 1:3] = [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
+    np.testing.assert_allclose(
+        Transform.from_inverse(rotate).output_voxel_size((0.5, 0.15, 0.15)), (0.5, 0.15, 0.15)
+    )

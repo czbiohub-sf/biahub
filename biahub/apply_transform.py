@@ -41,7 +41,6 @@ from biahub.cli.parsing import (
 )
 from biahub.core.transform import Transform
 from biahub.registration.utils import (
-    rescale_voxel_size,
     resolve_time_indices,
 )
 from biahub.settings import TransformSettings, load_transform_settings
@@ -374,10 +373,8 @@ def apply_transform(
         output_voxel_size = (
             tuple(settings.voxel_size[-3:])
             if settings.voxel_size
-            else tuple(
-                # the file's first transform, whichever positions are applied
-                rescale_voxel_size(applied_first[:3, :3], moving_voxel_size)
-            )
+            # the file's first transform, whichever positions are applied
+            else Transform.from_inverse(applied_first).output_voxel_size(moving_voxel_size)
         )
 
     # Every transform in the file at these timepoints, whichever positions are applied.

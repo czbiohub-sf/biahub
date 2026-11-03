@@ -450,6 +450,18 @@ class Transform:
             "translation_um": (matrix[:3, 3] * ref_um).tolist(),
         }
 
+    def output_voxel_size(self, input_um) -> tuple[float, ...]:
+        """Return the voxel size of `apply`'s output, from the input's (`input_um`, ZYX).
+
+        One output step along axis j is column j of the inverse matrix in input voxels;
+        each input axis is scaled by its own voxel size before the norm, so a rotation
+        that mixes axes of different sizes takes the size it lands on. Only the last
+        `ndim` values of `input_um` are read (an OME-NGFF scale has T and C first).
+        """
+        steps = np.linalg.inv(self._matrix)[: self._ndim, : self._ndim]
+        um = np.asarray(input_um, dtype=float)[-self._ndim :]
+        return tuple(float(v) for v in np.linalg.norm(steps * um[:, None], axis=0))
+
     def coverage(self, mov_shape: tuple, ref_shape: tuple) -> NDArray[np.bool_]:
         """Return where `apply` has moving data on the reference grid (boolean).
 

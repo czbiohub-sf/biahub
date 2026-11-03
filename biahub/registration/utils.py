@@ -144,10 +144,6 @@ def find_overlapping_volume(
     return (z_slice, y_slice, x_slice)
 
 
-def rescale_voxel_size(affine_matrix, input_scale):
-    return np.linalg.norm(affine_matrix, axis=1) * input_scale
-
-
 def pad_to_shape(
     arr: ArrayLike,
     shape: tuple[int, ...],
