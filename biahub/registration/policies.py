@@ -2,8 +2,9 @@
 
 A `ReferencePolicy` answers "what does `mov` at time `t` register against": another
 channel (registration) or the channel's own first / previous frame (stabilization) --
-the same estimate, differing only here. A `SeedPolicy` answers "what initial transform
-does the estimator start from" and never decides how the transform is computed.
+the same estimate, differing only here. An `InitialTransformPolicy` answers "what
+initial transform does the estimator start from" and never decides how the transform is
+computed.
 
 Series are indexed lazily (`series[t]` before `np.asarray`) so dask- or zarr-backed
 inputs only materialize the frame requested.
@@ -211,13 +212,13 @@ def smooth_track(track: ArrayLike, *, median: int, sigma: float) -> np.ndarray:
 
 
 @runtime_checkable
-class SeedPolicy(Protocol):
+class InitialTransformPolicy(Protocol):
     """Returns the initial transform guess for timepoint `t`."""
 
-    def seed_for(self, t: int) -> Transform: ...
+    def initial_for(self, t: int) -> Transform: ...
 
 
-class FixedSeed:
+class FixedInitialTransform:
     """A fixed seed for every t -- today's default.
 
     Also what `optimize-registration`'s "refine an existing transform" case is: pass the
@@ -228,11 +229,11 @@ class FixedSeed:
     def __init__(self, transform: Transform):
         self.transform = transform
 
-    def seed_for(self, t: int) -> Transform:
+    def initial_for(self, t: int) -> Transform:
         return self.transform
 
 
-class ConsensusSeed:
+class ConsensusInitialTransform:
     """Repair seed from the run's own well-scoring timepoints.
 
     Element-wise median transform over every timepoint (other than `t` itself) whose
@@ -260,7 +261,7 @@ class ConsensusSeed:
         self.score_threshold = score_threshold
         self.min_good = min_good
 
-    def seed_for(self, t: int) -> Transform:
+    def initial_for(self, t: int) -> Transform:
         good = [
             t2
             for t2 in self.history

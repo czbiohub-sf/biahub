@@ -2,7 +2,7 @@ import numpy as np
 
 from biahub.core.transform import Transform
 from biahub.registration.engine import RunJournal, repair
-from biahub.registration.policies import FixedSeed
+from biahub.registration.policies import FixedInitialTransform
 
 
 class _EchoEstimator:
@@ -23,9 +23,9 @@ def _score_by_closeness(transform: Transform, target: np.ndarray) -> float:
 def test_repair_picks_the_best_scoring_candidate_not_the_first_or_last():
     target = np.array([10.0, 10.0, 10.0])
     candidates = {
-        "far": FixedSeed(Transform.from_translation([0.0, 0.0, 0.0])),
-        "close": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0])),  # best
-        "medium": FixedSeed(Transform.from_translation([5.0, 5.0, 5.0])),
+        "far": FixedInitialTransform(Transform.from_translation([0.0, 0.0, 0.0])),
+        "close": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0])),  # best
+        "medium": FixedInitialTransform(Transform.from_translation([5.0, 5.0, 5.0])),
     }
 
     result = repair(
@@ -48,8 +48,8 @@ def test_repair_keeps_current_when_no_candidate_beats_it():
     target = np.array([10.0, 10.0, 10.0])
     current = Transform.from_translation([9.9, 9.9, 9.9])  # already very close
     candidates = {
-        "far": FixedSeed(Transform.from_translation([0.0, 0.0, 0.0])),
-        "medium": FixedSeed(Transform.from_translation([5.0, 5.0, 5.0])),
+        "far": FixedInitialTransform(Transform.from_translation([0.0, 0.0, 0.0])),
+        "medium": FixedInitialTransform(Transform.from_translation([5.0, 5.0, 5.0])),
     }
 
     result = repair(
@@ -78,8 +78,8 @@ def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
             return seed
 
     candidates = {
-        "broken": FixedSeed(Transform.from_translation([999.0, 0.0, 0.0])),
-        "good": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0])),
+        "broken": FixedInitialTransform(Transform.from_translation([999.0, 0.0, 0.0])),
+        "good": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0])),
     }
 
     result = repair(
@@ -104,7 +104,7 @@ def test_repair_journals_candidate_failures_and_they_round_trip_through_disk(tmp
     target = np.array([10.0, 10.0, 10.0])
 
     class _RaisingSeedPolicy:
-        def seed_for(self, t):
+        def initial_for(self, t):
             raise ValueError("not enough good timepoints yet")
 
     repair(
@@ -130,17 +130,17 @@ def test_repair_journals_candidate_failures_and_they_round_trip_through_disk(tmp
 
 
 def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whole_pass():
-    """E.g. `ConsensusSeed` raises when too few timepoints score well enough yet --
+    """E.g. `ConsensusInitialTransform` raises when too few timepoints score well enough yet --
     that must be skipped like any other candidate failure, not crash `repair`."""
     target = np.array([10.0, 10.0, 10.0])
 
     class _RaisingSeedPolicy:
-        def seed_for(self, t):
+        def initial_for(self, t):
             raise ValueError("not enough good timepoints yet")
 
     candidates = {
         "not_ready": _RaisingSeedPolicy(),
-        "good": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0])),
+        "good": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0])),
     }
 
     result = repair(
@@ -161,7 +161,7 @@ def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whol
 def test_repair_records_to_the_journal_when_given_one():
     journal = RunJournal()
     target = np.array([10.0, 10.0, 10.0])
-    candidates = {"close": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0]))}
+    candidates = {"close": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0]))}
 
     repair(
         t=3,

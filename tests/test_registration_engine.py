@@ -14,10 +14,10 @@ from biahub.registration.engine import (
 )
 from biahub.registration.estimators import EstimationError
 from biahub.registration.policies import (
-    ConsensusSeed,
+    ConsensusInitialTransform,
     CrossChannel,
     FixedFrame,
-    FixedSeed,
+    FixedInitialTransform,
     PreviousFrame,
 )
 
@@ -61,13 +61,18 @@ def test_reference_policy_decides_what_each_timepoint_registers_against():
     x_shift = lambda result: [result.transforms[t].translation[0] for t in range(4)]  # noqa: E731
 
     fixed = estimate_series(
-        mov, FixedFrame(0), _MeanShiftEstimator(), FixedSeed(IDENTITY), _finite_score, range(4)
+        mov,
+        FixedFrame(0),
+        _MeanShiftEstimator(),
+        FixedInitialTransform(IDENTITY),
+        _finite_score,
+        range(4),
     )
     previous = estimate_series(
         mov + 1.0,  # frame values 1..4: a frame of zeros would be an empty frame
         PreviousFrame(),
         _MeanShiftEstimator(),
-        FixedSeed(IDENTITY),
+        FixedInitialTransform(IDENTITY),
         _finite_score,
         range(4),
     )
@@ -75,7 +80,7 @@ def test_reference_policy_decides_what_each_timepoint_registers_against():
         mov,
         CrossChannel(_constant_frames(4, scale=10.0)),
         _MeanShiftEstimator(),
-        FixedSeed(IDENTITY),
+        FixedInitialTransform(IDENTITY),
         _finite_score,
         range(4),
     )
@@ -90,7 +95,7 @@ def test_failed_timepoint_is_recorded_and_the_series_continues():
         _constant_frames(4),
         FixedFrame(0),
         _MeanShiftEstimator(fail_for_mov_means={1}),
-        FixedSeed(IDENTITY),
+        FixedInitialTransform(IDENTITY),
         _finite_score,
         range(4),
     )
@@ -119,7 +124,7 @@ def test_series_is_indexed_one_frame_at_a_time():
         mov,
         CrossChannel(ref),
         _MeanShiftEstimator(),
-        FixedSeed(IDENTITY),
+        FixedInitialTransform(IDENTITY),
         _finite_score,
         [0, 2],
     )
@@ -150,7 +155,7 @@ def test_repair_touches_only_flagged_timepoints_and_journals_them():
         mov,
         FixedFrame(0),
         _EchoEstimator(),
-        FixedSeed(IDENTITY),
+        FixedInitialTransform(IDENTITY),
         _score_penalising_frame_5,
         range(8),
     )
@@ -163,7 +168,7 @@ def test_repair_touches_only_flagged_timepoints_and_journals_them():
         _EchoEstimator(),
         _score_penalising_frame_5,
         result,
-        candidates=lambda t, history, scores, flagged: {"fix": FixedSeed(fix)},
+        candidates=lambda t, history, scores, flagged: {"fix": FixedInitialTransform(fix)},
     )
 
     assert result.flagged == [5]
@@ -184,7 +189,12 @@ def test_repair_rescues_a_timepoint_whose_estimate_failed():
 
     mov = _constant_frames(4)
     result = estimate_series(
-        mov, FixedFrame(0), _FailsUnseeded(), FixedSeed(IDENTITY), _finite_score, range(4)
+        mov,
+        FixedFrame(0),
+        _FailsUnseeded(),
+        FixedInitialTransform(IDENTITY),
+        _finite_score,
+        range(4),
     )
     assert 2 in result.errors
 
@@ -195,7 +205,7 @@ def test_repair_rescues_a_timepoint_whose_estimate_failed():
         _FailsUnseeded(),
         _finite_score,
         result,
-        candidates=lambda t, history, scores, flagged: {"fix": FixedSeed(fix)},
+        candidates=lambda t, history, scores, flagged: {"fix": FixedInitialTransform(fix)},
     )
 
     assert result.flagged == [2]
@@ -220,7 +230,7 @@ def test_repair_replaces_a_transform_whose_score_is_nan():
 
     mov = _constant_frames(3)
     result = estimate_series(
-        mov, FixedFrame(0), _EchoSeed(), FixedSeed(IDENTITY), score, range(3)
+        mov, FixedFrame(0), _EchoSeed(), FixedInitialTransform(IDENTITY), score, range(3)
     )
     assert np.isnan(result.scores[1]) and 1 in result.transforms
 
@@ -230,7 +240,7 @@ def test_repair_replaces_a_transform_whose_score_is_nan():
         _EchoSeed(),
         score,
         result,
-        candidates=lambda t, history, scores, flagged: {"fix": FixedSeed(fix)},
+        candidates=lambda t, history, scores, flagged: {"fix": FixedInitialTransform(fix)},
     )
 
     assert result.transforms[1] is fix
@@ -265,9 +275,9 @@ def test_neighbour_consensus_config_candidates_skips_flagged_neighbours():
 
     middle = factory(4, history, scores, flagged={3, 4})
     assert list(middle) == ["t+1", "consensus_full", "config_seed"]
-    assert middle["t+1"].seed_for(4) is history[5]
-    assert isinstance(middle["consensus_full"], ConsensusSeed)
-    assert middle["config_seed"].seed_for(4) is config_seed
+    assert middle["t+1"].initial_for(4) is history[5]
+    assert isinstance(middle["consensus_full"], ConsensusInitialTransform)
+    assert middle["config_seed"].initial_for(4) is config_seed
 
     first = factory(0, history, scores, flagged={0})
     assert list(first) == ["t+1", "consensus_full", "config_seed"]
@@ -327,7 +337,12 @@ def test_repair_polishes_only_accepted_repairs():
         return 0.2 + 0.1 * transform.translation[0]
 
     result = estimate_series(
-        mov, FixedFrame(0), _StepEstimator(3.0), FixedSeed(IDENTITY), score, range(8)
+        mov,
+        FixedFrame(0),
+        _StepEstimator(3.0),
+        FixedInitialTransform(IDENTITY),
+        score,
+        range(8),
     )
     result.transforms = {t: IDENTITY for t in result.transforms}
     result.scores[5] = 0.2
@@ -337,7 +352,9 @@ def test_repair_polishes_only_accepted_repairs():
         _StepEstimator(3.0),
         score,
         result,
-        candidates=lambda t, history, scores, flagged: {"fix": FixedSeed(IDENTITY)},
+        candidates=lambda t, history, scores, flagged: {
+            "fix": FixedInitialTransform(IDENTITY)
+        },
         polish_rounds=3,
     )
 
@@ -367,7 +384,7 @@ def _series_with_one_poor_timepoint():
         mov,
         FixedFrame(0),
         _FixedEstimator(1.0),
-        FixedSeed(IDENTITY),
+        FixedInitialTransform(IDENTITY),
         _score_by_x_on_frame,
         range(4),
     )
@@ -631,7 +648,7 @@ def test_previous_chain_keeps_the_movement_across_a_gap_of_empty_frames():
         mov,
         PreviousFrame(),
         _MeanShiftEstimator(fail_for_mov_means={0}),
-        FixedSeed(IDENTITY),
+        FixedInitialTransform(IDENTITY),
         _finite_score,
         range(5),
     )
@@ -669,7 +686,12 @@ def test_focus_finding_holds_yx_but_measures_z_across_a_gap(propagated):
         if propagated
         else (
             lambda est: estimate_series(
-                mov, PreviousFrame(), est, FixedSeed(IDENTITY), _finite_score, range(5)
+                mov,
+                PreviousFrame(),
+                est,
+                FixedInitialTransform(IDENTITY),
+                _finite_score,
+                range(5),
             )
         )
     )
@@ -688,7 +710,12 @@ def test_estimate_series_reports_an_empty_frame_without_estimating():
     estimator = _MeanShiftEstimator()
     mov = np.stack([np.full((2, 2, 2), v) for v in (1.0, 0.0, 3.0)])
     result = estimate_series(
-        mov, CrossChannel(mov + 0.0), estimator, FixedSeed(IDENTITY), _finite_score, range(3)
+        mov,
+        CrossChannel(mov + 0.0),
+        estimator,
+        FixedInitialTransform(IDENTITY),
+        _finite_score,
+        range(3),
     )
     assert result.errors[1] == "empty frame (no data)" and 1 not in result.transforms
     assert [c["mov"] for c in estimator.calls] == [

@@ -62,14 +62,14 @@ from biahub.registration.metrics import (
     raw_shift,
 )
 from biahub.registration.policies import (
-    ConsensusSeed,
+    ConsensusInitialTransform,
     CrossChannel,
     FixedFrame,
-    FixedSeed,
+    FixedInitialTransform,
+    InitialTransformPolicy,
     NeighbourMedian,
     PreviousFrame,
     ReferencePolicy,
-    SeedPolicy,
     intensity_centroid,
     is_empty,
     smooth_track,
@@ -299,7 +299,7 @@ def cap_worst(
 
 
 RepairCandidates = Callable[
-    [int, dict[int, Transform], dict[int, float], set[int]], dict[str, SeedPolicy]
+    [int, dict[int, Transform], dict[int, float], set[int]], dict[str, InitialTransformPolicy]
 ]
 
 
@@ -317,22 +317,22 @@ def neighbour_consensus_config_candidates(
 
     def candidates(
         t: int, history: dict[int, Transform], scores: dict[int, float], flagged: set[int]
-    ) -> dict[str, SeedPolicy]:
-        out: dict[str, SeedPolicy] = {}
+    ) -> dict[str, InitialTransformPolicy]:
+        out: dict[str, InitialTransformPolicy] = {}
         for name in order:
             if name in ("t-1", "t+1"):
                 idx = t - 1 if name == "t-1" else t + 1
                 if idx in history and idx not in flagged:
-                    out[name] = FixedSeed(history[idx])
+                    out[name] = FixedInitialTransform(history[idx])
             elif name == "consensus":
-                out["consensus_full"] = ConsensusSeed(
+                out["consensus_full"] = ConsensusInitialTransform(
                     history=history,
                     scores=scores,
                     score_threshold=consensus_score_threshold,
                     min_good=consensus_min_good,
                 )
             elif name == "seed":
-                out["config_seed"] = FixedSeed(config_seed)
+                out["config_seed"] = FixedInitialTransform(config_seed)
             else:
                 raise ValueError(f"unknown repair candidate {name!r}")
         return out
@@ -422,20 +422,22 @@ def repair(
     estimator: TransformEstimator,
     current_transform: Transform,
     current_score: float,
-    candidates: dict[str, SeedPolicy],
+    candidates: dict[str, InitialTransformPolicy],
     score_fn: Callable[[Transform], float],
     journal: RunJournal | None = None,
 ) -> PassResult:
     """Re-estimate timepoint `t` from each candidate seed; keep whichever scores best.
 
-    A candidate whose `seed_for()` raises -- e.g. `ConsensusSeed` when too few timepoints
+    A candidate whose `initial_for()` raises -- e.g. `ConsensusInitialTransform` when too few timepoints
     score well enough yet -- is skipped like one whose `estimate()` raises.
     """
     return _best_of(
         t,
         "repair",
         {
-            name: (lambda policy=policy: estimator.estimate(mov, ref, seed=policy.seed_for(t)))
+            name: (
+                lambda policy=policy: estimator.estimate(mov, ref, seed=policy.initial_for(t))
+            )
             for name, policy in candidates.items()
         },
         current_transform,
@@ -558,7 +560,7 @@ def estimate_series(
     mov,
     reference_policy: ReferencePolicy,
     estimator: TransformEstimator,
-    seed_policy: SeedPolicy,
+    initial_policy: InitialTransformPolicy,
     score_fn: ScoreFn,
     time_indices: Iterable[int],
     journal: RunJournal | None = None,
@@ -582,7 +584,7 @@ def estimate_series(
             if on_timepoint is not None:
                 on_timepoint(t, result)
             continue
-        seed = seed_policy.seed_for(t)
+        seed = initial_policy.initial_for(t)
         estimate, error = None, None
         try:
             transform = estimator.estimate(mov_t, ref_t, seed=seed)
@@ -1259,7 +1261,7 @@ def _estimate_timepoint_job(
         mov,
         _reference_policy(settings, ref),
         estimator,
-        FixedSeed(job.seed_at(t)),
+        FixedInitialTransform(job.seed_at(t)),
         score_fn,
         [t],
         keep_seed=job.seeds is not None,

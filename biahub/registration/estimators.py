@@ -35,7 +35,7 @@ class TransformEstimator(Protocol):
 
     `seed`, when given, is an initial guess in this same contract's direction (true
     forward, moving -> reference) -- e.g. a previous timepoint's accepted result via
-    `SeedPolicy`. Estimators that don't use a seed (correlation-based methods: PCC,
+    `InitialTransformPolicy`. Estimators that don't use a seed (correlation-based methods: PCC,
     stackreg) ignore it and set `uses_seed = False`, so the engine skips re-seeding
     passes (repair, polish) for them; an estimator without the attribute uses its seed.
     """
