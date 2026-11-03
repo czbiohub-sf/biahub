@@ -1318,6 +1318,18 @@ class AnchorSettings(MyBaseModel):
     smooth_sigma: float = Field(ge=0)  # timepoints
 
 
+class LeftoverMotionSettings(MyBaseModel):
+    """`reference.leftover_motion: {}`: how much a stabilization still moves, frame to frame.
+
+    Each estimate job also measures the raw shift from the run's previous timepoint (phase
+    cross-correlation on the moving volumes, to a quarter voxel); the run reports, for its
+    transforms and for the unregistered series, the shift left between consecutive frames
+    in µm (`biahub.registration.metrics.leftover_motion`). It measures single-frame jumps,
+    not slow drift. Exact for translations; marked approximate when a transform rotates
+    or scales. No settings yet.
+    """
+
+
 class ReferenceSettings(MyBaseModel):
     """What the moving channel is aligned onto.
 
@@ -1335,6 +1347,8 @@ class ReferenceSettings(MyBaseModel):
 
     `anchor` (with `neighbours` only) adds the slow component back as a move to the
     frame centre: see `AnchorSettings`. On a `previous` chain it would hide the drift.
+    `leftover_motion` (stabilizations only) reports how still the result is: see
+    `LeftoverMotionSettings`.
     """
 
     frame: ReferenceFrame = "cross"
@@ -1342,6 +1356,7 @@ class ReferenceSettings(MyBaseModel):
     # frames on each side of t for `frame: neighbours` (read by no other frame)
     window: PositiveInt = 6
     anchor: AnchorSettings | None = None
+    leftover_motion: LeftoverMotionSettings | None = None
 
     @model_validator(mode="after")
     def check_channel(self) -> "ReferenceSettings":
@@ -1355,6 +1370,11 @@ class ReferenceSettings(MyBaseModel):
         if self.anchor is not None and self.frame != "neighbours":
             raise ValueError(
                 f"reference.anchor needs reference.frame 'neighbours'; got '{self.frame}'"
+            )
+        if self.leftover_motion is not None and self.frame == "cross":
+            raise ValueError(
+                "reference.leftover_motion is for a stabilization (frame first, previous or "
+                "neighbours): a cross registration's transforms map between two grids"
             )
         return self
 
@@ -1536,6 +1556,11 @@ class EstimateTransformSettings(MyBaseModel):
             raise ValueError(
                 "reference.frame 'previous' needs several timepoints (each is a step from "
                 f"the one before it); got time_indices {ts!r}. Use 'first' for one timepoint."
+            )
+        if self.reference.leftover_motion is not None and single:
+            raise ValueError(
+                "reference.leftover_motion compares consecutive timepoints; got "
+                f"time_indices {ts!r}"
             )
         if self.reference.frame == "neighbours" and single:
             raise ValueError(

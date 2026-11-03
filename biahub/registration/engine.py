@@ -54,9 +54,12 @@ from biahub.registration.methods.landmark.bead_matching import (
 )
 from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimator
 from biahub.registration.metrics import (
+    LEFTOVER_MOTION_VOLUMES,
     PREWARPED,
     bead_alignment_metrics,
+    leftover_motion,
     metric_fn,
+    raw_shift,
 )
 from biahub.registration.policies import (
     ConsensusSeed,
@@ -539,6 +542,11 @@ class SeriesResult:
     # and the anchor `finalize_run` added (centroid, smoothed, translation).
     centroids: dict[int, list[float] | None] = field(default_factory=dict)
     anchors: dict[int, dict[str, list[float] | None]] = field(default_factory=dict)
+    # With reference.leftover_motion: each timepoint's raw shift from the run's previous
+    # timepoint, from its record ({"from": t, "shift": voxels or None}), and the motion
+    # `finalize_run` derived from them.
+    raw_shifts: dict[int, dict] = field(default_factory=dict)
+    leftover_motion: dict | None = None
     journal: RunJournal = field(default_factory=RunJournal)
 
 
@@ -1182,6 +1190,22 @@ def _anchor_centroid(settings: EstimateTransformSettings, mov, t: int) -> list[f
     return centroid.tolist() if np.isfinite(centroid).all() else None
 
 
+def _leftover_raw_shift(settings: EstimateTransformSettings, mov, t: int) -> dict | None:
+    """Return frame t's raw shift from the run's previous timepoint (`reference.leftover_motion`).
+
+    None without the setting, or at the run's first timepoint; `shift` is None when
+    either frame has no data.
+    """
+    if settings.reference.leftover_motion is None:
+        return None
+    run = resolve_time_indices(settings.time_indices, len(mov))
+    earlier = [k for k in run if k < t]
+    if not earlier:
+        return None
+    shift = raw_shift(mov[earlier[-1]], mov[t])
+    return {"from": earlier[-1], "shift": None if shift is None else shift.tolist()}
+
+
 class _JobInputs(NamedTuple):
     settings: EstimateTransformSettings
     mov: object
@@ -1260,6 +1284,7 @@ def _estimate_timepoint_job(
             settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
         ),
         "centroid": _anchor_centroid(settings, mov, t),
+        "raw_shift": _leftover_raw_shift(settings, mov, t),
     }
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
@@ -1309,6 +1334,7 @@ def _estimate_propagated_job(
                 settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
             ),
             "centroid": _anchor_centroid(settings, mov, t),
+            "raw_shift": _leftover_raw_shift(settings, mov, t),
         }
         _write_json(records_dir / f"{t}.json", record)
         records[t] = record
@@ -1430,6 +1456,8 @@ def _load_series(
             result.seeded_from[t] = record["seeded_from"]
         if "centroid" in record:
             result.centroids[t] = record["centroid"]
+        if record.get("raw_shift"):
+            result.raw_shifts[t] = record["raw_shift"]
         if record["error"]:
             result.errors[t] = record["error"]
     return result
@@ -1777,6 +1805,11 @@ def _report(result: SeriesResult, time_indices: list[int]) -> dict:
             if result.anchors
             else {}
         ),
+        **(
+            {"leftover_motion": result.leftover_motion}
+            if result.leftover_motion is not None
+            else {}
+        ),
     }
 
 
@@ -1835,19 +1868,22 @@ DEFAULT_RAM_VOLUMES_PER_JOB = 10
 
 
 def _estimate_job_resources(
-    method: str, zyx_shape: tuple[int, int, int], extra_volumes: int = 0
+    method: str, zyx_shape: tuple[int, int, int], extra_volumes: int = 0, at_least: int = 0
 ) -> tuple[int, int]:
     """Return (cpus, GB of RAM per CPU) for one estimate job of `method` on this volume.
 
     `extra_volumes`: volumes the reference holds besides the method's own (a neighbour
-    median holds its frames and the median).
+    median holds its frames and the median). `at_least`: volumes a later step of the
+    job holds on its own, once the method's are freed (leftover motion's raw shift).
     """
     # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
     _, num_cpus, min_gb_per_cpu = estimate_resources(
         shape=(1, 2, *zyx_shape), max_num_cpus=8 if method == "ants" else 4
     )
     gb_per_volume = np.prod(zyx_shape) * np.dtype(np.float32).itemsize / 2**30
-    volumes = RAM_VOLUMES_PER_JOB.get(method, DEFAULT_RAM_VOLUMES_PER_JOB) + extra_volumes
+    volumes = max(
+        RAM_VOLUMES_PER_JOB.get(method, DEFAULT_RAM_VOLUMES_PER_JOB) + extra_volumes, at_least
+    )
     job_gb = gb_per_volume * volumes
     return num_cpus, int(max(min_gb_per_cpu, np.ceil(job_gb / num_cpus)))
 
@@ -1936,7 +1972,12 @@ def init_run(
     )
     num_cpus, gb_ram_per_cpu = max(
         (
-            _estimate_job_resources(m, (Z, Y, X), reference_volumes)
+            _estimate_job_resources(
+                m,
+                (Z, Y, X),
+                reference_volumes,
+                at_least=LEFTOVER_MOTION_VOLUMES if settings.reference.leftover_motion else 0,
+            )
             for m in settings.method_names
         ),
         key=lambda r: r[0] * r[1],
@@ -1958,6 +1999,7 @@ def init_run(
     plan = {
         "time_indices": time_indices,
         "frame_shape": [Z, Y, X],
+        "voxel_um": list(mov_voxel_size),
         "propagated": propagated,
         "uses_seed": bool(getattr(estimator, "uses_seed", True)),
         "interactive": "manual" in settings.method_names,
@@ -2166,6 +2208,10 @@ def finalize_run(
     if settings.reference.anchor is not None:
         transforms = anchor_transforms(
             result, time_indices, transforms, settings.reference.anchor, plan["frame_shape"]
+        )
+    if settings.reference.leftover_motion is not None:
+        result.leftover_motion = leftover_motion_report(
+            result, time_indices, transforms, plan["voxel_um"]
         )
     result.journal.save(output_dir / "run_journal.json")
     _write_json(
@@ -2493,6 +2539,46 @@ def anchor_transforms(
             "translation": (centre - slow).tolist(),
         }
     return out
+
+
+def leftover_motion_report(
+    result: SeriesResult,
+    time_indices: list[int],
+    transforms: list[Transform],
+    voxel_um: list[float],
+) -> dict:
+    """Return the frame-to-frame motion left by `transforms`, and by none, from the raw shifts.
+
+    Pairs are each timepoint's raw shift from the run's previous timepoint (a job that
+    failed has none: its pair is skipped and listed). The corrections are the transforms'
+    translations; `approximate` when any also rotates or scales, which the derivation
+    leaves out.
+    """
+    pairs = [
+        (record["from"], t, record["shift"])
+        for t, record in sorted(result.raw_shifts.items())
+        if t in time_indices
+    ]
+    corrections = {
+        t: np.asarray(m.matrix)[:3, 3] for t, m in zip(time_indices, transforms, strict=True)
+    }
+    approximate = any(
+        not np.allclose(np.asarray(m.matrix)[:3, :3], np.eye(3), atol=1e-6) for m in transforms
+    )
+    report = {
+        "approximate": approximate,
+        "transforms": leftover_motion(pairs, corrections, voxel_um),
+        "unregistered": leftover_motion(pairs, None, voxel_um),
+        "no_raw_shift": [t for t in time_indices[1:] if t not in result.raw_shifts],
+    }
+    for name in ("transforms", "unregistered"):
+        r = report[name]
+        if r["mean_um"] is not None:
+            click.echo(
+                f"leftover motion, {name}: mean {r['mean_um']:.3f} µm, max {r['max_um']:.3f} µm"
+                f" over {len(r['pairs'])} pairs" + (" (approximate)" if approximate else "")
+            )
+    return report
 
 
 def chain_to_first_frame(

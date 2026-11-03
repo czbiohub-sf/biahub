@@ -1156,3 +1156,73 @@ def test_a_centroid_anchor_needs_a_neighbour_median_reference():
         ReferenceSettings(
             frame="neighbours", anchor={k: v for k, v in ANCHOR.items() if k != "smooth_sigma"}
         )
+
+
+def test_a_stabilization_reports_its_leftover_motion_against_unregistered(tmp_path):
+    # `reference.leftover_motion`: each job records the raw shift from the frame before,
+    # and the run's report holds the frame-to-frame motion left by its transforms and
+    # by none (µm) -- the jumps at t=3 and t=6 are gone once stabilized.
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    jumps = {3: (0.0, 4.0, 0.0), 6: (0.0, -3.0, 2.0)}
+    frames = [
+        ndi_shift(ref, shift=jumps.get(t, (0.0, 0.0, 0.0)), order=1, mode="constant")
+        for t in range(9)
+    ]
+    plate = _write_plate(tmp_path / "jumps.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        source="GFP",
+        reference=ReferenceSettings(frame="neighbours", leftover_motion={}),
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    _run(plate, config, output)
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
+    motion = report["leftover_motion"]
+    assert motion["approximate"] is False  # translations only
+    transforms, raw = motion["transforms"], motion["unregistered"]
+    assert [(p["t_from"], p["t_to"]) for p in transforms["pairs"]] == [
+        (t, t + 1) for t in range(8)
+    ]
+    assert transforms["mean_um"] < 0.2 < raw["mean_um"]
+    np.testing.assert_allclose(raw["max_um"], 4.0, atol=0.3)  # into and out of the t=3 jump
+
+
+def test_leftover_motion_is_for_a_stabilization_over_several_timepoints():
+    from pydantic import ValidationError
+
+    assert ReferenceSettings(frame="first", leftover_motion={}).leftover_motion is not None
+    with pytest.raises(ValidationError, match="leftover_motion is for a stabilization"):
+        ReferenceSettings(frame="cross", channel="Phase3D", leftover_motion={})
+    with pytest.raises(ValidationError, match="leftover_motion compares consecutive"):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "first", "leftover_motion": {}},
+            method="phase_cross_corr",
+            time_indices=4,
+        )
+
+
+def test_a_leftover_motion_run_plans_memory_for_its_raw_shift(tmp_path):
+    from biahub.registration.engine import init_run
+    from biahub.registration.metrics import LEFTOVER_MOTION_VOLUMES
+    from biahub.settings import EstimateTransformSettings as Settings
+
+    zyx = (171, 768, 794)  # the neuromast timelapse; created empty (metadata only)
+    path = tmp_path / "big.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]) as p:
+        p.create_position("A", "1", "0").create_zeros("0", (3, 2, *zyx), dtype=np.float32)
+    plate = path / "A" / "1" / "0"
+    settings = Settings(
+        moving={"channel": "GFP"},
+        reference={"frame": "first", "leftover_motion": {}},
+        method="phase_cross_corr",
+    )
+    mem_gb = init_run(plate, plate, settings, tmp_path / "out")["resources"]["estimate"][
+        "mem_gb"
+    ]
+    assert mem_gb >= LEFTOVER_MOTION_VOLUMES * np.prod(zyx) * 4 / 2**30
