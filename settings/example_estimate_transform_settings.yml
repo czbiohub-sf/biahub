@@ -99,32 +99,33 @@ bead_matching:
     iterations: 1
     score_threshold: 0.4
     score_centroid_mask_radius: 6
+# transform.type: what is fitted. transform.initial: where each estimate starts (left
+# out: identity). from: matrix (this one, in `direction`), shapes (from the two stores'
+# shapes and voxel sizes: rotate90, fliplr) or file (an earlier transforms file).
+# propagate: true -- each timepoint starts from the previous one's result, the initial
+# transform competing on the first pass (legacy use_prev_t_transform; one sequential job).
 transform:
   type: affine
-  seed:
-  - - 1
-    - 0
-    - 0
-    - 0
-  - - 0
-    - 0
-    - -1.288
-    - 1960
-  - - 0
-    - 1.288
-    - 0
-    - -460
-  - - 0.0
-    - 0.0
-    - 0.0
-    - 1.0
-  seed_direction: inverse
-  seed_from_shapes: false
-  # Where each timepoint starts: `input` -- the seed above, every timepoint estimated
-  # independently (one job per timepoint); `previous_timepoint` -- the previous
-  # timepoint's result, with the seed competing on the first pass (legacy
-  # use_prev_t_transform; one sequential job, contiguous time_indices).
-  seed_from: input
+  initial:
+    from: matrix
+    matrix:
+    - - 1
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 0
+      - -1.288
+      - 1960
+    - - 0
+      - 1.288
+      - 0
+      - -460
+    - - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
+    direction: inverse
 time_indices: all
 score:
   metric: overlap

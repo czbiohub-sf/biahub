@@ -15,25 +15,6 @@ phase_cross_corr:
   Z_slice: all
 transform:
   type: euclidean
-  seed:
-  - - 1.0
-    - 0.0
-    - 0.0
-    - 0.0
-  - - 0.0
-    - 1.0
-    - 0.0
-    - 0.0
-  - - 0.0
-    - 0.0
-    - 1.0
-    - 0.0
-  - - 0.0
-    - 0.0
-    - 0.0
-    - 1.0
-  seed_direction: inverse
-  seed_from_shapes: false
 time_indices: all
 fallback:
   flag:

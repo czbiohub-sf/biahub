@@ -1,5 +1,5 @@
-# Pipeline: ANTs alone, from the seed (identity unless transform.seed is set). Channels are
-# placeholders.
+# Pipeline: ANTs alone, from the initial transform (identity unless transform.initial is
+# set). Channels are placeholders.
 moving: {channel: placeholder}
 reference: {frame: cross, channel: placeholder}
 method: ants
