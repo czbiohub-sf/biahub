@@ -1846,7 +1846,7 @@ class TransformSettings(MyBaseModel):
     `positions` maps each position ("row/col/fov") to its own list -- exactly one of the
     two. Time: within any list, one entry without `t` is the transform for every
     timepoint, otherwise every entry has a `t` and a timepoint without one takes the
-    nearest earlier entry. How the series is applied (canvas, interpolation, which
+    nearest earlier entry. How the series is applied (crop, interpolation, which
     timepoints) is not stored here -- those are `apply-transform` options.
     """
 

@@ -88,7 +88,7 @@ What has no equivalent is dropped, with a note printed at conversion time:
   `note` in the transforms file, rather than silently holding the previous transform.
 - **The transforms file** holds one matrix per timepoint with its score and status: one
   list shared by every position (registration on the beads FOV) or one list per position
-  (stabilization). How it is applied (timepoints, canvas, interpolation, channels) is set
+  (stabilization). How it is applied (timepoints, crop, interpolation, channels) is set
   by `apply-transform` options, not by the file.
 
 ## Removing the legacy code

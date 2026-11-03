@@ -28,7 +28,7 @@ from biahub.utils.config import model_to_yaml, yaml_to_model
 
 # Cropping: the largest box inside an overlap. Two searches, both kept: `find_lir` (the
 # rectangle at the middle z slice, z clipped to where it still fits; estimate-crop's) and
-# `largest_box` (exact over every z-range, on a coarse grid; apply-transform's canvas).
+# `largest_box` (exact over every z-range, on a coarse grid; apply-transform's shared_crop).
 
 
 def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
@@ -126,7 +126,7 @@ def largest_box(mask: np.ndarray) -> Slices:
     (`largestinteriorrectangle`); the largest volume wins. `find_lir` (above) is a
     heuristic (rectangle at the middle slice, z clipped to where that rectangle still
     fits) and on a sheared overlap gives up most of z; this is O(Z^2) 2D searches, which
-    on the canvas's coarse grid is a few seconds.
+    on shared_crop's coarse grid is a few seconds.
     """
     mask = np.asarray(mask, dtype=bool)
     best, best_volume = None, 0
@@ -179,16 +179,19 @@ def overlap_slices(
     return _mask_box(mask, target_shape_zyx, downsample)
 
 
-def canvas(
+def shared_crop(
     source_shape_zyx: tuple[int, int, int],
     target_shape_zyx: tuple[int, int, int],
     inverse_matrices: list[np.ndarray],
     keep_overhang: bool,
     downsample: int = 4,
 ) -> Slices:
-    """Find the one crop every timepoint shares: the LIR of the intersected overlap masks.
+    """Find the one crop every transform shares: the largest box in their common overlap.
 
-    The masks are intersected first and the exact largest box found once
+    `inverse_matrices` are every transform the output must hold -- each timepoint and
+    each position of the file, since one output store has one shape -- and the crop is
+    the ZYX slices of the largest z-y-x box inside all their overlaps (z planes a shift
+    or tilt leaves uncovered are cropped too). The masks are intersected first and the exact largest box found once
     (`largest_box`). Finding a box per transform and intersecting the boxes is much
     smaller: on a rotated overlap each timepoint's box trades the axes differently.
 

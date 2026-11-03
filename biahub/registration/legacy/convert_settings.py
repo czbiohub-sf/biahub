@@ -378,7 +378,7 @@ def transform_settings_from_legacy(
 ) -> tuple[TransformSettings, list[str]]:
     """Convert a legacy register / stabilize config to a inverse-direction transform series.
 
-    How the series is applied (timepoints, canvas, interpolation, output version) is no
+    How the series is applied (timepoints, crop, interpolation, output version) is no
     longer stored with the transforms: those are `apply-transform` options, noted here.
     """
     notes = []

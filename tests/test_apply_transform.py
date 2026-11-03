@@ -6,7 +6,7 @@ from click.testing import CliRunner
 from iohub import open_ome_zarr
 
 from biahub.apply_transform import apply_transform, apply_transform_cli
-from biahub.estimate_crop import canvas, largest_box, overlap_slices
+from biahub.estimate_crop import largest_box, overlap_slices, shared_crop
 from biahub.settings import TransformEntry, TransformSettings
 from biahub.utils.config import model_to_yaml
 
@@ -45,13 +45,13 @@ def test_largest_box_is_exact_on_a_sheared_mask():
 def test_canvas_intersects_over_timepoints_and_keep_overhang_keeps_the_grid():
     shape = (20, 40, 40)
     matrices = [np.array(_translation(0, 3, 0)), np.array(_translation(0, -3, 5))]
-    z, y, x = canvas(shape, shape, matrices, keep_overhang=False, downsample=1)
+    z, y, x = shared_crop(shape, shape, matrices, keep_overhang=False, downsample=1)
     assert (z, y, x) == (slice(0, 20), slice(3, 37), slice(0, 35))
-    assert canvas(shape, shape, matrices, keep_overhang=True) == tuple(
+    assert shared_crop(shape, shape, matrices, keep_overhang=True) == tuple(
         slice(0, s) for s in shape
     )
     with pytest.raises(Exception, match="no overlapping region"):
-        canvas(
+        shared_crop(
             shape, shape, [np.array(_translation(0, 45, 0))], keep_overhang=False, downsample=1
         )
 
@@ -100,7 +100,7 @@ def test_apply_transform_stabilizes_every_channel_with_per_timepoint_matrices(
         )
         result = np.asarray(out.data)
     assert result.shape[0] == 3 and result.shape[1] == 2
-    # Canvas: translations up to 4 along y remove 4 rows; z and x untouched.
+    # The shared crop: translations up to 4 along y remove 4 rows; z and x untouched.
     assert result.shape[2:] == (16, 28, 32)
     crop_y0 = 4 if _block_centre(result[0, 0])[1] < _block_centre(data[0, 0])[1] else 0
     for t, dy in enumerate((0, 2, 4)):
@@ -665,7 +665,7 @@ def test_init_then_one_position_per_task_writes_what_one_call_writes(
 def test_the_canvas_does_not_depend_on_the_positions_applied(
     two_position_stabilization, tmp_path
 ):
-    # The canvas is the overlap of every transform in the file, so a task applying one
+    # The shared crop is the overlap of every transform in the file, so a task applying one
     # position writes into the same grid --init created for all of them.
     positions, config = two_position_stabilization
     apply_transform(
@@ -758,7 +758,7 @@ def test_applying_into_an_output_of_another_shape_says_so(
     two_position_stabilization, tmp_path
 ):
     # An existing output keeps its arrays (create_empty_plate does not resize them), so a
-    # different canvas, timepoints or channels cannot be written into it: say that plainly.
+    # different crop, timepoints or channels cannot be written into it: say that plainly.
     positions, config = two_position_stabilization
     output = tmp_path / "out.zarr"
     apply_transform(positions, config, output, cluster="debug")  # full grid

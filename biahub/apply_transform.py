@@ -1,7 +1,7 @@
 """Apply a transform series to positions: one matrix for every timepoint or one per timepoint.
 
 Replaces `register` (one transform, source onto a target store) and `stabilize` (one
-transform per timepoint, a store onto itself). The output canvas is decided once, before
+transform per timepoint, a store onto itself). The output crop is decided once, before
 the output store is allocated: by default the reference grid as is (`keep_overhang`), so
 one wrong transform cannot shrink every timepoint's field of view; or, cropped to the
 overlap, the largest box inside the overlap of the warped source and the reference,
@@ -38,7 +38,7 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.core.transform import Transform
-from biahub.estimate_crop import canvas
+from biahub.estimate_crop import shared_crop
 from biahub.registration.utils import (
     resolve_time_indices,
 )
@@ -93,7 +93,7 @@ def _check_existing_output(
     """Refuse an existing output position this apply cannot write into.
 
     `create_empty_plate` keeps an existing position's array as it is, so a different
-    canvas, timepoints or channels (e.g. `--crop-to-overlap` after a full-grid run) cannot
+    crop, timepoints or channels (e.g. `--crop-to-overlap` after a full-grid run) cannot
     be written into it.
     """
     for key in position_keys:
@@ -109,7 +109,7 @@ def _check_existing_output(
             raise click.UsageError(
                 f"{output_dirpath} already holds {key} with shape {have_shape} and channels "
                 f"{have_channels}; this apply writes shape {tuple(shape)} and channels "
-                f"{list(channel_names)} (another canvas, timepoints or channels). Write to a "
+                f"{list(channel_names)} (another crop, timepoints or channels). Write to a "
                 "new output, or remove that one."
             )
 
@@ -142,7 +142,7 @@ def apply_transform(
     reference channels copied plus the transformed moving channels (registration). Without:
     the moving channels are transformed onto their own grid (stabilization). Each timepoint
     takes its own entry's matrix (`TransformSettings.matrix_for`); a series-wide entry
-    applies to all. The canvas is the full reference grid (`keep_overhang`, the default),
+    applies to all. The crop is the full reference grid (`keep_overhang`, the default),
     or else the largest box inside the overlap shared by every transform in the file at the
     chosen timepoints -- all positions, not only the ones applied, so each position can be
     written by its own task.
@@ -261,10 +261,10 @@ def apply_transform(
     applied = [
         settings.matrix_for(t, "inverse", key) for key in file_keys for t in time_indices
     ]
-    crop = canvas(tuple(moving_shape), reference_shape, applied, keep_overhang)
+    crop = shared_crop(tuple(moving_shape), reference_shape, applied, keep_overhang)
     cropped_shape = tuple(s.stop - s.start for s in crop)
     click.echo(
-        f"Output canvas {cropped_shape} (reference grid {reference_shape}, "
+        f"Output crop {cropped_shape} (reference grid {reference_shape}, "
         f"{'kept overhang' if keep_overhang else 'overlap shared by the applied transforms'})"
     )
 
@@ -485,7 +485,7 @@ def apply_transform_cli(
     """Apply a transform series to positions -- one matrix for all timepoints or one per timepoint.
 
     Takes the `TransformSettings` file written by `estimate-transform`. How it is applied
-    is decided here, not in the file: which timepoints, the canvas (the full reference
+    is decided here, not in the file: which timepoints, the crop (the full reference
     grid, or `--crop-to-overlap` for the box every transform covers), the
     interpolation, the output OME-Zarr version, and which moving channels are
     transformed (`--channels`; default all of them, except that a channel the reference
