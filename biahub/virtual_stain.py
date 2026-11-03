@@ -195,6 +195,24 @@ def _write_timepoints(
             unit.complete()
 
 
+def _norm_meta_at_timepoint(norm_meta: dict, t: int) -> dict:
+    """Select timepoint ``t`` inside every ``timepoint_statistics`` level.
+
+    ``NormalizeSampled(level="timepoint_statistics")`` expects a flat
+    ``{stat_name: value}`` dict, but the store keeps that level nested by
+    timepoint index (``{"0": {...}, "1": {...}}``). VisCy's dataset resolves the
+    current timepoint before the transform runs; this mirrors it for our
+    per-timepoint loop. Other levels pass through unchanged.
+    """
+    return {
+        channel: {
+            level: values[str(t)] if level == "timepoint_statistics" else values
+            for level, values in levels.items()
+        }
+        for channel, levels in norm_meta.items()
+    }
+
+
 def virtual_stain_position(
     config_filepath: Path,
     input_position_path: Path,
@@ -314,8 +332,14 @@ def virtual_stain_position(
                 input_dataset.data[t : t + 1, channel_index : channel_index + 1]
             )
             source = torch.from_numpy(volume).float().to(device)
-            # Apply VisCy's configured normalization via a sample dict.
-            sample = normalize({source_channel: source, "norm_meta": norm_meta})
+            # Apply VisCy's configured normalization via a sample dict, with
+            # timepoint_statistics resolved to this timepoint.
+            sample = normalize(
+                {
+                    source_channel: source,
+                    "norm_meta": _norm_meta_at_timepoint(norm_meta, t),
+                }
+            )
             source = sample[source_channel]
             with torch.inference_mode():
                 prediction = predictor.predict_sliding_windows(

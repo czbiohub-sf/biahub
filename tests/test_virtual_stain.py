@@ -1,12 +1,13 @@
 import numpy as np
 import pytest
+import torch
 
 from iohub.core.registry import set_default_implementation
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
 
 from biahub.utils.config import settings_fingerprint
-from biahub.virtual_stain import _write_timepoints
+from biahub.virtual_stain import _norm_meta_at_timepoint, _write_timepoints
 
 T, C, Z, Y, X = 3, 2, 4, 8, 8
 
@@ -102,6 +103,58 @@ def test_write_timepoints_batches_by_time_shard(tmp_path, implementation):
     calls = []
     _write_timepoints(_predictor(calls), position, T, resume=True, resume_token="a")
     assert calls == []
+
+
+def _norm_meta():
+    """Statistics shaped like ``viscy_data.read_norm_meta`` output (float tensors)."""
+
+    def stats(value):
+        return {"median": torch.tensor(float(value)), "iqr": torch.tensor(2.0)}
+
+    return {
+        "Phase3D": {
+            "fov_statistics": stats(10),
+            "dataset_statistics": stats(20),
+            "timepoint_statistics": {str(t): stats(100 + t) for t in range(T)},
+        }
+    }
+
+
+def test_norm_meta_at_timepoint_selects_timepoint_only():
+    norm_meta = _norm_meta()
+    levels = norm_meta["Phase3D"]
+    resolved = _norm_meta_at_timepoint(norm_meta, 2)["Phase3D"]
+    assert resolved["timepoint_statistics"] is levels["timepoint_statistics"]["2"]
+    assert resolved["fov_statistics"] is levels["fov_statistics"]
+    assert resolved["dataset_statistics"] is levels["dataset_statistics"]
+    # The stored metadata is not mutated.
+    assert set(levels["timepoint_statistics"]) == {"0", "1", "2"}
+
+
+@pytest.mark.parametrize(
+    "level, expected_median",
+    [
+        ("fov_statistics", lambda t: 10),
+        ("dataset_statistics", lambda t: 20),
+        ("timepoint_statistics", lambda t: 100 + t),
+    ],
+)
+def test_normalize_sampled_with_resolved_norm_meta(level, expected_median):
+    """Regression for #283: timepoint_statistics raised KeyError: 'median'."""
+    viscy_transforms = pytest.importorskip("viscy_transforms")
+    normalize = viscy_transforms.NormalizeSampled(
+        keys=["Phase3D"], level=level, subtrahend="median", divisor="iqr"
+    )
+    norm_meta = _norm_meta()
+    for t in range(T):
+        source = torch.full((1, 1, Z, Y, X), 200.0)
+        sample = normalize(
+            {"Phase3D": source, "norm_meta": _norm_meta_at_timepoint(norm_meta, t)}
+        )
+        expected = (200.0 - expected_median(t)) / (2.0 + 1e-8)
+        torch.testing.assert_close(
+            sample["Phase3D"], torch.full_like(source, expected), rtol=1e-5, atol=1e-5
+        )
 
 
 def test_settings_fingerprint_of_mapping_ignores_key_order():
