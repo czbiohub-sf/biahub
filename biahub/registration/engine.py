@@ -517,7 +517,7 @@ def polish(
 
 @dataclass
 class SeriesResult:
-    # Accepted transforms by t. Doubles as the `history` a PreviousSeed reads from.
+    # Accepted transforms by t.
     transforms: dict[int, Transform] = field(default_factory=dict)
     # Every attempted t; nan where estimation failed and nothing repaired it.
     scores: dict[int, float] = field(default_factory=dict)
@@ -561,23 +561,16 @@ def estimate_series(
     seed_policy: SeedPolicy,
     score_fn: ScoreFn,
     time_indices: Iterable[int],
-    history: dict[int, Transform] | None = None,
     journal: RunJournal | None = None,
     on_timepoint: OnTimepoint | None = None,
     keep_seed: bool = False,
 ) -> SeriesResult:
-    """One estimate per timepoint, in the given order.
+    """One estimate per timepoint, in the given order (propagation: `estimate_propagated`).
 
-    `history` is the caller-owned mapping a `PreviousSeed` reads from. It is filled here
-    as timepoints are accepted, so handing the same dict to the seed policy is what makes
-    propagation work; the result's `transforms` IS that dict. An `EstimationError` records
-    nan plus the message for that timepoint and moves on. With `keep_seed` (a seed file:
+    An `EstimationError` records nan plus the message for that timepoint and moves on. With `keep_seed` (a seed file:
     the seed is an earlier result) the seed competes as it is (`_keep_seed`).
     """
-    result = SeriesResult(
-        transforms=history if history is not None else {},
-        journal=journal if journal is not None else RunJournal(),
-    )
+    result = SeriesResult(journal=journal if journal is not None else RunJournal())
     for t in time_indices:
         _forget_blocks(estimator)
         mov_t = np.asarray(mov[t])

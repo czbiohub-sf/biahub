@@ -19,7 +19,6 @@ from biahub.registration.policies import (
     FixedFrame,
     FixedSeed,
     PreviousFrame,
-    PreviousSeed,
 )
 
 IDENTITY = Transform.identity(3)
@@ -99,30 +98,6 @@ def test_failed_timepoint_is_recorded_and_the_series_continues():
     assert sorted(result.transforms) == [0, 2, 3]
     assert np.isnan(result.scores[1])
     assert result.errors == {1: "EstimationError: too few nodes"}
-
-
-def test_previous_seed_propagates_through_the_shared_history_and_resets_after_a_failure():
-    estimator = _MeanShiftEstimator(fail_for_mov_means={2})
-    history = {}
-    config_seed = Transform.from_translation([100.0, 0.0, 0.0])
-
-    result = estimate_series(
-        _constant_frames(5),
-        FixedFrame(0),
-        estimator,
-        PreviousSeed(history, fallback=FixedSeed(config_seed)),
-        _finite_score,
-        range(5),
-        history=history,
-    )
-
-    assert result.transforms is history
-    seeds = [call["seed"] for call in estimator.calls]
-    assert seeds[0] is config_seed
-    assert seeds[1] is history[0]
-    assert seeds[2] is history[1]
-    assert seeds[3] is config_seed, "t=2 failed, so t=3 must restart from the fallback"
-    assert seeds[4] is history[3]
 
 
 def test_series_is_indexed_one_frame_at_a_time():

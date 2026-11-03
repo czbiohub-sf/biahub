@@ -232,26 +232,6 @@ class FixedSeed:
         return self.transform
 
 
-class PreviousSeed:
-    """Propagation: seed t from the last accepted transform.
-
-    Falls back to another policy for t=0 or whenever no previous result exists yet.
-    Reads from an explicit, caller-owned history mapping rather than mutating any
-    settings object in place, so a "config seed" elsewhere keeps meaning the config's
-    seed. The caller writes `history[t] = accepted_transform` after each accepted
-    estimate; this policy never mutates it.
-    """
-
-    def __init__(self, history: dict[int, Transform], fallback: SeedPolicy):
-        self.history = history
-        self.fallback = fallback
-
-    def seed_for(self, t: int) -> Transform:
-        if t - 1 in self.history:
-            return self.history[t - 1]
-        return self.fallback.seed_for(t)
-
-
 class ConsensusSeed:
     """Repair seed from the run's own well-scoring timepoints.
 
