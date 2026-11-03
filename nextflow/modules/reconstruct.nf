@@ -26,7 +26,7 @@
 // resource scheduling, so the CLI must NOT submit its own SLURM jobs.
 // See: examples/submitit_debug_nextflow/2026-05-27-submitit-debug-nextflow-concerns.md
 
-include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory } from './common'
 
 
 process init_apply_inv_tf {
@@ -72,8 +72,8 @@ process compute_transfer_function {
     // FFTs across the granted cores.  8 sits in the sweet spot before FFT
     // thread-scaling tails off.
     cpus 8
-    memory '64 GB'
-    time '30m'
+    memory { retry_memory(64, task) }
+    time { retry_time(30, task) }
 
     input:
     val trigger
@@ -99,7 +99,7 @@ process run_apply_inv_tf {
     label 'cpu'
     clusterOptions { slurm_logs('reconstruct') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
+    memory { retry_memory(meta.mem_gb, task) }
     time { retry_time(meta.time_minutes, task) }
 
     input:

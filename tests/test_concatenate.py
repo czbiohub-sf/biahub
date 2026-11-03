@@ -490,11 +490,19 @@ def test_concatenate_with_cropping(create_custom_plate, tmp_path, sbatch_file):
 
 
 @pytest.mark.parametrize(
-    ["version", "shards_ratio_time"],
-    [["0.4", 1], ["0.5", None], ["0.5", 1], ["0.5", 2], ["0.5", 5]],
+    ["version", "shards"],
+    [
+        ["0.4", None],
+        ["0.5", None],
+        ["0.5", [1, 1, 2, 8, 6]],
+        ["0.5", [2, 1, 2, 8, 6]],
+        ["0.5", [5, 1, 2, 8, 6]],  # an explicit shape is kept as given, even past T = 3
+        ["0.5", "XYZ"],
+        ["0.5", "1KiB"],  # 48 B chunks: the whole volume fits, then timepoints
+    ],
 )
 def test_concatenate_with_custom_chunks(
-    create_custom_plate, tmp_path, sbatch_file, version, shards_ratio_time
+    create_custom_plate, tmp_path, sbatch_file, version, shards
 ):
     """
     Test concatenating with custom chunk sizes
@@ -521,20 +529,20 @@ def test_concatenate_with_custom_chunks(
 
     # Define custom chunk sizes
     chunks = [1, 1, 2, 4, 3]  # [C, Z, Y, X]
-    if version == "0.5":
-        if shards_ratio_time is None:
-            shards_ratio = None
-        else:
-            shards_ratio = [shards_ratio_time, 1, 1, 2, 2]
-    elif version == "0.4":
-        shards_ratio = None
+    expected_shards = {
+        None: None,
+        "XYZ": (1, 1, 4, 8, 6),
+        "1KiB": (2, 1, 4, 8, 6),  # a 384 B volume: two timepoints fit under 1 KiB
+    }.get(shards if not isinstance(shards, list) else "list")
+    if isinstance(shards, list):
+        expected_shards = tuple(shards)  # elements, already whole chunks, taken as given
 
     settings = ConcatenateSettings(
         concat_data_paths=[str(plate_1_path) + "/*/*/*", str(plate_2_path) + "/*/*/*"],
         channel_names=["all", "all"],
         time_indices="all",
         chunks_czyx=chunks[1:],
-        shards_ratio=shards_ratio,
+        shards=shards,
         output_ome_zarr_version=version,
     )
 
@@ -553,10 +561,8 @@ def test_concatenate_with_custom_chunks(
     output_plate = open_ome_zarr(output_path)
     for pos_name, pos in output_plate.positions():
         assert pos.data.chunks == tuple(chunks)
-        if version == "0.5" and shards_ratio is not None:
-            assert pos.data.shards == tuple(
-                c * s for c, s in zip(chunks, shards_ratio, strict=True)
-            )
+        if version == "0.5" and shards is not None:
+            assert pos.data.shards == expected_shards
         np.testing.assert_array_equal(
             pos.data.numpy(),
             np.concatenate(

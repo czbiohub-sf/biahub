@@ -66,11 +66,12 @@ Z_slice: "all"
 #   - [1, 10, 100, 100]: Specify custom chunk sizes
 chunks_czyx: null
 
-# Number of chunks in a shard for each dimension [T, C, Z, Y, X]
-# Options:
-#   - null: No sharding
-#   - [1, 1, 4, 8, 8]: Specify custom shards ratio
-shards_ratio: null
+# Shard geometry (OME-Zarr 0.5 only). Options:
+#   - null: iohub's default, one shard per (t, c) volume
+#   - "5GB": the largest chunk-aligned shard under that size, filling X, Y, Z then T
+#   - "XY" / "XYZ": one shard per plane / per volume
+#   - [5, 1, 86, 1664, 1193]: an explicit TCZYX shape in array elements (C must be 1)
+shards: null
 
 # Version of the OME-Zarr format to use for the output
 # Options:

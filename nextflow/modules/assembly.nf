@@ -28,7 +28,7 @@
 // for 54 positions, half the pipeline's wall-clock, CPU-bound on compressing
 // the sharded output (biahub#301).
 
-include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time } from './common'
+include { parse_resources; slurm_logs; slurm_log_dir; slurm_output_readme; retry_time; retry_memory } from './common'
 
 
 // Create the output plate and emit the RESOURCES line sizing one position's
@@ -66,7 +66,7 @@ process run_concatenate {
     label 'cpu'
     clusterOptions { slurm_logs('assemble') }
     cpus { meta.cpus }
-    memory { "${meta.mem_gb} GB" }
+    memory { retry_memory(meta.mem_gb, task) }
     time { retry_time(meta.time_minutes, task) }
 
     input:

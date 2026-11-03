@@ -87,6 +87,12 @@ workflow {
     check('cap: 27 h base hits wall-time',           retry_time(1620, retry(2, 140, 1619, 1620, 64)), '2880 min')
     check('cap: base above the limit',               retry_time(3000, first), '2880 min')
 
+    // Memory caps at 244 GB (the 250000 MiB node tier) but never drops below the last request.
+    check('memory cap: 128 GB OOM doubles to the cap', retry_memory(64, retry(3, 137, 5, 110, 128)), '244 GB')
+    check('memory cap: at the cap, OOM keeps it',      retry_memory(64, retry(4, 137, 5, 110, 244)), '244 GB')
+    check('memory cap: base above it is kept',         retry_memory(400, first), '400 GB')
+    check('memory cap: above it, OOM keeps it',        retry_memory(400, retry(2, 137, 5, 110, 400)), '400 GB')
+
     // End to end: what the second attempt is actually granted after each exit.
     retried(channel.of(['preempted', 143], ['timeout', 140], ['oom', 137]))
         .subscribe { label, out ->

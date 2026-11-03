@@ -1,4 +1,6 @@
 import os
+import sys
+import types
 
 import numpy as np
 import pytest
@@ -8,6 +10,14 @@ from iohub.ngff import TransformationMeta, open_ome_zarr
 
 # Use submitit debug executor (in-process, no forking) for fast tests
 os.environ["CI"] = "true"
+
+# Run ITK (ANTs) on one thread for the whole suite. ITK reads this once, at its
+# first threaded operation, so it must be set before any test module imports
+# ants. The test volumes are tiny, so threading buys nothing, and with one
+# thread a seeded ANTs registration is bit-repeatable -- which is what
+# test_ants_estimates_are_repeatable checks in-process instead of in a fresh
+# interpreter.
+os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"] = "1"
 
 # iohub's default zarr implementation is a *process-global*. biahub relies on
 # the ``zarrs-python`` (Rust) pipeline for its sharded zarr-v3 writes
@@ -215,3 +225,58 @@ def create_custom_plate():
         return plate_path, plate_dataset
 
     return _create_plate
+
+
+# --- cellpose stand-in shared by segment/track tests (the test extra does not install cellpose)
+
+
+class RecordingModel:
+    """Stand-in for cellpose.models.CellposeModel that records how it is used."""
+
+    built = []
+    evaluated = []
+
+    def __init__(self, gpu=False, pretrained_model="cpsam_v2", model_type=None, device=None):
+        # Like cellpose 4: model_type is accepted and ignored.
+        self.pretrained_model, self.device = pretrained_model, device
+        RecordingModel.built.append(pretrained_model)
+
+    def eval(
+        self,
+        x,
+        channels=None,
+        channel_axis=None,
+        z_axis=None,
+        diameter=None,
+        cellprob_threshold=0.0,
+        flow_threshold=0.4,
+        do_3D=False,
+        anisotropy=None,
+        min_size=15,
+        stitch_threshold=0.0,
+    ):
+        # Cellpose 4 refuses a z axis for 2D processing (cellpose/transforms.py:491).
+        if z_axis is not None and not do_3D and not stitch_threshold:
+            raise ValueError("2D image processing selected, but z_axis is not None.")
+        RecordingModel.evaluated.append(np.array(x))
+        # Like cellpose: masks drop the channel axis and come back squeezed.
+        shape = x.shape[1:] if channel_axis == 0 else x.shape
+        return np.ones(shape, dtype=np.uint16).squeeze(), None, None
+
+
+@pytest.fixture()
+def fake_cellpose(monkeypatch, tmp_path):
+    models = types.ModuleType("cellpose.models")
+    models.CellposeModel = RecordingModel
+    models.MODEL_NAMES = ["cpsam_v2", "cpsam", "cpdino", "cpdino-vitb"]
+    models.get_user_models = lambda: []
+    package = types.ModuleType("cellpose")
+    package.models = models
+    monkeypatch.setitem(sys.modules, "cellpose", package)
+    monkeypatch.setitem(sys.modules, "cellpose.models", models)
+    monkeypatch.setenv("CELLPOSE_LOCAL_MODELS_PATH", str(tmp_path / "no-weights"))
+    RecordingModel.built, RecordingModel.evaluated = [], []
+    from biahub import segment
+
+    segment._MODEL_CACHE.clear()  # models are cached per process
+    return RecordingModel

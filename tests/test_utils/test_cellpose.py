@@ -103,31 +103,51 @@ def _fake_cellpose(monkeypatch, cellpose_model):
     monkeypatch.setitem(sys.modules, "cellpose.models", models)
 
 
+def _no_model(*args, **kwargs):
+    raise AssertionError("warming must not build the network on the head node")
+
+
 def test_warm_cellpose_weights_returns_the_resolved_checkpoint(tmp_path, monkeypatch):
-    checkpoint = tmp_path / "models" / "cpsam_v2"
+    checkpoint = tmp_path / "models" / "cpdino"
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_bytes(b"downloaded by warming")
+    checked = []
 
-    class FakeModel:
-        def __init__(self, gpu=False, pretrained_model="cpsam_v2"):
-            # --init runs on the head node, which has no GPU to ask for.
-            assert gpu is False
-            assert pretrained_model == "cpdino"
-            self.pretrained_model = str(checkpoint)
+    def cache_model_path(name):
+        assert name == "cpdino"
+        return str(checkpoint)
 
-    _fake_cellpose(monkeypatch, FakeModel)
+    _fake_cellpose(monkeypatch, _no_model)
+    sys.modules["cellpose.models"].cache_model_path = cache_model_path
+    sys.modules["cellpose.models"].get_backbone = checked.append
 
     assert warm_cellpose_weights("cpdino") == checkpoint
+    assert checked == [str(checkpoint)]
 
 
-def test_warm_cellpose_weights_survives_an_unusable_cellpose(monkeypatch):
+def test_warm_cellpose_weights_uses_a_path_as_is(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "my_model"
+    checkpoint.write_bytes(b"user weights")
+
+    def cache_model_path(name):
+        raise AssertionError("a path must not be resolved into the weights directory")
+
+    _fake_cellpose(monkeypatch, _no_model)
+    sys.modules["cellpose.models"].cache_model_path = cache_model_path
+    sys.modules["cellpose.models"].get_backbone = lambda path: "sam_vitl"
+
+    assert warm_cellpose_weights(str(checkpoint)) == checkpoint
+
+
+def test_warm_cellpose_weights_survives_an_unusable_cellpose(tmp_path, monkeypatch):
     """Warming is an optimisation: --init must not fail when it cannot happen."""
 
-    class Unavailable:
-        def __init__(self, gpu=False, pretrained_model="cpsam_v2"):
-            raise RuntimeError("checkpoint is corrupt")
+    def corrupt(path):
+        raise RuntimeError("PytorchStreamReader failed reading zip archive")
 
-    _fake_cellpose(monkeypatch, Unavailable)
+    _fake_cellpose(monkeypatch, _no_model)
+    sys.modules["cellpose.models"].cache_model_path = lambda name: str(tmp_path / name)
+    sys.modules["cellpose.models"].get_backbone = corrupt
 
     assert warm_cellpose_weights() is None
 

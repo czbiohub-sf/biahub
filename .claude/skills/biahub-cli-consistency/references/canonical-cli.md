@@ -10,8 +10,8 @@ Every module is layered; the pairing of layers is the core contract.
 
 | Layer | Name | Signature | Required? | Examples |
 |---|---|---|---|---|
-| 1. Array compute | `<verb>_zyx()` | `(zyx_array, params) -> array`, pure, no I/O | **Only** for compute methods *internal to biahub* | `deskew_zyx`, `fast_deskew_zyx`, `flat_field_zyx` |
-| 1b. CZYX wrapper | `_<verb>_czyx()` | picklable CZYX adapter passed to `process_single_position` | Only with layer 1 + `process_single_position` | `_deskew_czyx`, `_fast_deskew_czyx`, `_flat_field_czyx` |
+| 1. Array compute | `<verb>_zyx()` | `(zyx_array, params) -> array`, pure, no I/O | **Only** for compute methods *internal to biahub* | `fast_deskew_zyx`, `flat_field_zyx` |
+| 1b. CZYX wrapper | `_<verb>_czyx()` | picklable CZYX adapter passed to `process_single_position` | Only with layer 1 + `process_single_position` | `_fast_deskew_czyx`, `_flat_field_czyx` |
 | 2. API function | `<verb>()` | `(paths, config, ...) -> None`, operates on zarr stores | **Every** command | `deskew`, `flat_field`, `virtual_stain`, `apply_inverse_transfer_function` |
 | 3. CLI function | `<verb>_cli()` | thin `@click.command` wrapper, delegates to layer 2 | **Every** command | `deskew_cli`, `apply_inverse_transfer_function_cli` |
 
@@ -46,7 +46,7 @@ separate API function) is a defect. `reconstruct.py` currently does this — fla
 1. **Imports**, isort-grouped (stdlib / third-party / iohub / biahub), `lines-between-types = 1`.
    Optional module-level setup (e.g. deskew's `torch.multiprocessing.set_start_method`).
 2. **Pure compute function(s) `<verb>_zyx()`** — operate on a ZYX `np.ndarray` /
-   `torch.Tensor`, numpydoc docstrings. e.g. `deskew_zyx`, `flat_field_zyx`.
+   `torch.Tensor`, numpydoc docstrings. e.g. `fast_deskew_zyx`, `flat_field_zyx`.
 3. **`_<verb>_czyx()` wrapper** — top-level (picklable) CZYX adapter passed to
    `process_single_position`. Only when the command uses `process_single_position`.
    (virtual-stain instead defines a bespoke `virtual_stain_position`, which is an

@@ -23,7 +23,11 @@ from biahub.cli.parsing import (
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.core.transform import Transform
 from biahub.settings import ConcatenateSettings
-from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import (
+    apply_sbatch_overrides,
+    estimate_resources,
+    get_submitit_cluster,
+)
 from biahub.utils.config import model_to_yaml, yaml_to_model
 
 # Cropping: the largest box inside an overlap. Two searches, both kept: `find_lir` (the
@@ -405,7 +409,7 @@ def estimate_crop(
 
     # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
     cluster = get_submitit_cluster(local)

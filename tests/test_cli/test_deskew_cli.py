@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import torch
 
 from click.testing import CliRunner
 
@@ -30,14 +31,14 @@ def test_average_n_slices():
     assert averaged_data3.shape == deskew._get_averaged_shape(data.shape, 1)
 
 
-def test_deskew_data():
-    raw_data = np.random.random((2, 3, 4))
+def test_fast_deskew_zyx():
+    raw_data = torch.rand((2, 3, 4), dtype=torch.float32)
     px_to_scan_ratio = 0.386
     pixel_size_um = 1.0
     ls_angle_deg = 36
     average_n_slices = 1
     keep_overhang = True
-    deskewed_data = deskew.deskew_zyx(
+    deskewed_data = deskew.fast_deskew_zyx(
         raw_data,
         ls_angle_deg,
         px_to_scan_ratio,
@@ -48,7 +49,7 @@ def test_deskew_data():
     assert deskewed_data[0, 0, 0] != 0  # indicates incorrect shifting
 
     assert (
-        deskewed_data.shape
+        tuple(deskewed_data.shape)
         == deskew.get_deskewed_data_shape(
             raw_data.shape,
             ls_angle_deg,
@@ -57,6 +58,18 @@ def test_deskew_data():
             pixel_size_um=pixel_size_um,
         )[0]
     )
+
+
+def test_deskew_zyx_is_a_deprecated_front_end_to_fast_deskew_zyx():
+    raw_data = np.random.random((2, 3, 4))
+    args = (36, 0.386, True)
+    with pytest.warns(DeprecationWarning, match="fast_deskew_zyx"):
+        deskewed_data = deskew.deskew_zyx(raw_data, *args, average_n_slices=1)
+    expected = deskew.fast_deskew_zyx(
+        torch.from_numpy(raw_data.astype(np.float32)), *args, average_n_slices=1
+    ).numpy()
+    assert isinstance(deskewed_data, np.ndarray)
+    np.testing.assert_array_equal(deskewed_data, expected)
 
 
 def test_deskew_cli(tmp_path, example_plate, example_deskew_settings):
@@ -197,7 +210,7 @@ def test_deskew_overhang_only_dataset_error():
         deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=False)
 
     with pytest.raises(ValueError, match="Dataset contains only overhang"):
-        deskew.deskew_zyx(data, angle, ratio, keep_overhang=False)
+        deskew.fast_deskew_zyx(torch.from_numpy(data), angle, ratio, keep_overhang=False)
 
     # Should succeed with keep_overhang=True
     out_shape, _ = deskew.get_deskewed_data_shape(shape, angle, ratio, keep_overhang=True)

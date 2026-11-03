@@ -1,0 +1,37 @@
+# biahub track, tracker: ultrack (the default; the mantis-v2 A549 config).
+# ultrack re-segments from the segment labels and links; tuned for A549 at 0.1133 um/px.
+# Tracks the labels `biahub segment` wrote into the projected plate (segment.yml).
+
+output_mode: "2D"                  # the Z=1 projected plate; track does not project
+fov: "*/*/*"
+
+# The label image to track: segment.yml's model name, labels/nuclei in every position.
+labels: nuclei
+# The tracked labels go to labels/nuclei_ultrack, with tracks_nuclei_ultrack.geff and
+# tracks_nuclei_ultrack_<fov>.csv (<fov> = row_col_fov), so each tracker's run sits
+# beside the others in the plate (the pipeline's own run is labels/tracks_nuclei).
+# Rename it to keep a tuning run beside the previous one.
+output_label: nuclei_ultrack
+
+# Drop a daughter that lives 3 frames or fewer (VS hallucinations, neighbours).
+min_sibling_length: 3
+
+# Smoothing (px) of the labels' contours before ultrack builds its own hypotheses.
+labels_sigma: 5.0
+
+tracker: ultrack
+tracking_config:
+  segmentation_config:
+    min_area: 2500
+    max_area: 80000
+    min_frontier: 0.5
+    max_noise: 0.00
+  linking_config:
+    max_distance: 15
+    distance_weight: -0.0001
+    max_neighbors: 3
+  tracking_config:
+    disappear_weight: -0.0001
+    appear_weight: -0.001
+    division_weight: -0.0001
+    bias: 0.0001

@@ -20,14 +20,14 @@ def implementation(request):
     return request.param
 
 
-def _output_position(tmp_path, shards_ratio=None):
+def _output_position(tmp_path, shards=None):
     store = tmp_path / "output.zarr"
     create_empty_plate(
         store_path=store,
         position_keys=[("A", "1", "0")],
         channel_names=["Nuclei", "Membrane"],
         shape=(T, C, Z, Y, X),
-        shards_ratio=shards_ratio,
+        shards=shards,
         version="0.5",
     )
     return store / "A" / "1" / "0"
@@ -91,7 +91,7 @@ def test_write_timepoints_recomputes(tmp_path, implementation, resume, token):
 
 def test_write_timepoints_batches_by_time_shard(tmp_path, implementation):
     """With two timepoints per shard, an interruption inside a shard recomputes it whole."""
-    position = _output_position(tmp_path, shards_ratio=(2, 1, 1, 1, 1))
+    position = _output_position(tmp_path, shards=(2, 1, Z, Y, X))  # two timepoints per shard
     with pytest.raises(RuntimeError):
         _write_timepoints(
             _predictor([], fail_at=1), position, T, resume=True, resume_token="a"

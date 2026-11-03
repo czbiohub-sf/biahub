@@ -48,7 +48,7 @@ Which root depends on the dataset family:
 | family | cues in the name | output root | deliverable |
 |---|---|---|---|
 | zebrafish / neuromast / dynatrack | `dynatrack`, `hpf`, `dpf`, `neuromast`, `cldnb`, `she`, `myo6b`, `zebrafish` | `/hpc/projects/tlg2_mantis/<DATASET>` | assemble (`4-assemble`) — **no tracking**, see `caveats.md` §4 |
-| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | assemble + track (`4-assemble`, `5-track`) |
+| cell line / organelle / infection | `A549`, `HEK`, `iPSC`, organelle genes (`SEC61B`, `TOMM20`, `G3BP1`, `MAP4`, `CAAX`, `H2B`), viruses (`DENV`, `ZIKV`, `HSV1`) | `/hpc/projects/intracellular_dashboard/organelle_dynamics/<DATASET>` | assemble + project + segment + track (`4-assemble/<DATASET>.zarr` and `4-assemble/<DATASET>_proj.zarr`; segment and track write into the latter) |
 | instrument QC / calibration | `argolight`, `beads`, `psf`, `alignment`, `illumination`, `fluorescein`, `first_light`, `mantis_v2_*` | *no default* — ask. These are usually not reconstructed. | — |
 
 Neighbouring roots that exist and are **not** the default target — do not use
@@ -71,7 +71,11 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 ├── 2-reconstruct/<DATASET>.zarr
 ├── 3-virtual-stain/<DATASET>.zarr
 ├── 4-assemble/<DATASET>.zarr       # the deliverable
-├── 5-track/<DATASET>.zarr          # A549 only — not run for neuromast
+├── 4-assemble/<DATASET>_proj.zarr  # A549 only — the 2D (Z=1) companion plate; with
+│                                   #   segmentation and tracking, each position also
+│                                   #   holds labels/<model> (segment),
+│                                   #   labels/tracks_<model>, tracks.geff and
+│                                   #   tracks_<row>_<col>_<fov>.csv (track)
 ├── qc/
 │   ├── report/index.html           # one report, one tab per QC'd store
 │   └── report_spec.yaml            # written at launch, before any QC task
@@ -81,8 +85,11 @@ layout is defined once in `nextflow/mantis-v2.nf` (`directory_layout()`):
 │   ├── reconstruct.yml
 │   ├── virtual_stain.yml           # older runs name this predict.yml
 │   ├── concatenate.yml
+│   ├── project.yml                 # A549 only
+│   ├── segment.yml                 # A549 only
 │   ├── track.yml                   # A549 only
-│   └── qc/{assemble,track}/        # QC configs, one dir per store kind
+│   ├── qc_project.yaml             # A549 only
+│   └── qc.yaml                     # QC config for the assembled store
 ├── nextflow/
 │   ├── work/                       # Nextflow work dir (default: <OUTPUT>/nextflow/work)
 │   ├── slurm_output/<step>/%x_%j.{out,err}

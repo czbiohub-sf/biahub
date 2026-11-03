@@ -1,0 +1,29 @@
+# biahub track, tracker: tracksdata (ILP on the segment labels as they are).
+# Defaults: the A549 benchmark's full-movie run (not yet tuned). Distances in um.
+# Tracks the labels `biahub segment` wrote into the projected plate (segment.yml).
+
+output_mode: "2D"                  # the Z=1 projected plate; track does not project
+fov: "*/*/*"
+
+# The label image to track: segment.yml's model name, labels/nuclei in every position.
+labels: nuclei
+# The tracked labels go to labels/nuclei_tracksdata, with
+# tracks_nuclei_tracksdata_<fov>.csv (<fov> = row_col_fov; no .geff yet for tracksdata),
+# so each tracker's run sits beside the others in the plate (the pipeline's own run is
+# labels/tracks_nuclei). Rename it to keep a tuning run beside the previous one.
+output_label: nuclei_tracksdata
+
+# Drop a daughter that lives 3 frames or fewer (VS hallucinations, neighbours).
+min_sibling_length: 3
+
+tracker: tracksdata
+tracksdata_config:
+  distance_threshold_um: 22.66     # candidate edges to the next frame
+  n_neighbors: 3
+  distance_norm_um: 11.33          # edge weight = -IoU * exp(distance / distance_norm_um)
+  node_weight: -2.0
+  appearance_weight: 5.0
+  disappearance_weight: 5.0
+  division_weight: 1.0             # a cost: lower it to allow more divisions
+  border_margin_um: 6.80
+  border_appearance_weight: -1.0

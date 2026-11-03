@@ -22,8 +22,8 @@ Every CLI module is layered. When reviewing, first classify each function into a
 then check the layer's rule:
 
 1. **Array-in / array-out compute functions** — pure `(array, params) -> array`, no I/O.
-   **Named `<verb>_zyx()`** (operating on a ZYX volume), e.g. `deskew_zyx()`,
-   `flat_field_zyx()`; a qualified variant keeps the suffix (`fast_deskew_zyx()`).
+   **Named `<verb>_zyx()`** (operating on a ZYX volume), e.g. `fast_deskew_zyx()`,
+   `flat_field_zyx()`; a qualified variant keeps the suffix.
    **Required only for reconstruction/compute methods internal to biahub.** A CLI whose
    heavy lifting comes from an external library is *exempt* — do NOT invent one. Exempt
    examples: `apply_inverse_transfer_function` (delegates to `waveorder`'s
@@ -31,7 +31,7 @@ then check the layer's rule:
    (delegates to cytoland's `AugmentedPredictionVSUNet`).
    The CZYX multiprocessing wrapper around a `<verb>_zyx()` function (the picklable
    callable passed to `process_single_position`) is **named `_<verb>_czyx()`**, e.g.
-   `_deskew_czyx()`, `_flat_field_czyx()`.
+   `_fast_deskew_czyx()`, `_flat_field_czyx()`.
 2. **API function** — `<verb>(paths_to_data, config, ...) -> None`, operating on zarr
    stores given paths + config. **Required for every CLI.** This is the orchestrator:
    `deskew`, `flat_field`, `virtual_stain`, `apply_inverse_transfer_function`. It must be

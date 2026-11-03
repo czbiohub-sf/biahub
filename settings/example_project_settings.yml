@@ -1,0 +1,71 @@
+# biahub project: 3D plate -> 2D plate (Z=1). One entry per OUTPUT channel, in output
+# order; the key is the input channel's name. Input channels not listed here are dropped
+# (the command prints which).
+#
+# method: max | mean | sum | slice
+#   max/mean/sum reduce the selected planes; slice keeps one plane. The output plate
+#   keeps the input dtype unless a channel uses mean or sum, which make it float32.
+# z: which planes feed the projection. Omit it for max/mean/sum over the whole stack.
+#   start, stop:   absolute planes, half-open [start, stop) like time_indices in concatenate
+#   center:        a plane index, or "focus" for the in-focus plane found on focus.channel.
+#                  slice takes center alone; max/mean/sum take center with below/above.
+#   below, above:  the window [center - below, center + above); `above` counts the
+#                  center plane itself, so the window has below + above planes.
+#   step:          keep every step-th plane of the selection (default 1)
+# A selection that runs past the stack is clipped to it.
+
+channels:
+  # max over the whole stack
+  membrane_prediction:
+    method: max
+
+  # max over an explicit range, every 2nd plane: z = 10, 12, ..., 48
+  nuclei_prediction:
+    method: max
+    z: {start: 10, stop: 50, step: 2}
+
+  # sum over 21 planes around a manually chosen center: z = 20 .. 40
+  GFP:
+    method: sum
+    z: {center: 30, below: 10, above: 11}
+
+  # mean over 60 planes starting 20 below the in-focus plane: z = focus-20 .. focus+39
+  RFP:
+    method: mean
+    z: {center: focus, below: 20, above: 40}
+
+  # single plane, chosen manually
+  mCherry:
+    method: slice
+    z: {center: 42}
+
+  # single plane, the in-focus plane
+  Phase3D:
+    method: slice
+    z: {center: focus}
+
+# Required when any channel uses `center: focus`. The focus criterion is the registration
+# engine's (FocusSettings): waveorder's transverse band on a centre crop, with the
+# detection NA and illumination wavelength in micrometres; the pixel size comes from the
+# store. The plane of each timepoint is recorded in the output position's
+# `biahub-project` metadata.
+focus:
+  channel: Phase3D           # input channel the focus is found on (need not be an output)
+  per: fov                   # fov: one plane per position, the median over timepoints
+                             # timepoint: one plane per timepoint, so the window follows Z drift
+  center_crop_xy: [800, 800] # (X, Y) centre crop the focus is measured on
+  na_det: 1.35
+  lambda_ill: 0.5
+
+# Output chunk shape [C, Z, Y, X] and shard geometry, as in concatenate. null takes
+# iohub's defaults: one-frame 256 x 256 chunks, one (t, c) frame per shard. shards is a
+# size target such as "200MB" (the largest chunk-aligned shard under it, filling the
+# frame and then timepoints; C is never sharded), "XY" / "XYZ" (one shard per plane /
+# volume), or an explicit TCZYX shape in array elements. For a timelapse a size target
+# gives shards of many timepoints by the full frame; see nextflow/configs/a549/project.yml.
+# Sharding needs OME-Zarr 0.5.
+chunks_czyx: null
+shards: null
+
+# When null, keep the OME-Zarr version of the input store.
+output_ome_zarr_version: null

@@ -22,7 +22,11 @@ from biahub.cli.parsing import (
     sbatch_to_submitit,
 )
 from biahub.settings import DeconvolveSettings
-from biahub.utils.cluster import estimate_resources, get_submitit_cluster
+from biahub.utils.cluster import (
+    apply_sbatch_overrides,
+    estimate_resources,
+    get_submitit_cluster,
+)
 from biahub.utils.config import yaml_to_model
 from biahub.utils.ngff import get_output_paths, resolve_ome_zarr_version
 
@@ -164,7 +168,7 @@ def deconvolve_cli(
 
     # Override defaults if sbatch_filepath is provided
     if sbatch_filepath:
-        slurm_args.update(sbatch_to_submitit(sbatch_filepath))
+        slurm_args = apply_sbatch_overrides(slurm_args, sbatch_to_submitit(sbatch_filepath))
 
     # Run locally or submit to SLURM
     cluster = get_submitit_cluster(local)

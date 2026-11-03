@@ -3,13 +3,15 @@ name: reconstruct-with-nextflow
 description: >-
   Run a mantis-v2 microscope dataset through the biahub Nextflow reconstruction
   pipeline (nextflow/mantis-v2.nf: flat-field → deskew → reconstruct →
-  virtual-stain → assemble → track → QC) on the Bruno HPC cluster. Assemble,
-  track and QC are optional and selected per dataset family: A549 runs assemble
-  + track + QC, neuromast runs assemble + QC and no tracking. Locates the raw
+  virtual-stain → assemble → project → segment → track → pyramid → QC) on the Bruno
+  HPC cluster. Assemble, project, segment, track and QC are optional and selected per
+  dataset family: A549 runs all of them, neuromast runs assemble + QC and no
+  segmentation or tracking; pyramids are on whenever assemble runs. Locates the raw
   acquisition under /hpc/instruments/cm.mantis, picks the output project
   directory, scaffolds configs, launches the run in a tmux session in the
-  foreground so it can be watched, recovers from Lustre/torn-shard I/O errors,
-  and reports a summary including the QC verdict. Use when asked to "reconstruct", "run the pipeline
+  foreground so it can be watched, monitors it unattended every 30 minutes
+  (relaunching on transient Lustre/torn-shard I/O errors), and reports a
+  summary including the QC verdict. Use when asked to "reconstruct", "run the pipeline
   on", or "process" a named mantis-v2 dataset.
 ---
 
@@ -17,6 +19,8 @@ description: >-
 
 Invocation: `/reconstruct-with-nextflow <DATASET_NAME>`, or any request to
 run/reconstruct/process a mantis-v2 dataset by name.
+`/reconstruct-with-nextflow monitor <OUTPUT>` runs one monitoring pass over a
+launched run and nothing else (§9a); the 30-minute loop of §9 fires it.
 
 **Never launch before the user approves a plan.** Steps 1–5 are read-only
 investigation; step 6 presents the plan; nothing is written to disk until the
@@ -77,7 +81,7 @@ git ls-remote https://github.com/czbiohub-sf/imaging-qc-pipeline HEAD >/dev/null
 Still refused after logging in means their account lacks access to that repo,
 which no local setup can fix — **tell them to ask a biahub developer (Ivan,
 Taylla) to be added**, and offer to continue without QC by dropping `--qc_config`
-and `--qc_track_config` (§7). The rest of the pipeline needs no GitHub
+(§7). The rest of the pipeline needs no GitHub
 credential at all, so this never blocks a reconstruction.
 
 A user who already uses SSH keys for GitHub needs nothing here; if they would
@@ -173,10 +177,11 @@ say which you think it is and let the user decide. A fresh reprocess goes to a
 ## 5. Start from the configs on `main`
 
 The templates in `<BIAHUB>/nextflow/configs/{a549,zebrafish}/` are the source
-of truth — they version with the pipeline and are reviewed. QC configs sit with them,
-one self-contained file per store: `qc.yaml` for the assembled store and
-`qc_track.yaml` for the tracking store. They carry `.yaml` rather than `.yml`
-because imaging-qc loads a stage config through Hydra, which strips the
+of truth — they version with the pipeline and are reviewed. The QC config sits with
+them, one self-contained `qc.yaml` for the assembled store; A549's
+`qc_project.yaml` also counts cells in the tracked label image tracking writes
+into the projected plate. It carries `.yaml`
+rather than `.yml` because imaging-qc loads a stage config through Hydra, which strips the
 extension and looks for `<stem>.yaml`. A previous run's
 `configs/` directory is a fallback only: an unreviewed snapshot that drifts
 with the schema and carries dataset-specific edits.
@@ -191,7 +196,7 @@ the next dataset in the family would also need), fix it in a PR against
 `nextflow/configs/<family>/`, stating which dataset exposed it. Genuinely
 per-dataset values stay in the run directory.
 
-### 5a. Check the QC channel filters against the stores they will QC
+### 5a. Check the channel couplings: QC filters, project.yml, segment.yml, track.yml
 
 Once the configs are edited, run this from the biahub checkout:
 
@@ -206,13 +211,33 @@ The stores QC runs over do not exist yet — the pipeline's init phase creates
 them — so the script predicts their channels from the configs that produce
 them: raw channel names for the deskewed data, waveorder's
 `output_channel_names` for the phase channel, virtual-stain's `target_channel`
-for the predictions, and `<track.yml target_channel>_labels` for the tracking
-store.
+for the predictions, and `project.yml`'s keys for the projected plate.
 
-**That last one is the coupling that actually breaks.** `qc_track.yaml` names
-`nuclei_prediction_labels`, which only resolves if `track.yml` says
-`target_channel: nuclei_prediction` — two files with no shared source of truth,
-and changing one is the ordinary way to desynchronise them.
+**`project.yml` against the assembled plate.** When `configs/project.yml`
+exists the script also checks it both ways. A channel in `project.yml` that the
+assembled plate will not have is a `MISS` (exit 1): `biahub project --init`
+refuses it, so fix the name now — the raw fluorescence names are the camera
+strings of this acquisition and are the usual mismatch. An assembled channel
+that `project.yml` does not list is printed as `NOT PROJECTED`; that is a
+warning, not a failure (`biahub project` drops it with a warning), **but the
+intention of the pipeline is that every assembled channel is projected unless
+the user decided otherwise**, so carry the list into the pre-run plan (step 6
+of §7) and ask the user whether to add each one or leave it out on purpose.
+The script also checks that `segment.yml`'s model `channels` are channels
+`project.yml` writes, since segment reads the projected plate, and that
+`track.yml`'s `labels` is a `segment.yml` model name, since track reads the
+label image segment wrote (`labels/<model>`).
+
+**`qc_project.yaml` against the projected plate, `segment.yml` and `track.yml`
+— the coupling that actually breaks.** Segment writes `labels/<model>` into each
+position of the plate it reads and tracking writes `labels/tracks_<model>`
+beside it. `qc_project.yaml`'s `instance_count` names the tracked one, `label:
+tracks_nuclei`, and its anchor `channels: [nuclei_prediction]`, the channel the
+labels were segmented from. The label only resolves if `track.yml` says `labels:
+nuclei` and `segment.yml` has a model `nuclei`; the anchor must be that model's
+channel and a channel `project.yml` writes — four files with no shared source of
+truth, and changing one is the ordinary way to desynchronise them. The script
+checks all of it when `qc_project.yaml` exists.
 
 Since imaging-qc#226 the pipeline refuses an unknown channel name itself, at
 `plan-stage`, so a mistake fails during the init phase rather than silently
@@ -323,13 +348,24 @@ Do not run anything yet. Show the user:
    what was mismatched and how it was resolved.
 6. **The steps this run will perform, listed in order.** Reconstruction proper —
    flat-field → deskew → reconstruct → virtual-stain — always runs; assemble,
-   track and QC run only if their config is passed (biahub#306). Defaults by
-   family, which is what to present unless the user says otherwise:
+   project, segment, track and QC run only if their config is passed
+   (biahub#306). Project turns the assembled 3D plate into the 2D (Z=1) plate
+   that 2D segmentation and tracking read (neither selects or projects
+   Z-planes); segment writes the cellpose labels into that plate and track
+   links them (`biahub track` no longer segments), so `--segment_config` and
+   `--track_config` go with `--project_config`. Defaults by family, which is
+   what to present unless the user says otherwise:
 
    | family | steps |
    |---|---|
-   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → track → QC** |
-   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → QC** (no tracking) |
+   | A549 / cell-line / organelle | flat-field → deskew → reconstruct → virtual-stain → **assemble → project → segment → track → pyramid → QC** |
+   | neuromast / zebrafish / dynatrack | flat-field → deskew → reconstruct → virtual-stain → **assemble → pyramid → QC** (no projection, segmentation or tracking) |
+
+   Pyramid is on by default whenever assemble runs: it adds two coarser levels
+   (3 in total, DCA v0.2) to every image and label image of the assembled and
+   projected plates, in place, once segmentation and tracking have finished
+   writing into them. QC is the very last step and waits for the pyramids.
+   `--pyramid_levels 1` skips them.
 
    Write the list out in the plan rather than naming the family, and say which
    optional steps are being skipped and why. If the user asks to skip anything
@@ -339,12 +375,23 @@ Do not run anything yet. Show the user:
    that tracking is simply not run — there is no tracking by-product any more
    (`caveats.md` §4).
 
+   **When project runs, list what it projects.** State each assembled channel
+   with its `project.yml` method, and name any assembled channel the config
+   does not list (§5a's `NOT PROJECTED` lines). Those need a decision from the
+   user before launch: add the channel to `project.yml`, or confirm it is left
+   out on purpose. Do not launch with an unprojected channel the user has not
+   seen — the pipeline's intention is that every assembled channel is
+   projected unless the user explicitly decided otherwise.
+
    **State the directory numbers this run will produce.** The number is the
    step's position among the steps performed, not a fixed label, so a neuromast
-   run writes `4-assemble` as its last directory and an A549 run writes
-   `4-assemble` then `5-track`. Older A549 runs on disk say `5-assemble` /
-   `4-track`, from when the numbers were fixed — say so if the user is comparing
-   against one.
+   run and an A549 run both end at `4-assemble`: project writes its plate
+   beside the assembled one as `4-assemble/<DATASET>_proj.zarr`, segment
+   writes its label images into that plate and tracking its tracked labels and
+   tracks; none of the three has a directory of its own. Older A549 runs on
+   disk also have `5-track` (or `5-assemble` /
+   `4-track`, from when the numbers were fixed) — say so if the user is
+   comparing against one.
 7. Known caveats that apply to this dataset.
 8. Rough wall-time and that `-resume` is on.
 9. Whether Slack notifications are on, and who will be @-mentioned at run end.
@@ -359,8 +406,9 @@ Do not run anything yet. Show the user:
     pipeline deletes the flat-field, deskew, reconstruct and virtual-stain
     directories, the `slurm_output/` placeholders and `.iohub-progress/` resume
     markers beside the final stores, and the Nextflow work directory. Only the
-    assembled store, the tracking store, the QC report and the logs under
-    `nextflow/` remain, and the run is final: any rerun
+    assembled and projected stores (with the segmentation and tracking labels
+    and the tracks inside the latter), the QC report
+    and the logs under `nextflow/` remain, and the run is final: any rerun
     recomputes from raw. The template's `CLEANUP_INTERMEDIATES="auto"` lets the
     pipeline decide at launch (`cleanup_decision` in
     `nextflow/modules/cleanup.nf`); check `concatenate.yml` now so the plan says
@@ -396,13 +444,16 @@ copied file's group bits follow the *source* file's mode — `cp` from the repo
 (644) yields `rw-r--r--`. Hence the `chmod` after every copy. Plain `cp` only:
 `cp -p`/`-a` would also carry over the checkout's group.
 
-The run script passes all four optional configs — `--concatenate_config`,
-`--track_config`, `--qc_config` (`qc.yaml`), `--qc_track_config`
-(`qc_track.yaml`) — so an A549 run needs no edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
+The run script passes all six optional configs — `--concatenate_config`,
+`--project_config`, `--segment_config`, `--track_config`, `--qc_config`
+(`qc.yaml`), `--qc_project_config` (`qc_project.yaml`) — so an A549 run needs no
+edit. **For a neuromast/zebrafish run, or any step the user asked to skip,
 DELETE that flag's line** from the `nextflow run` call and note the skip in a
-comment above it, so the script still records what this run did. A neuromast run
-deletes `--track_config` and `--qc_track_config`; neither `track.yml` nor
-`qc_track.yaml` need exist for that family, and neither does for zebrafish.
+comment above it, so the script still records what this run did. A neuromast
+run deletes `--project_config`, `--segment_config`, `--track_config` and
+`--qc_project_config`; none of `project.yml`, `segment.yml`, `track.yml` or
+`qc_project.yaml` need exist for that family, and none does for zebrafish.
+`--qc_track_config` is gone: passing it errors at launch.
 
 Delete rather than comment: a `#` inside a backslash-continued command does not
 start a comment line — the continuation swallows it, every flag below is dropped
@@ -478,19 +529,96 @@ call `biahub`/`viscy` bare (ENVIRONMENT CONTRACT in
 `nextflow run`; `check_environment()` aborts at launch if the tools are
 missing. Before syncing, run the out-of-band-package check in `caveats.md` §11.
 
-## 9. Monitor
+## 9. Monitor — unattended, every 30 minutes
 
-Follow `references/monitoring.md`: poll `squeue -u $USER`, the tail of
-`<OUTPUT>/.nextflow.log`, and `<OUTPUT>/nextflow/slurm_output/<step>/*_<jobid>.out`
-at a few minutes' interval — these runs take hours to days.
+As soon as §8's launch check passes, start the monitoring loop yourself, without
+waiting to be asked (Skill tool, skill `loop`):
+
+```
+/loop 30m /reconstruct-with-nextflow monitor <OUTPUT>
+```
+
+Each firing runs one monitoring pass (§9a) and ends. A run is never left
+unwatched: a run that dies at 3 a.m. on a transient storage error is relaunched
+by the next pass instead of waiting for someone to notice it. Tell the user the
+loop is running and how to stop it. **The loop lives in this Claude Code
+session.** If the session exits, monitoring stops; re-arm it from a new session
+with the same `/loop` line. The pass is cheap: one status script, one line of
+output when nothing is wrong.
 
 **The pipeline notifies Slack itself** — run start, each step's completion, and
 run end (`nextflow/modules/notify.nf`), so do not re-send those. What is left for
-you is a terminating error you have diagnosed, a position on attempt 4 of 5, and
-the wrap-up; send those with `templates/notify.sh`. Notifications need
-`$BIAHUB_SLACK_WEBHOOK` and `$BIAHUB_SLACK_ID`; without them messages print
-instead of posting and nothing fails. For a `--max_positions 1` smoke test,
-launch with `env -u BIAHUB_SLACK_WEBHOOK` to keep the channel quiet.
+you is a relaunch or a terminating error the pass has diagnosed, a position on
+attempt 4 of 5, and the wrap-up; send those with `templates/notify.sh`.
+Notifications need `$BIAHUB_SLACK_WEBHOOK` and `$BIAHUB_SLACK_ID`; without them
+messages print instead of posting and nothing fails. For a `--max_positions 1`
+smoke test, launch with `env -u BIAHUB_SLACK_WEBHOOK` to keep the channel quiet.
+
+### 9a. Monitoring pass
+
+Invoked as `/reconstruct-with-nextflow monitor <OUTPUT>`. Skip §1–8 and do only
+this:
+
+1. Run the read-only status script and read its output:
+
+   ```bash
+   bash <SKILL_DIR>/templates/run_status.sh <OUTPUT>
+   ```
+
+   On the first pass of a session, also read `references/monitoring.md` and
+   `references/recovery.md`.
+2. Read `<OUTPUT>/nextflow/monitor.log` (absent until the first action). It
+   records what earlier passes did, so a pass never repeats a relaunch or a
+   notification.
+3. Act on the `state` line:
+
+   | state | action |
+   |---|---|
+   | `running` | Nothing. Notify once per position about any `attempt4` line not yet in `monitor.log`. Print one line of progress. |
+   | `completed` | §11 wrap-up, then stop the loop. |
+   | `aborted`, `head-lost` | Relaunch or escalate, by the rules below. |
+   | `not-started` | Nothing if the launch is under 10 minutes old; otherwise tell the user. |
+
+4. Append one line per action to `<OUTPUT>/nextflow/monitor.log`, as
+   `<ISO time> <state> <relaunched|escalated|notified> <signature>`, and
+   `chmod g+w` it. The signature is `<failed task> | <error line>` from the
+   status output, or `head-lost`.
+
+**Relaunch automatically** only when all of these hold:
+
+- there is no `cleaned yes` line, since a cleaned run is final (§10);
+- the cause is transient: the `error` line is an `OSError`, `IOError` or
+  "Input/output error", or a torn-shard signature (`the checksum is invalid`,
+  `encoded shard is smaller than`, `blosc encoded value is invalid`), or the
+  state is `head-lost` (the head was killed: allocation ended, node lost);
+- `monitor.log` has no `relaunched` line with the same signature. One automatic
+  relaunch per signature: the same failure twice is persistent, not transient.
+
+Relaunch exactly as §10 does, in the run's tmux session. Recreate the session
+first if it is gone (`tmux new-session -d -s nf_<DATASET> -c <OUTPUT>`), then:
+
+```bash
+tmux send-keys -t nf_<DATASET> "bash ./run_mantis_v2.sh" Enter
+```
+
+Send `notify.sh "🔁 <DATASET>: relaunched with -resume after <error> on <task>"`
+without `--ping`, and confirm on the next pass that the state is `running`.
+
+nextflow.config already retries a bare `OSError` inside the run, after
+`params.oserror_retry_delay_minutes` (10), sharing the 5 retries with
+preemption. An `OSError` that still reaches `aborted` has failed every one of
+those retries, so the pass's relaunch is the last automatic attempt.
+
+**Escalate everything else** without relaunching. That covers any other
+traceback, including `FileNotFoundError` and other `OSError` subclasses, a config
+error, retries exhausted on exits 130–145, a repeated signature, and a cleaned
+run. Diagnose with `references/recovery.md`, send
+`notify.sh --level error --ping` with the cause, the error line and the work
+directory, record it in `monitor.log`, stop the loop, and give the user the
+diagnosis. Never delete data from a pass.
+
+To stop the loop, delete its scheduled job: `CronList` to find it, then
+`CronDelete`. If it runs self-paced, use `ScheduleWakeup` with `stop: true`.
 
 ## 10. Handle errors
 
@@ -498,6 +626,9 @@ Classify before acting — `references/recovery.md` has the decision table:
 
 - **Exit 130–145** (preemption, timeout, OOM): Nextflow retries up to 5 times.
   Do nothing unless retries are exhausted.
+- **Exit 1 ending in a bare `OSError`** (Lustre EIO, `[Errno 71] Protocol
+  error` from fsync): Nextflow retries it itself after 10 minutes. A run that
+  still aborts on one is relaunched once by the monitoring pass (§9a).
 - **Checksum / Lustre EIO / torn shard**: rerun with `-resume` first — iohub
   replaces torn shards and resumes per unit. Only if it fails
   identically again, write a repair proposal for the user or hand it to the
@@ -516,19 +647,25 @@ directory (`<DATASET>_rerun`) over relaunching in place.
 
 ## 11. Wrap up
 
-1. Normalize channel names on the assembled plate with
+1. Normalize channel names on the assembled plate, and on the projected plate
+   beside it when project ran (`DATASET=<DATASET>_proj`, same directory), with
    `templates/rename_channels.py` (idempotent; `caveats.md` §2 — check first
    whether a `rename-channels` CLI has landed on main, making this obsolete).
 2. Verify the assembled store (`<N>-assemble/<DATASET>.zarr`, `4-assemble`
    unless earlier steps were skipped) opens with iohub; report shape, channels,
-   size on disk. This is the deliverable for every family; tracking, when it
-   ran, is reported beside it rather than as a by-product.
-3. If QC ran, report its verdict: the `QC_SUMMARY` line per store from the
+   size on disk. This is the deliverable for every family. When segmentation
+   and tracking ran, their output is inside the projected plate: check a
+   position has `labels/nuclei` (the segment config's model name) and
+   `labels/tracks_nuclei` (`tracks_` plus the track config's `labels`; both
+   uint32 (T, 1, Z, Y, X) at the image's full Z), `tracks.geff` and
+   `tracks_<row>_<col>_<fov>.csv`, and report them beside the image data.
+3. If QC ran, report its verdict: the `QC_SUMMARY` line from the
    pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at
-   `<OUTPUT>/qc/report/index.html` — one page, one tab per QC'd store. A gate
-   failure does NOT fail the run: `imaging-qc gate` exits 0 either way, so a
-   failing verdict is only visible in the summary line, the report, and the
-   `tables/qc/` parquet inside each store.
+   `<OUTPUT>/qc/report/index.html` — one page, one tab: the assembled store
+   (A549's includes the cell counts). A gate failure does NOT fail the run:
+   `imaging-qc gate` exits 0 either way, so a failing verdict is only visible
+   in the summary line, the report, and the `tables/qc/` parquet inside the
+   store.
 4. Report per-step task counts, failures, retries, and wall time from
    `<OUTPUT>/nextflow/trace.txt`; point at `report.html` and `timeline.html`.
    If cleanup was on, report what `<OUTPUT>/nextflow/intermediates_cleaned.txt`

@@ -31,7 +31,12 @@ def parse_resources(stdout_text, prefix = 'RESOURCES:') {
 //           estimate above 24 h used to take the whole run down on its first
 //           preemption (2026_08_14_dynatrack, flat-field 27 h -> 54 h).
 //   memory  doubles when the previous attempt was OOM-killed — exit 137, the
-//           cgroup's SIGKILL.
+//           cgroup's SIGKILL. Capped at 244 GB (see retry_memory), which fits
+//           118 of the 122 `preempted` nodes, so a doubled request never waits
+//           for the few big-memory nodes and is never refused by sbatch (an
+//           exit 1, which terminates the run). A request already above the cap
+//           is kept, never lowered: the init estimate put it there, and less
+//           would be OOM-killed again.
 //
 // An escalation persists: attempt 3 after a preemption keeps attempt 2's
 // doubled request rather than falling back to the base. A preemption that
@@ -56,9 +61,18 @@ def retry_time(base_minutes, task) {
 }
 
 def retry_memory(base_gb, task) {
+    // Bruno's `preempted` partition, where every `cpu` and `gpu_preempted` task
+    // runs, by node memory (2026-10-22): 4 nodes at 120000 MiB (cpu-c-[1-4]),
+    // 40 at 250000 (the gpu-sm01/02 workstations), and 78 at 500000 or more. The
+    // cap is the second tier: Nextflow's GB is GiB, so 244 GB = 249856 MiB fits a
+    // 250000 node. Retries above 117 GB skip only the four cpu-c nodes; one near
+    // the cap takes a whole gpu-sm node's memory, idling its GPU meanwhile. The
+    // `gpu` partition's nodes are all >= 500000. Re-check when nodes change:
+    //     sinfo -h -p preempted -N -o "%m" | sort -n | uniq -c
+    def max_retry_gb = 244.0d
     def prev = task.previousTrace
     def gb = (task.attempt == 1 || !prev?.memory) ? (base_gb as double) : prev.memory / (1024.0d ** 3)
-    if (task.attempt > 1 && hit_memory(prev)) gb *= 2
+    if (task.attempt > 1 && hit_memory(prev)) gb = Math.max(gb, Math.min(gb * 2, max_retry_gb))
     return Math.rint(gb) == gb ? "${gb as long} GB" : "${gb} GB"
 }
 
@@ -88,7 +102,9 @@ The real per-task logs are in:
 
     ${log_dir}/
 
-one `<job-name>_<slurm-job-id>.out` / `.err` pair per task.
+one `<job-name>_<slurm-job-id>.out` / `.err` pair per task. A directory that
+holds more than one step's store (assemble and project) shares this
+slurm_output/; each step's logs are in its own directory beside the one above.
 EOF"""
 }
 
