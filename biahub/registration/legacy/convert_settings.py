@@ -6,8 +6,9 @@ become a `TransformSettings` for `apply-transform`. The retired schemas are defi
 and nowhere else: the rest of biahub reads only the unified models, and its loaders point
 at this command when they meet a legacy file.
 
-`use_prev_t_transform` becomes `transform.seed_from: previous_timepoint` for beads, the
-only method that read it.
+`approx_transform` becomes `transform.initial` (`from: matrix`, inverse direction), or
+`from: shapes` with `compute_approx_transform`; `use_prev_t_transform` becomes
+`transform.initial.propagate` for beads, the only method that read it.
 
 What has no equivalent and is dropped, with a note printed at conversion time:
 `eval_transform_settings` (the engine flags and repairs outlying timepoints instead of
@@ -265,19 +266,20 @@ def estimate_settings_from_legacy(
         else legacy.stabilization_method
     )
     propagate = ats.use_prev_t_transform and legacy_method == "beads"
-    seed_from = "previous_timepoint" if propagate else "input"
     if legacy.eval_transform_settings is not None:
         notes.append(
             "eval_transform_settings dropped: the engine flags and repairs outlying "
             "timepoints (fallback) instead of smoothing the series afterwards"
         )
-    fit = TransformFitSettings(
-        type=ats.transform_type,
-        seed=ats.approx_transform,
-        seed_direction="inverse",
-        seed_from_shapes=ats.compute_approx_transform,
-        seed_from=seed_from,
-    )
+    initial: dict = {}
+    if ats.compute_approx_transform:
+        # the legacy pipeline built it from the store shapes, in the mantis orientation
+        initial = {"from": "shapes", "rotate90": -1, "fliplr": False}
+    elif not np.allclose(np.asarray(ats.approx_transform, dtype=float), np.eye(4)):
+        initial = {"from": "matrix", "matrix": ats.approx_transform, "direction": "inverse"}
+    if propagate:
+        initial["propagate"] = True
+    fit = TransformFitSettings(type=ats.transform_type, initial=initial or None)
     if isinstance(legacy, EstimateRegistrationSettings):
         # estimate-registration always read the source channel from the source store and
         # the target channel from the target store, so this is a cross estimate even when

@@ -48,11 +48,13 @@ biahub convert-settings -c "xyz_stabilization_settings/*.yml" -o transforms.yml 
 - An `estimate-registration` / `estimate-stabilization` config becomes an
   `EstimateTransformSettings` for `estimate-transform`; a `register` / `stabilize` config
   becomes a `TransformSettings` for `apply-transform`.
-- `approx_transform` becomes `transform.seed` (`seed_direction: inverse`, the direction the
-  old pipeline stored), and `compute_approx_transform` becomes `transform.seed_from_shapes`.
-- `use_prev_t_transform` becomes `transform.seed_from: previous_timepoint` for beads, the
-  only method that read it; the other methods estimated each timepoint independently
-  whatever the flag said.
+- `approx_transform` becomes `transform.initial: {from: matrix, direction: inverse}` (the
+  direction the old pipeline stored; left out when it is identity), and
+  `compute_approx_transform` becomes `{from: shapes, rotate90: -1, fliplr: false}`, the
+  orientation the old pipeline built in.
+- `use_prev_t_transform` becomes `transform.initial.propagate: true` for beads, the only
+  method that read it; the other methods estimated each timepoint independently whatever
+  the flag said.
 - `estimate-registration` always read the source channel from the source store and the
   target from the target store, so its config becomes a `reference.frame: cross` estimate,
   even when both channels have the same name.
