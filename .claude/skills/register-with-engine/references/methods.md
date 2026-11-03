@@ -87,6 +87,15 @@ Beads matching is deterministic but depends on where it starts: on a drifting se
   The report's `anchor` holds each timepoint's centroid, smoothed centroid and the
   translation added. Where the sample changes shape or breaks up, the centroid follows it:
   check the track before applying, and leave those timepoints out of the run.
+- `reference.leftover_motion: {}` (stabilizations only): each estimate job also measures
+  the raw shift from the run's previous timepoint, and the report's `leftover_motion`
+  holds the frame-to-frame motion left by the transforms and by none (`unregistered`), in
+  µm: mean, max, mean yx, each pair. Use it to compare stabilizations of one series: on
+  the neuromast timelapse (t 0-150) raw moved 0.99 µm per frame in yx, the prototype's
+  hybrid left 0.18 and the engine's neighbours 0.13. It sees single-frame jumps, not slow
+  drift: `neighbours` alone scores a little better than with `anchor` (0.13 vs 0.15) while
+  leaving the wander in. Judge drift from the anchor's track, jumps from this. Each job
+  reserves memory for it (18 frames); `approximate` marks transforms that rotate or scale.
 
 ## One transform for the plate, or one per position: `pool` and `transform.seed_file`
 
