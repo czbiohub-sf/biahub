@@ -117,3 +117,17 @@ def test_fit_can_use_scikit_images_affine_estimator():
     )
     with pytest.raises(ValueError, match="solver"):
         Transform.fit(src, noisy, solver="ransac")
+
+
+def test_a_transform_copies_its_matrix_and_leaves_the_callers_writable():
+    # np.asarray kept a float64 caller's array itself and then froze it: the caller could
+    # no longer write to its own matrix.
+    matrix = np.eye(4)
+    transform = Transform(matrix)
+    matrix[0, 3] = 5.0  # the caller's array is still its own
+    assert matrix.flags.writeable
+    np.testing.assert_array_equal(
+        transform.matrix, np.eye(4)
+    )  # and the transform is not changed
+    with pytest.raises(ValueError, match="read-only"):
+        transform._matrix[0, 3] = 1.0  # the transform's own copy stays immutable

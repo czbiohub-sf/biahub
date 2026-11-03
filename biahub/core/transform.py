@@ -75,7 +75,9 @@ class Transform:
         matrix: NDArray[np.floating],
         transform_type: TransformType = "affine",
     ):
-        matrix = np.asarray(matrix, dtype=np.float64)
+        # a copy: freezing the caller's own array (np.asarray keeps a float64 one) would
+        # make it read-only for the caller
+        matrix = np.array(matrix, dtype=np.float64)
 
         if matrix.shape == (3, 3):
             self._ndim = 2
