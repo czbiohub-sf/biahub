@@ -245,7 +245,7 @@ def _focus_of_timepoint(
     Top-level so a process pool can pickle it; each call reads its own (Z, Y, X) volume.
     """
     from biahub.registration.estimators import EstimationError
-    from biahub.registration.methods.focus import center_crop_yx, find_focus
+    from biahub.registration.methods.intensity.focus_finding import center_crop_yx, find_focus
 
     with open_ome_zarr(str(position_path), mode="r") as dataset:
         zyx = np.asarray(dataset.data[t, channel_index])
