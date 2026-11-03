@@ -18,6 +18,16 @@ def test_default_paths_resolve_next_to_plate():
     plate = Path("/data/run/plate.zarr")
     assert settings.confirmed_path(plate) == Path("/data/run/plate.dca-confirmed.toml")
     assert settings.metadata_table_path(plate) is None
+    assert settings.qc_stage is None
+
+
+def test_projected_plate_shares_the_assembled_plate_files(tmp_path):
+    table = tmp_path / "plate.dca-metadata.csv"
+    table.write_text("a\n1\n")
+    settings = DcaFinalizeSettings(base_config="base.toml")
+    projected = tmp_path / "plate_proj.zarr"
+    assert settings.confirmed_path(projected) == tmp_path / "plate.dca-confirmed.toml"
+    assert settings.metadata_table_path(projected) == table
 
 
 def test_explicit_paths_win_over_defaults(tmp_path):

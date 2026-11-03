@@ -15,5 +15,6 @@ metadata_table: null
 #   token_env: AIRTABLE_API_KEY
 airtable: null
 
-# Reads <plate>/tables/qc/stage{qc_stage}_position.parquet.
-qc_stage: 5
+# Reads <plate>/tables/qc/stage{qc_stage}_position.parquet. Null takes the stage from the
+# plate's tables/qc/manifest.json, which must list exactly one position table.
+qc_stage: null

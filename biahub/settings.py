@@ -1751,6 +1751,18 @@ class AirtableSettings(MyBaseModel):
     token_env: str = "AIRTABLE_API_KEY"
 
 
+PROJECTED_PLATE_SUFFIX = "_proj"
+
+
+def dca_dataset_stem(plate: Path) -> str:
+    """Return the stem whose confirmed file, sample sheet and AirTable rows serve ``plate``.
+
+    mantis-v2 writes the projected plate beside the assembled one as ``<ds>_proj.zarr``,
+    and it shares the assembled plate's ``<ds>`` metadata.
+    """
+    return Path(plate).stem.removesuffix(PROJECTED_PLATE_SUFFIX)
+
+
 class DcaFinalizeSettings(MyBaseModel):
     """Settings for `biahub dca-finalize`.
 
@@ -1759,21 +1771,23 @@ class DcaFinalizeSettings(MyBaseModel):
     base_config
         Shared DCA TOML (``.toml``) with the experiment-wide defaults.
     confirmed_config
-        Human-confirmed TOML. Defaults to ``<plate parent>/<plate stem>.dca-confirmed.toml``.
+        Human-confirmed TOML. Defaults to ``<plate parent>/<stem>.dca-confirmed.toml``,
+        where a projected ``<ds>_proj`` plate uses the ``<ds>`` stem.
     metadata_table
-        Per-well sample sheet. Defaults to ``<plate parent>/<plate stem>.dca-metadata.csv``
-        or ``.tsv`` when one exists.
+        Per-well sample sheet. Defaults to ``<plate parent>/<stem>.dca-metadata.csv``
+        or ``.tsv`` when one exists, with the same stem.
     airtable
         Optional AirTable source for the sample sheet.
     qc_stage
-        Reads ``<plate>/tables/qc/stage{qc_stage}_position.parquet``.
+        Reads ``<plate>/tables/qc/stage{qc_stage}_position.parquet``. Null takes the stage
+        from the plate's ``tables/qc/manifest.json``, which must list one position table.
     """
 
     base_config: Path
     confirmed_config: Path | None = None
     metadata_table: Path | None = None
     airtable: AirtableSettings | None = None
-    qc_stage: int = 5
+    qc_stage: int | None = None
 
     @field_validator("base_config")
     @classmethod
@@ -1797,14 +1811,14 @@ class DcaFinalizeSettings(MyBaseModel):
     def confirmed_path(self, plate: Path) -> Path:
         if self.confirmed_config is not None:
             return self.confirmed_config
-        return plate.parent / f"{plate.stem}.dca-confirmed.toml"
+        return plate.parent / f"{dca_dataset_stem(plate)}.dca-confirmed.toml"
 
     def metadata_table_path(self, plate: Path) -> Path | None:
         """Return the configured sample sheet, else an existing default next to the plate."""
         if self.metadata_table is not None:
             return self.metadata_table
         for suffix in ("csv", "tsv"):
-            candidate = plate.parent / f"{plate.stem}.dca-metadata.{suffix}"
+            candidate = plate.parent / f"{dca_dataset_stem(plate)}.dca-metadata.{suffix}"
             if candidate.exists():
                 return candidate
         return None
