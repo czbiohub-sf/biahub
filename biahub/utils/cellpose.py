@@ -16,10 +16,10 @@ A third: cellpose 4 ignores ``model_type`` and falls back to ``cpsam_v2`` with o
 log warning when ``pretrained_model`` names a model it does not know.
 ``load_cellpose_model`` refuses unknown names instead.
 
-A fourth: the cpdino models need the ``dinov3`` package, which biahub does not install
-(it is not on PyPI and has its own licence). Without it cellpose only logs "Could not
-import CPDINO" and fails when the model is built. ``check_cellpose_model_name`` stops
-at ``--init`` with the install command instead.
+A fourth: the cpdino models need the ``dinov3`` package, which only biahub's opt-in
+``cpdino`` extra installs (it is not on PyPI and has its own licence). Without it cellpose
+only logs "Could not import CPDINO" and fails when the model is built.
+``check_cellpose_model_name`` stops at ``--init`` with the install command instead.
 """
 
 import getpass
@@ -188,14 +188,15 @@ def _dinov3_installed() -> bool:
 def check_cpdino_dependency(pretrained_model: str) -> None:
     """Raise if a cpdino model is requested and ``dinov3`` is not installed.
 
-    biahub does not depend on ``dinov3``: it is not on PyPI and is released under
-    Meta's DINOv3 License, so installing it is the user's choice.
+    ``dinov3`` comes only with the opt-in ``cpdino`` extra: it is not on PyPI and is
+    released under Meta's DINOv3 License, so installing it is the user's choice.
     """
     if pretrained_model not in CPDINO_MODELS or _dinov3_installed():
         return
     raise ValueError(
-        f"Cellpose model {pretrained_model!r} needs the dinov3 package, which biahub "
-        "does not install. Install it into this environment with\n"
+        f"Cellpose model {pretrained_model!r} needs the dinov3 package. Install biahub's "
+        "cpdino extra (from a biahub checkout: `uv sync --extra cpdino`), or install "
+        "dinov3 into this environment with\n"
         "    pip install git+https://github.com/facebookresearch/dinov3\n"
         "(or `uv pip install ...`). dinov3 is released under the DINOv3 License "
         "(https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md), not an "

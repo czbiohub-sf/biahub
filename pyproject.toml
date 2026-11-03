@@ -51,6 +51,15 @@ dependencies = [
 [project.optional-dependencies]
 segment = ["cellpose>=4.0.1"]
 
+# cellpose's cpdino / cpdino-vitb models. dinov3 is not on PyPI, so it is a direct git
+# reference (pip and uv both honour it; a bare name could resolve to an unrelated PyPI
+# upload). Released under Meta's DINOv3 License, not an open-source licence: opt-in
+# only, and not part of `all`.
+cpdino = [
+  "biahub[segment]",
+  "dinov3 @ git+https://github.com/facebookresearch/dinov3@6876159a11b4df116f30f667f8c9888617df0751",
+]
+
 # The trackers `biahub track` can select with `tracker:`: ultrack (default),
 # tracksdata (ILP on fixed labels), HOCT (learned edge scores + ILP) and Trackastra
 # (transformer links; greedy, or ILP via motile). ultrack is deliberately CPU-only: its
