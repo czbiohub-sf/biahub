@@ -259,3 +259,18 @@ def test_qc_stage_comes_from_the_plate_manifest(plate, config):
     assert result.exit_code == 0, result.output
     assert attributes(plate, "A/1")["biahub-dca-finalize"]["qc_stage"] == 6
 
+
+def test_projected_plate_reads_the_assembled_plate_metadata(
+    plate, config, tmp_path, create_custom_plate
+):
+    projected = build_plate(tmp_path, create_custom_plate, f"{STEM}_proj")
+    sheet_path(projected).unlink()
+    confirmed_path(projected).unlink()
+    result = run(projected, config)
+    assert result.exit_code == 0, result.output
+    attrs = attributes(projected, "A/1")
+    assert attrs["dca"]["study"]["dataset_name"] == f"{STEM}_proj"
+    assert attrs["dca"]["biosample"]["group_id"] == f"{STEM}_proj/A/1"
+    record = attrs["biahub-dca-finalize"]
+    assert record["confirmed_config"] == file_record(confirmed_path(plate))
+    assert record["metadata_source"] == {"kind": "csv", "name": sheet_path(plate).name}

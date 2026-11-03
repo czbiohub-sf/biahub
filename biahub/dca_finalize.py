@@ -204,7 +204,7 @@ def dca_finalize(
     Parameters
     ----------
     input_position_dirpaths
-        Positions of one or more assembled plates (``plate.zarr/A/1/0``).
+        Positions of one or more assembled or projected plates (``plate.zarr/A/1/0``).
     config_filepath
         YAML of ``DcaFinalizeSettings``; relative paths resolve against its directory.
     airtable_client

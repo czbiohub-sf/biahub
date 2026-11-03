@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 import pandas as pd
 
-from biahub.settings import AirtableSettings, DcaFinalizeSettings
+from biahub.settings import AirtableSettings, DcaFinalizeSettings, dca_dataset_stem
 
 TABLE_COLUMNS: tuple[str, ...] = (
     "dataset",
@@ -164,20 +164,21 @@ def metadata_rows(
 ) -> dict[str, dict[str, str]]:
     """Return one metadata row per well, from a sample sheet if present, else AirTable.
 
-    Both sources keep only rows for ``plate.stem``; a sheet row with a blank ``dataset``
-    matches any plate.
+    Both sources keep only rows for the plate's dataset stem (``<ds>`` for a projected
+    ``<ds>_proj`` plate); a sheet row with a blank ``dataset`` matches any plate.
 
     ``client`` overrides the default pyairtable client, which is built only when
     no sample sheet exists and ``settings.airtable`` is set.
     """
     plate = Path(plate)
+    stem = dca_dataset_stem(plate)
     table = settings.metadata_table_path(plate)
     if table is not None:
-        return read_metadata_table(table, dataset=plate.stem)
+        return read_metadata_table(table, dataset=stem)
     if settings.airtable is not None:
         client = client or PyairtableClient(settings.airtable)
-        return airtable_rows(client, plate.stem)
-    expected = plate.parent / f"{plate.stem}.dca-metadata.csv"
+        return airtable_rows(client, stem)
+    expected = plate.parent / f"{stem}.dca-metadata.csv"
     raise FileNotFoundError(
         f"No metadata source: expected {expected} (or .tsv), or set airtable in the settings"
     )
