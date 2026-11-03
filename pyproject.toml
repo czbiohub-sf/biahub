@@ -20,7 +20,7 @@ classifiers = [
 
 dependencies = [
   "click",
-  "iohub>=0.4.0",
+  "iohub>=0.4.1",
   "matplotlib",
   "natsort",
   "numpy",
@@ -158,7 +158,7 @@ tracksdata = { git = "https://github.com/royerlab/tracksdata", rev = "e13cf379b5
 # Pin waveorder to main at mehta-lab/waveorder#594 (4ea8027). On top of #583
 # (apply-inv-tf through iohub's process_single_position with resume, which
 # `biahub apply-inv-tf --resume` uses) and #582, it carries #593, which moves
-# waveorder to iohub>=0.4.0 so biahub no longer needs an iohub git pin or
+# waveorder to iohub from PyPI so biahub no longer needs an iohub git pin or
 # override. Drop this back to a PyPI floor once waveorder cuts a release.
 waveorder = { git = "https://github.com/mehta-lab/waveorder", rev = "4ea8027fd2dc7931abe80527f7d82356c24664a0" }
 
