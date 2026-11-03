@@ -13,8 +13,6 @@ from waveorder.focus import focus_from_transverse_band
 
 from biahub.core.transform import Transform
 from biahub.registration.utils import (
-    convert_transform_to_ants,
-    convert_transform_to_numpy,
     get_3D_fliplr_matrix,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
@@ -180,7 +178,7 @@ def user_assisted_registration(
         fliplr_affine = np.eye(4)
 
     compound_affine = scaling_affine @ rotate90_affine @ fliplr_affine
-    tx_manual = convert_transform_to_ants(compound_affine).invert()
+    tx_manual = Transform(compound_affine).to_ants().invert()
 
     source_zxy_pre_reg = tx_manual.apply_to_image(source_zyx_ants, reference=target_zyx_ants)
 
@@ -320,7 +318,7 @@ def user_assisted_registration(
         )  # Insert 0 in the third entry of each row
         manual_estimated_transform = euclidian_transform @ compound_affine
 
-    tx_manual = convert_transform_to_ants(manual_estimated_transform).invert()
+    tx_manual = Transform(manual_estimated_transform).to_ants().invert()
 
     source_zxy_manual_reg = tx_manual.apply_to_image(
         source_zyx_ants, reference=target_zyx_ants
@@ -340,7 +338,7 @@ def user_assisted_registration(
     source_layer.visible = False
 
     # Ants affine transforms
-    tform = convert_transform_to_numpy(tx_manual)
+    tform = Transform.from_ants(tx_manual).matrix
     click.echo(f"Estimated affine transformation matrix:\n{tform}\n")
     input("Press <Enter> to close the viewer and exit...")
     viewer.close()

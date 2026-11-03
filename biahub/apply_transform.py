@@ -39,9 +39,9 @@ from biahub.cli.parsing import (
     sbatch_filepath,
     sbatch_to_submitit,
 )
+from biahub.core.transform import Transform
 from biahub.registration.utils import (
     apply_affine_transform,
-    convert_transform_to_ants,
     rescale_voxel_size,
     resolve_time_indices,
 )
@@ -73,9 +73,7 @@ def overlap_mask(
     coarse = scale @ np.asarray(inverse_matrix, dtype=float) @ np.linalg.inv(scale)
     ones_source = ants.from_numpy(np.ones(_coarse(source_shape_zyx, f), dtype=np.float32))
     ones_target = ants.from_numpy(np.ones(_coarse(target_shape_zyx, f), dtype=np.float32))
-    warped = convert_transform_to_ants(coarse).apply_to_image(
-        ones_source, reference=ones_target
-    )
+    warped = Transform(coarse).to_ants().apply_to_image(ones_source, reference=ones_target)
     return warped.numpy() > 0
 
 

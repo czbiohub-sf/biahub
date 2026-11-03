@@ -77,60 +77,6 @@ def get_aprox_transform(
     return Transform(matrix=compound_affine)
 
 
-def convert_transform_to_ants(T_numpy: np.ndarray):
-    """Homogeneous 3D transformation matrix from numpy to ants.
-
-    Parameters
-    ----------
-    numpy_transform :4x4 homogenous matrix
-
-    Returns
-    -------
-    Ants transformation matrix object
-    """
-    assert T_numpy.shape == (4, 4)
-
-    T_ants_style = T_numpy[:, :-1].ravel()
-    T_ants_style[-3:] = T_numpy[:3, -1]
-    T_ants = ants.new_ants_transform(
-        transform_type="AffineTransform",
-    )
-    T_ants.set_parameters(T_ants_style)
-
-    return T_ants
-
-
-def convert_transform_to_numpy(T_ants):
-    """
-    Convert the ants transformation matrix to numpy 3D homogenous transform.
-
-    Modified from Jordao's dexp code
-
-    Parameters
-    ----------
-    T_ants : Ants transfromation matrix object
-
-    Returns
-    -------
-    np.array
-        Converted Ants to numpy array
-
-    """
-    T_numpy = T_ants.parameters.reshape((3, 4), order="F")
-    T_numpy[:, :3] = T_numpy[:, :3].transpose()
-    T_numpy = np.vstack((T_numpy, np.array([0, 0, 0, 1])))
-
-    # Reference:
-    # https://sourceforge.net/p/advants/discussion/840261/thread/9fbbaab7/
-    # https://github.com/netstim/leaddbs/blob/a2bb3e663cf7fceb2067ac887866124be54aca7d/helpers/ea_antsmat2mat.m
-    # T = original translation offset from A
-    # T = T + (I - A) @ centering
-
-    T_numpy[:3, -1] += (np.eye(3) - T_numpy[:3, :3]) @ T_ants.fixed_parameters
-
-    return T_numpy
-
-
 def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
     registered_zyx = np.asarray(registered_zyx, dtype=bool)
 
@@ -227,7 +173,7 @@ def find_overlapping_volume(
     fixed_volume_ants = ants.from_numpy(fixed_volume)
     moving_volume_ants = ants.from_numpy(moving_volume)
 
-    tform_ants = convert_transform_to_ants(transformation_matrix)
+    tform_ants = Transform(transformation_matrix).to_ants()
 
     # Now apply the transform using this grid
     registered_volume = tform_ants.apply_to_image(
