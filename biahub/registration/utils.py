@@ -1,16 +1,13 @@
-"""
-Registration utility functions.
+"""Registration helpers that fit no module of their own.
 
-Helper functions shared across registration methods (beads, ANTs, phase correlation).
-Includes:
-- Transform validation and interpolation across timepoints.
-- Transform I/O (save/load from disk, convert between numpy and ANTs formats).
-- Volume utilities: LIR cropping, padding, and shape matching.
+- Shape matching: `match_shape` pads (reflect) or centre-crops a volume to a shape, and
+  `match_shape_origin` says where its origin lands (phase correlation resizes both
+  volumes to one FFT shape); `pad_to_shape` and `center_crop` are its two halves.
+- `resolve_time_indices`: the timepoints a `time_indices` setting names, checked
+  against the store.
 
-Key conventions
----------------
-- Coordinates and shapes are in ZYX order for 3D data.
-- Transforms are 4x4 homogeneous matrices.
+Transforms live in `biahub.core.transform`, cropping in `biahub.estimate_crop`, the
+approximate initial transform in `registration.seed`. Shapes are ZYX.
 """
 
 import click
