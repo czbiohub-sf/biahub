@@ -5,9 +5,10 @@ import torch
 from iohub.core.registry import set_default_implementation
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
+from viscy_transforms import NormalizeSampled
 
 from biahub.utils.config import settings_fingerprint
-from biahub.virtual_stain import _write_timepoints
+from biahub.virtual_stain import _normalize_timepoint, _write_timepoints
 
 T, C, Z, Y, X = 3, 2, 4, 8, 8
 
@@ -120,46 +121,38 @@ def _norm_meta():
     }
 
 
-def _resolve_timepoint_norm_meta():
-    """The VisCy helper virtual_stain_position uses (fails loudly if VisCy renames it)."""
-    sliding_window = pytest.importorskip("viscy_data.sliding_window")
-    return sliding_window.SlidingWindowDataset._resolve_timepoint_norm_meta
-
-
-def test_resolve_timepoint_norm_meta_selects_timepoint_only():
-    resolve = _resolve_timepoint_norm_meta()
-    norm_meta = _norm_meta()
-    levels = norm_meta["Phase3D"]
-    resolved = resolve(norm_meta, 2)["Phase3D"]
-    assert resolved["timepoint_statistics"] is levels["timepoint_statistics"]["2"]
-    assert resolved["fov_statistics"] is levels["fov_statistics"]
-    assert resolved["dataset_statistics"] is levels["dataset_statistics"]
-    # The stored metadata is not mutated.
-    assert set(levels["timepoint_statistics"]) == {"0", "1", "2"}
+def _normalize_sampled(level):
+    return NormalizeSampled(keys=["Phase3D"], level=level, subtrahend="median", divisor="iqr")
 
 
 @pytest.mark.parametrize(
-    "level, expected_median",
+    "level, base, per_t",
     [
-        ("fov_statistics", lambda t: 10),
-        ("dataset_statistics", lambda t: 20),
-        ("timepoint_statistics", lambda t: 100 + t),
+        ("fov_statistics", 10, 0),
+        ("dataset_statistics", 20, 0),
+        ("timepoint_statistics", 100, 1),
     ],
+    ids=["fov", "dataset", "timepoint"],
 )
-def test_normalize_sampled_with_resolved_norm_meta(level, expected_median):
+def test_normalize_timepoint_uses_each_timepoints_statistics(level, base, per_t):
     """Regression for #283: timepoint_statistics raised KeyError: 'median'."""
-    viscy_transforms = pytest.importorskip("viscy_transforms")
-    resolve = _resolve_timepoint_norm_meta()
-    normalize = viscy_transforms.NormalizeSampled(
-        keys=["Phase3D"], level=level, subtrahend="median", divisor="iqr"
-    )
+    normalize = _normalize_sampled(level)
     norm_meta = _norm_meta()
     for t in range(T):
         source = torch.full((1, 1, Z, Y, X), 200.0)
-        sample = normalize({"Phase3D": source, "norm_meta": resolve(norm_meta, t)})
-        expected = (200.0 - expected_median(t)) / (2.0 + 1e-8)
-        torch.testing.assert_close(
-            sample["Phase3D"], torch.full_like(source, expected), rtol=1e-5, atol=1e-5
+        normalized = _normalize_timepoint(normalize, "Phase3D", source, norm_meta, t)
+        expected = (200.0 - (base + per_t * t)) / 2.0
+        torch.testing.assert_close(normalized, torch.full_like(source, expected))
+    # The stored metadata is not mutated.
+    assert set(norm_meta["Phase3D"]["timepoint_statistics"]) == {"0", "1", "2"}
+
+
+def test_unresolved_timepoint_statistics_raise_keyerror():
+    """The failure #283 reported, so the test above is known to guard it."""
+    source = torch.full((1, 1, Z, Y, X), 200.0)
+    with pytest.raises(KeyError, match="median"):
+        _normalize_sampled("timepoint_statistics")(
+            {"Phase3D": source, "norm_meta": _norm_meta()}
         )
 
 

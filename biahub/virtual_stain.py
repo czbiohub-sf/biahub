@@ -195,6 +195,20 @@ def _write_timepoints(
             unit.complete()
 
 
+def _normalize_timepoint(normalize, source_channel: str, source, norm_meta: dict, t: int):
+    """Apply VisCy's configured normalization to one timepoint's source volume.
+
+    ``NormalizeSampled`` expects ``timepoint_statistics`` already resolved to the
+    current timepoint, but the store nests that level by timepoint index
+    (``{"0": {...}, "1": {...}}``). Resolve it with the same helper VisCy's
+    ``SlidingWindowDataset`` uses for ``viscy predict``, so both paths match.
+    """
+    from viscy_data.sliding_window import SlidingWindowDataset
+
+    resolved = SlidingWindowDataset._resolve_timepoint_norm_meta(norm_meta, t)
+    return normalize({source_channel: source, "norm_meta": resolved})[source_channel]
+
+
 def virtual_stain_position(
     config_filepath: Path,
     input_position_path: Path,
@@ -230,9 +244,6 @@ def virtual_stain_position(
     from cytoland.engine import AugmentedPredictionVSUNet
     from monai.transforms import Compose
     from viscy_data import read_norm_meta
-    from viscy_data.sliding_window import SlidingWindowDataset
-
-    resolve_timepoint_norm_meta = SlidingWindowDataset._resolve_timepoint_norm_meta
 
     position_name = "/".join(Path(input_position_path).parts[-3:])
     position_start = time.perf_counter()
@@ -317,17 +328,7 @@ def virtual_stain_position(
                 input_dataset.data[t : t + 1, channel_index : channel_index + 1]
             )
             source = torch.from_numpy(volume).float().to(device)
-            # Apply VisCy's configured normalization via a sample dict.
-            # NormalizeSampled expects timepoint_statistics already resolved to
-            # the current timepoint (the store nests it by timepoint index), so
-            # resolve it with the same helper VisCy's dataset uses.
-            sample = normalize(
-                {
-                    source_channel: source,
-                    "norm_meta": resolve_timepoint_norm_meta(norm_meta, t),
-                }
-            )
-            source = sample[source_channel]
+            source = _normalize_timepoint(normalize, source_channel, source, norm_meta, t)
             with torch.inference_mode():
                 prediction = predictor.predict_sliding_windows(
                     source, out_channel=out_channel, step=step
