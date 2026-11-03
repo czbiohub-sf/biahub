@@ -1,5 +1,6 @@
 """Store facts and normalization statistics for ``dca-finalize``."""
 
+import json
 import math
 
 from collections.abc import Mapping, Sequence
@@ -73,6 +74,35 @@ def store_facts(plate: Path, position_key: str, position: Position) -> dict[str,
 
 def qc_path(plate: Path, stage: int) -> Path:
     return plate / "tables" / "qc" / f"stage{stage}_position.parquet"
+
+
+def qc_manifest_path(plate: Path) -> Path:
+    return plate / "tables" / "qc" / "manifest.json"
+
+
+def qc_stage(plate: Path, override: int | None = None) -> int:
+    """Return the QC stage whose position table holds ``plate``'s statistics.
+
+    ``override`` wins when given. Otherwise the stage comes from imaging-qc's
+    ``tables/qc/manifest.json``, which must list exactly one position table.
+    """
+    if override is not None:
+        return override
+    path = qc_manifest_path(plate)
+    if not path.is_file():
+        raise MissingStatisticsError(
+            f"QC manifest not found: {path}; run QC on the plate or set qc_stage in the settings"
+        )
+    tables = json.loads(path.read_text()).get("tables", [])
+    stages = sorted(
+        {t["stage"] for t in tables if t.get("filename") == qc_path(plate, t["stage"]).name}
+    )
+    if len(stages) != 1:
+        listed = ", ".join(str(stage) for stage in stages) or "none"
+        raise MissingStatisticsError(
+            f"{path} lists position tables for stages {listed}; set qc_stage in the settings"
+        )
+    return stages[0]
 
 
 def load_qc_statistics(plate: Path, stage: int) -> pd.DataFrame:

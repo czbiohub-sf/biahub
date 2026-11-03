@@ -1766,14 +1766,15 @@ class DcaFinalizeSettings(MyBaseModel):
     airtable
         Optional AirTable source for the sample sheet.
     qc_stage
-        Reads ``<plate>/tables/qc/stage{qc_stage}_position.parquet``.
+        Reads ``<plate>/tables/qc/stage{qc_stage}_position.parquet``. Null takes the stage
+        from the plate's ``tables/qc/manifest.json``, which must list one position table.
     """
 
     base_config: Path
     confirmed_config: Path | None = None
     metadata_table: Path | None = None
     airtable: AirtableSettings | None = None
-    qc_stage: int = 5
+    qc_stage: int | None = None
 
     @field_validator("base_config")
     @classmethod

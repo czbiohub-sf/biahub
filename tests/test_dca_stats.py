@@ -14,9 +14,11 @@ from biahub.dca_stats import (
     derived_columns,
     load_qc_statistics,
     position_statistics,
+    qc_stage,
     store_facts,
     time_increment_issue,
 )
+from tests.dca_plate import write_qc_manifest
 
 POSITION = "C/2/0001"
 CHANNELS = ["Phase3D", "nuclei_prediction"]
@@ -180,6 +182,37 @@ def test_missing_parquet_raises(tmp_path):
     with pytest.raises(MissingStatisticsError) as error:
         load_qc_statistics(plate, 5)
     assert str(plate / "tables" / "qc" / "stage5_position.parquet") in str(error.value)
+
+
+def test_qc_stage_read_from_manifest(tmp_path):
+    plate = tmp_path / "plate_proj.zarr"
+    _write_qc(plate, [_row("Phase3D", 0, "p1", 1.0)], stage=6)
+    write_qc_manifest(plate, (6,))
+    assert qc_stage(plate) == 6
+
+
+def test_qc_stage_override_wins_over_manifest(tmp_path):
+    plate = tmp_path / "plate.zarr"
+    _write_qc(plate, [_row("Phase3D", 0, "p1", 1.0)], stage=5)
+    write_qc_manifest(plate, (5, 7))
+    assert qc_stage(plate, override=7) == 7
+
+
+def test_qc_stage_missing_manifest_names_the_override(tmp_path):
+    plate = tmp_path / "plate.zarr"
+    with pytest.raises(MissingStatisticsError) as error:
+        qc_stage(plate)
+    message = str(error.value)
+    assert str(plate / "tables" / "qc" / "manifest.json") in message
+    assert "qc_stage" in message
+
+
+def test_qc_stage_ambiguous_manifest_lists_stages(tmp_path):
+    plate = tmp_path / "plate.zarr"
+    _write_qc(plate, [_row("Phase3D", 0, "p1", 1.0)], stage=5)
+    write_qc_manifest(plate, (5, 7))
+    with pytest.raises(MissingStatisticsError, match=r"stages 5, 7.*qc_stage"):
+        qc_stage(plate)
 
 
 @pytest.mark.parametrize(

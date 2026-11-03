@@ -1,6 +1,7 @@
 """Synthetic assembled plates with a sample sheet, QC table and confirmed file for dca-finalize."""
 
 import hashlib
+import json
 import shutil
 
 from collections.abc import Callable
@@ -72,7 +73,9 @@ def write_table(path: Path, rows: list[dict[str, str]]) -> None:
     pd.DataFrame(rows, columns=list(TABLE_COLUMNS)).to_csv(path, index=False)
 
 
-def _qc_row(stem: str, position_key: str, t: int, c: int, key: str, value: float) -> dict:
+def _qc_row(
+    stem: str, position_key: str, t: int, c: int, key: str, value: float, stage: int
+) -> dict:
     return {
         "store_path": f"{stem}.zarr",
         "dataset": stem,
@@ -89,18 +92,29 @@ def _qc_row(stem: str, position_key: str, t: int, c: int, key: str, value: float
         "metric_name": f"intensity_stats_{key}",
         "value": value,
         "granularity": "volume",
-        "stage": 5,
+        "stage": stage,
         "source": "imaging-qc",
         "timestamp": "2026-09-25T00:00:00",
     }
+
+
+def write_qc_manifest(plate: Path, stages: tuple[int, ...]) -> None:
+    """Write ``tables/qc/manifest.json`` listing a position table per stage, as imaging-qc does."""
+    tables = [
+        {"stage": stage, "filename": f"stage{stage}_position.parquet", "version": "0.6"}
+        for stage in stages
+    ]
+    manifest = {"tables": tables, "version": "0.6", "zarr_path": plate.name}
+    (plate / "tables" / "qc" / "manifest.json").write_text(json.dumps(manifest))
 
 
 def write_qc(
     plate: Path,
     skip: dict[str, str] | None = None,
     p1: dict[str, float] | None = None,
+    stage: int = 5,
 ) -> None:
-    """Write ``tables/qc/stage5_position.parquet``.
+    """Write ``tables/qc/stage{stage}_position.parquet`` and the manifest listing it.
 
     ``skip`` maps a position key to a metric left out for every channel. ``p1`` maps a
     position key to the p1 value written for every channel and T.
@@ -118,14 +132,15 @@ def write_qc(
                     value = 1.0 + STAT_KEYS.index(stat)
                     if stat == "p1":
                         value = p1.get(key, p1_value(key, c))
-                    rows.append(_qc_row(plate.stem, key, t, c, stat, value))
+                    rows.append(_qc_row(plate.stem, key, t, c, stat, value, stage))
     frame = pd.DataFrame(rows)
     frame["T"] = frame["T"].astype("Int64")
     frame["Z"] = frame["Z"].astype("Int64")
     frame["stage"] = frame["stage"].astype("int64")
     qc_dir = plate / "tables" / "qc"
     qc_dir.mkdir(parents=True, exist_ok=True)
-    frame.to_parquet(qc_dir / "stage5_position.parquet")
+    frame.to_parquet(qc_dir / f"stage{stage}_position.parquet")
+    write_qc_manifest(plate, (stage,))
 
 
 def build_plate(tmp_path: Path, create_custom_plate: Callable, stem: str = STEM) -> Path:

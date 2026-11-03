@@ -18,6 +18,7 @@ def test_default_paths_resolve_next_to_plate():
     plate = Path("/data/run/plate.zarr")
     assert settings.confirmed_path(plate) == Path("/data/run/plate.dca-confirmed.toml")
     assert settings.metadata_table_path(plate) is None
+    assert settings.qc_stage is None
 
 
 def test_explicit_paths_win_over_defaults(tmp_path):

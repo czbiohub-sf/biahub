@@ -38,6 +38,7 @@ from biahub.dca_stats import (
     derived_columns,
     load_qc_statistics,
     position_statistics,
+    qc_stage,
     store_facts,
     time_increment_issue,
 )
@@ -70,6 +71,7 @@ class _PlateSources:
     block: dict[str, Any] | None
     rows: dict[str, dict[str, str]] | None
     qc: pd.DataFrame | None
+    qc_stage: int | None
     derived: dict[str, str]
 
 
@@ -77,7 +79,9 @@ def _file_record(path: Path) -> dict[str, str]:
     return {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
-def _provenance(plate: Path, settings: DcaFinalizeSettings) -> dict[str, Any]:
+def _provenance(
+    plate: Path, settings: DcaFinalizeSettings, stage: int | None
+) -> dict[str, Any]:
     """Return the published run record: file names and hashes, no paths or AirTable IDs."""
     confirmed = settings.confirmed_path(plate)
     table = settings.metadata_table_path(plate)
@@ -89,7 +93,7 @@ def _provenance(plate: Path, settings: DcaFinalizeSettings) -> dict[str, Any]:
         "base_config": _file_record(settings.base_config),
         "confirmed_config": _file_record(confirmed) if confirmed.exists() else None,
         "metadata_source": source,
-        "qc_stage": settings.qc_stage,
+        "qc_stage": stage,
         "version": biahub_version,
     }
 
@@ -118,12 +122,13 @@ def _load_plate_sources(
     except (ValueError, FileNotFoundError, RuntimeError, ImportError) as error:
         issues.append(f"{plate}: {error}")
         rows = None
+    stage = qc = None
     try:
-        qc = load_qc_statistics(plate, settings.qc_stage)
+        stage = qc_stage(plate, settings.qc_stage)
+        qc = load_qc_statistics(plate, stage)
     except ValueError as error:
         issues.append(f"{plate}: {error}")
-        qc = None
-    return _PlateSources(block, rows, qc, derived_columns(plate)), issues
+    return _PlateSources(block, rows, qc, stage, derived_columns(plate)), issues
 
 
 def _new_attributes(
@@ -219,7 +224,9 @@ def dca_finalize(
     new_attributes: dict[Path, dict[str, Any]] = {}
     for plate, dirpaths in plates.items():
         sources, plate_issues = _load_plate_sources(plate, settings, airtable_client)
-        record = _provenance(plate, settings) if sources.block is not None else {}
+        record = (
+            _provenance(plate, settings, sources.qc_stage) if sources.block is not None else {}
+        )
         warnings: list[str] = []
         for dirpath in dirpaths:
             attrs, position_issues = _check_position(dirpath, plate, sources, record, warnings)

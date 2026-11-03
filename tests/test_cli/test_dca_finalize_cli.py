@@ -250,3 +250,12 @@ def test_shared_sheet_serves_each_plate_its_own_rows(
         for p in (plate, other)
     }
     assert markers == {STEM: "TOMM20", OTHER_STEM: "SEC61B"}
+
+
+def test_qc_stage_comes_from_the_plate_manifest(plate, config):
+    (plate / "tables" / "qc" / "stage5_position.parquet").unlink()
+    write_qc(plate, stage=6)
+    result = run(plate, config)
+    assert result.exit_code == 0, result.output
+    assert attributes(plate, "A/1")["biahub-dca-finalize"]["qc_stage"] == 6
+
