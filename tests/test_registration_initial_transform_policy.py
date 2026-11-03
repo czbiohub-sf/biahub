@@ -73,3 +73,45 @@ def test_consensus_seed_excludes_t_itself_even_if_it_scores_well():
     seed = policy.initial_for(t=3)
 
     np.testing.assert_allclose(seed.matrix[:3, 3], [2.5, 0.0, 0.0])
+
+
+def test_a_shapes_initial_transform_is_the_approximate_transform_from_the_two_grids():
+    # what init_run computes today: get_aprox_transform's matrix, read as inverse
+    from biahub.registration.policies import ShapesInitialTransform
+    from biahub.registration.seed import get_aprox_transform
+
+    grids = dict(
+        mov_shape=(30, 100, 100),
+        ref_shape=(20, 120, 120),
+        mov_voxel_size=(0.5, 0.2, 0.2),
+        ref_voxel_size=(0.6, 0.15, 0.15),
+    )
+    policy = ShapesInitialTransform(
+        **grids, rotate90=-1, fliplr=False, transform_type="affine"
+    )
+    expected = get_aprox_transform(
+        **grids, pre_affine_90degree_rotation=-1, pre_affine_fliplr=False
+    )
+    for t in (0, 7):
+        np.testing.assert_array_equal(
+            policy.initial_for(t).matrix, Transform.from_inverse(expected.matrix).matrix
+        )
+    assert policy.initial_for(0).transform_type == "affine"
+    assert isinstance(policy, InitialTransformPolicy)
+
+
+def test_a_file_initial_transform_gives_each_timepoints_and_asks_to_be_kept_unless_beaten():
+    from biahub.registration.policies import FileInitialTransform
+
+    by_t = {
+        0: Transform.from_translation([1.0, 2.0, 3.0]),
+        4: Transform.from_translation([0.0, -1.0, 0.0]),
+    }
+    policy = FileInitialTransform(by_t)
+    assert policy.initial_for(4) is by_t[4]
+    assert (
+        policy.keep_unless_beaten is True
+    )  # an earlier result: the engine keeps it unless an estimate scores better
+    with pytest.raises(KeyError, match="no initial transform for t=2"):
+        policy.initial_for(2)
+    assert isinstance(policy, InitialTransformPolicy)

@@ -233,6 +233,62 @@ class FixedInitialTransform:
         return self.transform
 
 
+class ShapesInitialTransform:
+    """`transform.initial: {from: shapes}`: the approximate transform from the two grids.
+
+    The moving grid rescaled by the voxel-size ratio onto the reference grid, after an
+    optional 90-degree rotation and left-right flip (`registration.seed`); the same
+    transform for every t, computed once.
+    """
+
+    def __init__(
+        self,
+        mov_shape: tuple,
+        ref_shape: tuple,
+        mov_voxel_size: tuple,
+        ref_voxel_size: tuple,
+        rotate90: int,
+        fliplr: bool,
+        transform_type: str = "affine",
+    ):
+        from biahub.registration.seed import get_aprox_transform
+
+        approx = get_aprox_transform(
+            mov_shape=mov_shape,
+            ref_shape=ref_shape,
+            mov_voxel_size=mov_voxel_size,
+            ref_voxel_size=ref_voxel_size,
+            pre_affine_90degree_rotation=rotate90,
+            pre_affine_fliplr=fliplr,
+        )
+        # get_aprox_transform's matrix maps reference to moving coordinates (inverse)
+        self.transform = Transform.from_inverse(approx.matrix, transform_type)
+
+    def initial_for(self, t: int) -> Transform:
+        return self.transform
+
+
+class FileInitialTransform:
+    """`transform.initial: {from: file}`: each timepoint's transform from an earlier result.
+
+    `by_t` maps each timepoint to its forward transform (e.g. a pooled plate transform,
+    the same at every t). It is an earlier result, so `keep_unless_beaten`: the engine,
+    which scores, keeps it unless the estimate from it scores strictly better.
+    """
+
+    keep_unless_beaten = True
+
+    def __init__(self, by_t: dict[int, Transform]):
+        self.by_t = by_t
+
+    def initial_for(self, t: int) -> Transform:
+        if t not in self.by_t:
+            raise KeyError(
+                f"no initial transform for t={t} in the file (it has {sorted(self.by_t)})"
+            )
+        return self.by_t[t]
+
+
 class ConsensusInitialTransform:
     """Repair seed from the run's own well-scoring timepoints.
 
