@@ -31,94 +31,48 @@ from biahub.settings import (
     TrackingSettings,
     TracksdataConfig,
 )
-from biahub.tracking.methods.hoct import (
-    _import_hoct as _import_hoct,
-)
-from biahub.tracking.methods.hoct import (
-    _select_sparse_links as _select_sparse_links,
-)
-from biahub.tracking.methods.hoct import (
-    hoct_solver_config as hoct_solver_config,
-)
-from biahub.tracking.methods.hoct import (
-    run_hoct as run_hoct,
-)
-from biahub.tracking.methods.hoct import (
-    warm_hoct_weights as warm_hoct_weights,
-)
-from biahub.tracking.methods.trackastra import (
-    run_trackastra as run_trackastra,
-)
-from biahub.tracking.methods.trackastra import (
-    warm_trackastra_weights as warm_trackastra_weights,
-)
-from biahub.tracking.methods.tracksdata import (
-    TRACK_COLUMNS as TRACK_COLUMNS,
-)
-from biahub.tracking.methods.tracksdata import (
-    _empty_result as _empty_result,
-)
-from biahub.tracking.methods.tracksdata import (
-    _isolated_tracks as _isolated_tracks,
-)
-from biahub.tracking.methods.tracksdata import (
-    _num_threads as _num_threads,
-)
-from biahub.tracking.methods.tracksdata import (
-    _select_every_detection as _select_every_detection,
-)
-from biahub.tracking.methods.tracksdata import (
-    _solution_to_tracks as _solution_to_tracks,
-)
-from biahub.tracking.methods.tracksdata import (
-    _solve_tracksdata as _solve_tracksdata,
-)
-from biahub.tracking.methods.tracksdata import (
-    run_tracksdata as run_tracksdata,
-)
-from biahub.tracking.methods.ultrack import (
-    _database_dirpath as _database_dirpath,
-)
-from biahub.tracking.methods.ultrack import (
-    _patch_ultrack_readonly_buffer as _patch_ultrack_readonly_buffer,
-)
-from biahub.tracking.methods.ultrack import (
-    _resolved_ultrack_config as _resolved_ultrack_config,
-)
-from biahub.tracking.methods.ultrack import (
-    _ultrack_patched as _ultrack_patched,
-)
-from biahub.tracking.methods.ultrack import (
-    detect_foreground_segmentation as detect_foreground_segmentation,
-)
-from biahub.tracking.methods.ultrack import (
-    run_ultrack as run_ultrack,
-)
-from biahub.tracking.postprocess import (
-    _merge_single_children as _merge_single_children,
-)
 
-# Moved to biahub.tracking (#449); re-exported so `from biahub.track import ...` keeps working.
-from biahub.tracking.postprocess import (
-    filter_short_siblings as filter_short_siblings,
+# Moved to biahub.tracking (#449). Names this module doesn't call itself are re-exported
+# so `from biahub.track import ...` and `biahub.track.X` keep working.
+from biahub.tracking.methods.hoct import (  # noqa: F401
+    _import_hoct,
+    _select_sparse_links,
+    hoct_solver_config,
+    run_hoct,
+    warm_hoct_weights,
 )
-from biahub.tracking.preprocess import (
-    CUSTOM_FUNCTIONS as CUSTOM_FUNCTIONS,
+from biahub.tracking.methods.trackastra import (  # noqa: F401
+    run_trackastra,
+    warm_trackastra_weights,
 )
-from biahub.tracking.preprocess import (
-    fill_empty_frames as fill_empty_frames,
+from biahub.tracking.methods.tracksdata import (  # noqa: F401
+    TRACK_COLUMNS,
+    _empty_result,
+    _isolated_tracks,
+    _num_threads,
+    _select_every_detection,
+    _solution_to_tracks,
+    _solve_tracksdata,
+    run_tracksdata,
 )
-from biahub.tracking.preprocess import (
-    fill_empty_frames_from_csv as fill_empty_frames_from_csv,
+from biahub.tracking.methods.ultrack import (  # noqa: F401
+    _database_dirpath,
+    _patch_ultrack_readonly_buffer,
+    _resolved_ultrack_config,
+    detect_foreground_segmentation,
+    run_ultrack,
 )
-from biahub.tracking.preprocess import (
-    get_empty_frames_idx_from_csv as get_empty_frames_idx_from_csv,
+from biahub.tracking.postprocess import (  # noqa: F401
+    _merge_single_children,
+    filter_short_siblings,
 )
-from biahub.tracking.preprocess import (
-    mem_nuc_contour as mem_nuc_contour,
-)
-from biahub.tracking.preprocess import (
-    run_preprocessing_pipeline as run_preprocessing_pipeline,
+from biahub.tracking.preprocess import (  # noqa: F401
+    CUSTOM_FUNCTIONS,
+    fill_empty_frames,
+    fill_empty_frames_from_csv,
+    get_empty_frames_idx_from_csv,
+    mem_nuc_contour,
+    run_preprocessing_pipeline,
 )
 from biahub.utils.cluster import (
     apply_sbatch_overrides,
