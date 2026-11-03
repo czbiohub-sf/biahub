@@ -57,9 +57,11 @@ from biahub.registration.metrics import (
     LEFTOVER_MOTION_VOLUMES,
     PREWARPED,
     bead_alignment_metrics,
+    intensity_centroid,
     leftover_motion,
     metric_fn,
     raw_shift,
+    smooth_track,
 )
 from biahub.registration.policies import (
     ConsensusInitialTransform,
@@ -72,9 +74,7 @@ from biahub.registration.policies import (
     PreviousFrame,
     ReferencePolicy,
     ShapesInitialTransform,
-    intensity_centroid,
     is_empty,
-    smooth_track,
 )
 from biahub.registration.preprocess import (
     PreprocessedEstimator,

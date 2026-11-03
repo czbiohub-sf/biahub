@@ -1110,7 +1110,7 @@ def test_a_centroid_anchor_removes_the_slow_drift_the_neighbours_follow(tmp_path
     # t=8: the neighbour median follows the drift, so alone it measures only the jumps;
     # the anchor adds (FOV centre - smoothed centroid), so each frame's translation is
     # where its sample is minus the centre: centred and still.
-    from biahub.registration.policies import intensity_centroid
+    from biahub.registration.metrics import intensity_centroid
 
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, SHAPE)
