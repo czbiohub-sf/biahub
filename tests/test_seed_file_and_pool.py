@@ -1,7 +1,7 @@
 """A seed from a transforms file (an earlier result) and pooling positions into one transform.
 
 Together they give the plate-then-position flow: estimate on a few positions with
-`pool:` (one shared transform), then on every position with `transform.seed_file` set to
+`pool:` (one shared transform), then on every position with `transform.initial` from
 that result, each refining from it and never ending worse than it.
 """
 
@@ -110,7 +110,9 @@ def test_each_position_refines_from_the_seed_file(three_positions, tmp_path):
     # the residual score, continuous: the overlap score (6-voxel radius) ties a 1-slice
     # refinement with the seed, and a tie keeps the seed
     config = _config(
-        tmp_path, transform__seed_file=str(seed_file), score={"metric": "residual"}
+        tmp_path,
+        transform__initial={"from": "file", "file": str(seed_file)},
+        score={"metric": "residual"},
     )
     output = tmp_path / "fovs" / "transforms.yml"
     estimate_transform(
@@ -135,7 +137,7 @@ def test_a_failed_estimate_keeps_the_seed_files_transform(three_positions, tmp_p
     )
     config = _config(
         tmp_path,
-        transform__seed_file=str(seed_file),
+        transform__initial={"from": "file", "file": str(seed_file)},
         bead_matching={"source_peaks_settings": peaks, "target_peaks_settings": peaks},
     )
     output = tmp_path / "fov0" / "transforms.yml"
@@ -149,25 +151,28 @@ def test_a_failed_estimate_keeps_the_seed_files_transform(three_positions, tmp_p
 
 
 @pytest.mark.parametrize(
-    "transform, message",
+    "extra, message",
     [
-        ({"seed_file": "p.yml", "seed": np.diag([2.0, 1, 1, 1]).tolist()}, "seed_file or"),
-        ({"seed_file": "p.yml", "seed_from_shapes": True}, "seed_file or"),
-        ({"seed_file": "p.yml", "seed_from": "previous_timepoint"}, "previous_timepoint"),
+        (
+            {"matrix": np.diag([2.0, 1, 1, 1]).tolist(), "direction": "inverse"},
+            "for from: matrix",
+        ),
+        ({"rotate90": -1, "fliplr": False}, "for from: shapes"),
+        ({"propagate": True}, "does not combine with propagate"),
     ],
 )
-def test_a_seed_file_refuses_another_seed(transform, message):
+def test_an_initial_file_refuses_another_source(extra, message):
     from biahub.settings import TransformFitSettings
 
     with pytest.raises(ValidationError, match=message):
-        TransformFitSettings(**transform)
+        TransformFitSettings(initial={"from": "file", "file": "p.yml", **extra})
 
 
 def test_a_changed_seed_file_is_a_different_run(three_positions, tmp_path):
     import click
 
     seed_file = _plate_file(tmp_path, SHIFTS["0"])
-    config = _config(tmp_path, transform__seed_file=str(seed_file))
+    config = _config(tmp_path, transform__initial={"from": "file", "file": str(seed_file)})
     output = tmp_path / "fov0" / "transforms.yml"
     run = dict(reference_position_dirpaths=three_positions[:1], cluster="debug")
     estimate_transform(three_positions[:1], config, output, **run)
@@ -199,7 +204,11 @@ def test_a_timepoint_without_an_estimate_falls_back_to_its_seed_from_the_file(tm
     empty = np.zeros_like(ref)
     plate = _write_plate(tmp_path / "gap.zarr", [(ref, mov), (empty, empty)])
     seed_file = _plate_file(tmp_path, SHIFTS["0"])
-    config = _config(tmp_path, transform__seed_file=str(seed_file), time_indices="all")
+    config = _config(
+        tmp_path,
+        transform__initial={"from": "file", "file": str(seed_file)},
+        time_indices="all",
+    )
     output = tmp_path / "gap" / "transforms.yml"
     estimate_transform(
         [plate], config, output, reference_position_dirpaths=[plate], cluster="debug"

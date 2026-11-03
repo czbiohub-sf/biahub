@@ -113,7 +113,7 @@ CASES = {
     ),
     "beads-propagated": (
         lambda tmp: _beads_plate(tmp),
-        lambda tmp: _write_config(tmp, seed_from="previous_timepoint"),
+        lambda tmp: _write_config(tmp, propagate=True),
         True,
     ),
     "ants": (
@@ -317,9 +317,9 @@ def test_registration_nf_reruns_when_a_file_is_rewritten_in_place(tmp_path):
     assert not np.array_equal(first, second)
 
 
-@pytest.mark.parametrize("seed_from", ["input", "previous_timepoint"])
+@pytest.mark.parametrize("propagate", [False, True])
 def test_registration_nf_finishes_past_a_broken_chunk_and_resume_redoes_it(
-    tmp_path, seed_from
+    tmp_path, propagate
 ):
     # A timepoint whose data cannot be read: the run retries it, then finishes with that
     # timepoint as a stand-in (the error in its note); once the data is fixed, -resume
@@ -333,7 +333,7 @@ def test_registration_nf_finishes_past_a_broken_chunk_and_resume_redoes_it(
     chunk = plate / "0" / "c" / "1" / "1" / "0" / "0" / "0"  # t=1, the moving channel
     assert chunk.is_file()
     chunk.write_bytes(b"not a chunk")
-    config = _write_config(tmp_path, seed_from=seed_from)
+    config = _write_config(tmp_path, propagate=propagate)
     params = (
         "--moving", store, "--reference", store, "--estimate_config", config,
         "--estimate_positions", "A/1/0", "--output", tmp_path / "run", "-resume",

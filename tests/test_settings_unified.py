@@ -149,7 +149,7 @@ def test_sweep_trials_revalidate_so_dependent_defaults_follow():
         ),  # beads method: phase_cross_corr block unused
         ([{"reference.frame": ["first"]}], "would be ignored"),
         ([{"score.metric": ["correlation"]}], "would be ignored"),
-        ([{"transform.seed_from": ["previous_timepoint"]}], "would be ignored"),
+        ([{"transform.initial.propagate": [True]}], "would be ignored"),
         ([{"bead_matching.algorithm": []}], "each with values"),
         ([], "at least 1 item"),
     ],

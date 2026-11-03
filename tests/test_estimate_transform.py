@@ -76,7 +76,7 @@ def _write_config(
     reference="cross",
     method="bead_matching",
     transform_type="euclidean",
-    seed_from="input",
+    propagate=False,
     **blocks,
 ):
     peaks = DetectPeaksSettings(
@@ -95,7 +95,10 @@ def _write_config(
             frame=reference, channel=target if reference == "cross" else None
         ),
         method=method,
-        transform={"type": transform_type, "seed_from": seed_from},
+        transform={
+            "type": transform_type,
+            **({"initial": {"propagate": True}} if propagate else {}),
+        },
         **blocks,
     )
     path = tmp_path / "estimate.yml"
@@ -499,7 +502,7 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
         target_peaks_settings=peaks,
         qc_settings={"iterations": 2, "score_threshold": 0.4, "score_centroid_mask_radius": 1},
     )
-    config = _write_config(tmp_path, seed_from="previous_timepoint", bead_matching=beads)
+    config = _write_config(tmp_path, propagate=True, bead_matching=beads)
     output = tmp_path / "out" / "transforms.yml"
 
     _run(plate, config, output)

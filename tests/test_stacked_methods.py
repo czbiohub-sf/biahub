@@ -38,7 +38,7 @@ def test_a_stack_is_read_and_written_in_the_form_it_was_given(tmp_path):
 
 def test_each_block_becomes_an_ordinary_single_method_config():
     settings = _settings(
-        PCC_THEN_ANTS, transform={"type": "euclidean", "seed_from": "previous_timepoint"}
+        PCC_THEN_ANTS, transform={"type": "euclidean", "initial": {"propagate": True}}
     )
     pcc, ants = settings.stack_settings()
     assert (pcc.method, ants.method) == ("phase_cross_corr", "ants")
@@ -291,7 +291,7 @@ class _Shift:
 
 
 def test_propagated_blocks_are_the_winning_runs_and_empty_frames_have_none():
-    # With seed_from previous_timepoint the chain runs twice per timepoint (from the
+    # With transform.initial.propagate the chain runs twice per timepoint (from the
     # previous result and from the input seed); the record kept the second run's blocks
     # even when the first won, and an empty frame kept the previous timepoint's.
     import numpy as np

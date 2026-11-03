@@ -190,7 +190,7 @@ def test_a_propagated_run_is_one_estimate_step(tmp_path):
             for t in range(3)
         ],
     )
-    config = _write_config(tmp_path, seed_from="previous_timepoint")
+    config = _write_config(tmp_path, propagate=True)
     output = tmp_path / "out" / "transforms.yml"
     common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
 
@@ -300,7 +300,7 @@ def test_a_crashed_propagated_step_is_redone_on_resume(tmp_path, monkeypatch):
             for t in range(3)
         ],
     )
-    config = _write_config(tmp_path, seed_from="previous_timepoint")
+    config = _write_config(tmp_path, propagate=True)
     output = tmp_path / "out" / "transforms.yml"
     common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
     _ok("--init", *common)
