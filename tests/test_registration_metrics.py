@@ -136,3 +136,77 @@ def test_bead_residuals_in_um_scale_each_axis_and_pair_the_same_beads(pair):
     # 3 voxels off on every axis: 0.6 µm in z, 0.3 µm in y and x
     assert in_um.median_residual == pytest.approx(np.sqrt(0.6**2 + 0.3**2 + 0.3**2), abs=0.15)
     assert in_vox.median_residual == pytest.approx(np.sqrt(3 * 3.0**2), abs=1.0)
+
+
+def _drifting_series(T=12):
+    """A blob volume drifting (random walk) with one-frame jumps; returns (series, where)."""
+    from tests.test_registration_estimators import _synthetic_blob_volume
+
+    rng = np.random.default_rng(7)
+    first = _synthetic_blob_volume(
+        np.random.default_rng(3), (16, 96, 96), n_blobs=80, sigma=2.0
+    )
+    where = np.cumsum(rng.normal(0, 0.3, size=(T, 3)), axis=0)
+    for t, jump in {3: (0.0, 4.0, 0.0), 5: (1.0, 0.0, -3.0), 8: (0.0, -2.5, 2.5)}.items():
+        if t < T:
+            where[t] += jump
+    frames = [ndi_shift(first + 100.0, w, order=1, mode="nearest") for w in where]
+    return np.stack(frames).astype(np.float32), where
+
+
+def test_leftover_motion_is_the_raw_shift_less_the_change_in_correction():
+    # Checked against the truth: the stabilized sample sits at where[t] + c[t], so the
+    # shift moving frame t onto t-1 is -(where[t] + c[t] - where[t-1] - c[t-1]). The
+    # corrections are far off (+-5 voxels) on purpose: no warp, so nothing aliases.
+    from biahub.registration.metrics import leftover_motion, raw_shift
+
+    series, where = _drifting_series()
+    um = np.array([0.5, 0.25, 0.25])
+    corrections = np.random.default_rng(1).uniform(-5, 5, size=(len(series), 3))
+    pairs = [(t - 1, t, raw_shift(series[t - 1], series[t])) for t in range(1, len(series))]
+    result = leftover_motion(pairs, dict(enumerate(corrections)), um)
+    truth = -((where[1:] + corrections[1:]) - (where[:-1] + corrections[:-1])) * um
+    got = np.asarray(
+        [[p["shift_z_um"], p["shift_y_um"], p["shift_x_um"]] for p in result["pairs"]]
+    )
+    np.testing.assert_allclose(got, truth, atol=0.15 * um.max())
+    np.testing.assert_allclose(
+        result["mean_um"], np.linalg.norm(truth, axis=1).mean(), atol=0.05
+    )
+    # unregistered: the raw shifts themselves
+    raw = leftover_motion(pairs, None, um)
+    np.testing.assert_allclose(
+        raw["max_um"], np.linalg.norm(-(where[1:] - where[:-1]) * um, axis=1).max(), atol=0.05
+    )
+
+
+def test_leftover_motion_skips_pairs_without_a_raw_shift():
+    from biahub.registration.metrics import leftover_motion, raw_shift
+
+    series, _ = _drifting_series(T=4)
+    empty = np.zeros_like(series[0])
+    assert raw_shift(series[0], empty) is None  # nothing to correlate
+    pairs = [
+        (0, 1, raw_shift(series[0], series[1])),
+        (1, 2, None),
+        (2, 3, raw_shift(series[2], series[3])),
+    ]
+    result = leftover_motion(pairs, None, (1.0, 1.0, 1.0))
+    assert [(p["t_from"], p["t_to"]) for p in result["pairs"]] == [(0, 1), (2, 3)]
+    assert result["skipped"] == [[1, 2]]
+
+
+def test_a_raw_shift_holds_at_most_18_frames():
+    # each estimate job measures it on full volumes (0.4 GB on the neuromast): the job plan
+    # reserves LEFTOVER_MOTION_VOLUMES frames for it
+    import tracemalloc
+
+    from biahub.registration.metrics import LEFTOVER_MOTION_VOLUMES, raw_shift
+
+    frames = np.random.default_rng(0).random((2, 32, 128, 128)).astype(np.float32)
+    tracemalloc.start()
+    raw_shift(frames[0], frames[1])
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert LEFTOVER_MOTION_VOLUMES == 18
+    assert peak <= LEFTOVER_MOTION_VOLUMES * frames[0].nbytes

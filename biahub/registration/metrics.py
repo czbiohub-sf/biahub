@@ -241,6 +241,78 @@ def residual_shift(
     return float(np.linalg.norm(shift))
 
 
+# Leftover motion: the raw shift between consecutive frames, to a quarter voxel. The job
+# plan reserves 18 frames for it: the two frames read, and the 16 its phase correlation
+# holds at its peak (measured).
+LEFTOVER_MOTION_UPSAMPLE = 4
+LEFTOVER_MOTION_VOLUMES = 18
+
+
+def raw_shift(previous: ArrayLike, frame: ArrayLike) -> np.ndarray | None:
+    """Return the ZYX shift (voxels) moving `frame` onto `previous`, its raw frame before.
+
+    Phase cross-correlation on the raw volumes, no transform: what leftover motion is
+    derived from (`leftover_motion`). None when either frame has no data.
+    """
+    previous = np.asarray(previous, dtype=np.float32)
+    frame = np.asarray(frame, dtype=np.float32)
+    if not np.any(np.nan_to_num(previous)) or not np.any(np.nan_to_num(frame)):
+        return None
+    shift, _ = phase_cross_corr(previous, frame, upsample_factor=LEFTOVER_MOTION_UPSAMPLE)
+    return np.asarray(shift, dtype=float)
+
+
+def leftover_motion(
+    pairs: list[tuple[int, int, ArrayLike | None]],
+    corrections: dict[int, ArrayLike] | None,
+    voxel_um: ArrayLike,
+) -> dict:
+    """How much a stabilized series still moves from frame to frame, in µm.
+
+    `pairs`: (t_from, t_to, raw shift moving t_to onto t_from, in voxels; None: none).
+    `corrections`: each timepoint's translation (voxels, a forward transform's: the shift
+    applied to the volume); None for the unregistered series. With translations a and b
+    applied to t_from and t_to, what still moves t_to onto t_from is raw - (b - a) -- no
+    warp, so nothing aliases and the raw shifts serve any set of corrections. Exact for
+    translations; a rotation or scale is left out (first order).
+
+    Measures single-frame jumps, not slow drift: a series that wanders slowly moves
+    little from one frame to the next. Returns the mean and max norm, the mean yx norm
+    (comparable with a projection's), each pair's shift, and the pairs skipped.
+    """
+    um = np.asarray(voxel_um, dtype=float)
+    rows, skipped = [], []
+    for t_from, t_to, raw in pairs:
+        if raw is None:
+            skipped.append([t_from, t_to])
+            continue
+        shift = np.asarray(raw, dtype=float)
+        if corrections is not None:
+            shift = shift - (
+                np.asarray(corrections[t_to], float) - np.asarray(corrections[t_from], float)
+            )
+        shift = shift * um
+        rows.append(
+            {
+                "t_from": t_from,
+                "t_to": t_to,
+                "shift_z_um": float(shift[0]),
+                "shift_y_um": float(shift[1]),
+                "shift_x_um": float(shift[2]),
+                "motion_um": float(np.linalg.norm(shift)),
+                "motion_yx_um": float(np.hypot(shift[1], shift[2])),
+            }
+        )
+    motion = [r["motion_um"] for r in rows]
+    return {
+        "mean_um": float(np.mean(motion)) if rows else None,
+        "max_um": float(np.max(motion)) if rows else None,
+        "mean_yx_um": float(np.mean([r["motion_yx_um"] for r in rows])) if rows else None,
+        "pairs": rows,
+        "skipped": skipped,
+    }
+
+
 def score_transform(
     transform: Transform,
     mov: ArrayLike,
