@@ -80,7 +80,8 @@ from biahub.registration.preprocess import (
     apply_image_blocks,
     blocks_footprint,
 )
-from biahub.registration.utils import get_aprox_transform, resolve_time_indices
+from biahub.registration.seed import get_aprox_transform
+from biahub.registration.utils import resolve_time_indices
 from biahub.settings import (
     AffineTransformSettings,
     AnchorSettings,

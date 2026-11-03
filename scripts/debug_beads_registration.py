@@ -127,7 +127,7 @@ ref_data_ants = ants.from_numpy(ref_data)
 
 # %% Compute approximate transform from voxel sizes (if not provided in config)
 if config.affine_transform_settings.compute_approx_transform:
-    from biahub.registration.utils import get_aprox_transform
+    from biahub.registration.seed import get_aprox_transform
 
     approx_transform = get_aprox_transform(
         mov_shape=mov_data.shape[-3:],

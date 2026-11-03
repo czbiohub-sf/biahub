@@ -12,7 +12,7 @@ from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.core.transform import Transform
-from biahub.registration.utils import (
+from biahub.registration.seed import (
     get_3D_fliplr_matrix,
     get_3D_rescaling_matrix,
     get_3D_rotation_matrix,
