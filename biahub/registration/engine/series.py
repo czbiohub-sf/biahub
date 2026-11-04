@@ -115,7 +115,8 @@ class RunJournal:
         return journal
 
     def save(self, path: Path) -> None:
-        from biahub.registration.engine.core import _write_json  # files: core's (no cycle)
+        # imported here: disk imports series, so a module-level import would be a cycle
+        from biahub.registration.engine.disk import _write_json
 
         _write_json(path, self.to_dict(), indent=2)
 

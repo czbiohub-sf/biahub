@@ -6,7 +6,6 @@ works wherever they live.
 """
 
 from biahub.registration.engine.core import (
-    JOB_FAILED_PREFIX,
     MAX_MINUTES,
     block_failure,
     build_beads_estimator,
@@ -18,6 +17,7 @@ from biahub.registration.engine.core import (
     run_timepoint_jobs,
     transforms_for_file,
 )
+from biahub.registration.engine.disk import JOB_FAILED_PREFIX
 from biahub.registration.engine.fallback import (
     PassResult,
     flag_timepoints,

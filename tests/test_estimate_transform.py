@@ -209,7 +209,7 @@ def test_resume_accepts_the_same_inputs_written_another_way(
 
 
 def test_a_failed_job_is_never_filled_from_a_record_on_disk(tmp_path):
-    from biahub.registration.engine.core import _load_series
+    from biahub.registration.engine.disk import _load_series
 
     stale = {"t": 1, "matrix": np.eye(4).tolist(), "score": 0.9, "error": None}
     (tmp_path / "1.json").write_text(json.dumps(stale))
