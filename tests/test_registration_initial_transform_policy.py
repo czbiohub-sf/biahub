@@ -30,10 +30,12 @@ def test_fixed_seed_is_how_optimize_registration_becomes_a_seed_not_a_command():
 
 
 def test_consensus_seed_raises_when_too_few_timepoints_score_well():
+    from biahub.registration.estimators import CandidateUnavailableError
+
     history = {0: Transform.from_translation([1.0, 1.0, 1.0])}
     scores = {0: 0.9}
     policy = ConsensusInitialTransform(history=history, scores=scores, score_threshold=0.75)
-    with pytest.raises(ValueError, match="only 1 timepoints"):
+    with pytest.raises(CandidateUnavailableError, match="only 1 timepoints"):
         policy.initial_for(3)
 
 

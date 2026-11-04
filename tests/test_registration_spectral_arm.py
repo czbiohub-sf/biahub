@@ -198,7 +198,10 @@ def test_competing_estimator_fails_with_every_arms_reason_when_all_fail():
         {"a": _FixedEstimator(IDENTITY, fail=True), "b": _FixedEstimator(IDENTITY, fail=True)},
         score_fn=_closeness_to(np.zeros(3)),
     )
-    with pytest.raises(EstimationError, match="a: stage failed; b: stage failed"):
+    with pytest.raises(
+        EstimationError,
+        match="a: EstimationError: stage failed; b: EstimationError: stage failed",
+    ):
         competing.estimate(np.zeros((2, 2, 2)), np.zeros((2, 2, 2)))
 
 

@@ -19,6 +19,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
+from biahub.registration.estimators import CandidateUnavailableError
 
 
 @runtime_checkable
@@ -253,7 +254,7 @@ class ConsensusInitialTransform:
     including the ones being repaired would contaminate the very reference used to
     detect and fix them.
 
-    Raises `ValueError` when fewer than `min_good` timepoints qualify, so a caller
+    Raises `CandidateUnavailableError` when fewer than `min_good` timepoints qualify, so a caller
     trying this as one of several candidates (e.g. `registration.engine.repair`,
     whose per-candidate try/except already skips a candidate that raises) treats "no
     consensus yet" the same as any other failed candidate rather than crashing.
@@ -280,7 +281,7 @@ class ConsensusInitialTransform:
             and self.scores[t2] >= self.score_threshold
         ]
         if len(good) < self.min_good:
-            raise ValueError(
+            raise CandidateUnavailableError(
                 f"Consensus seed: only {len(good)} timepoints score >= "
                 f"{self.score_threshold}; need at least {self.min_good}."
             )

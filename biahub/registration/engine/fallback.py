@@ -26,11 +26,13 @@ from biahub.registration.engine.policies import (
 from biahub.registration.engine.series import (
     RunJournal,
     SeriesResult,
-    _beats,
 )
 from biahub.registration.estimators import (
+    CANDIDATE_FAILURES,
     ScoreFn,
     TransformEstimator,
+    is_higher,
+    select_best,
 )
 from biahub.settings import (
     FlagSettings,
@@ -229,23 +231,20 @@ def _best_of(
     `PassResult.failures` (and the journal) so a broken candidate is distinguishable
     from one that merely lost. Ties go to the earlier attempt.
     """
-    best_name = "unchanged"
-    best_transform = current_transform
-    best_score = current_score
-    scores: dict[str, float] = {}
-    failures: dict[str, str] = {}
 
-    for name, attempt in attempts.items():
-        try:
-            candidate_transform = attempt()
-            candidate_score = score_fn(candidate_transform)
-        except Exception as e:  # noqa: BLE001
-            failures[name] = f"{type(e).__name__}: {e}"
-            continue
-        scores[name] = candidate_score
-        if _beats(candidate_score, best_score):
-            best_name, best_transform, best_score = name, candidate_transform, candidate_score
+    def scored(attempt):
+        def run():
+            candidate = attempt()
+            return candidate, score_fn(candidate)
 
+        return run
+
+    chosen = select_best(
+        {name: scored(attempt) for name, attempt in attempts.items()},
+        current=("unchanged", current_transform, current_score),
+    )
+    best_name, best_transform, best_score = chosen.name, chosen.transform, chosen.score
+    scores, failures = chosen.scores, chosen.failures
     accepted = best_name != "unchanged"
     if journal is not None:
         journal.record(
@@ -352,9 +351,9 @@ def polish(
         try:
             candidate = estimator.estimate(mov, ref, seed=transform)
             candidate_score = score_fn(candidate)
-        except Exception:  # noqa: BLE001 -- a failed round keeps the accepted transform
+        except CANDIDATE_FAILURES:  # a failed round keeps the accepted transform
             break
-        if not _beats(candidate_score, score):
+        if not is_higher(candidate_score, score):
             break
         transform, score, improved = candidate, candidate_score, improved + 1
     if journal is not None and rounds:
@@ -503,7 +502,7 @@ def sweep_timepoint(
 def _fold_sweep(result: SeriesResult, t: int, outcome: PassResult) -> None:
     result.sweeps[t] = outcome
     current_score = result.scores.get(t, float("nan"))
-    if outcome.accepted and not outcome.score <= current_score:
+    if outcome.accepted and is_higher(outcome.score, current_score):
         _accept(
             result,
             t,

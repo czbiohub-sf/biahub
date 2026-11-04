@@ -340,7 +340,7 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     failures = repair["candidate_failures"]
     assert "EstimationError" in failures["t-1"] and "EstimationError" in failures["initial"]
     assert failures["consensus_full"].startswith(
-        "ValueError: Consensus seed: only 2 timepoints"
+        "CandidateUnavailableError: Consensus seed: only 2 timepoints"
     )
     assert report["stand_ins"] == {"2": "initial"}
     assert (output.with_suffix("") / "repairs" / "2.json").exists()

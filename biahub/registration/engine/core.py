@@ -59,12 +59,12 @@ from biahub.registration.engine.policies import (
 )
 from biahub.registration.engine.series import (
     SeriesResult,
-    _beats,
 )
 from biahub.registration.estimators import (
     ChainedEstimator,
     ScoreFn,
     TransformEstimator,
+    is_higher,
 )
 from biahub.registration.methods.intensity.ants import AntsEstimator
 from biahub.registration.methods.intensity.focus_finding import FocusEstimator
@@ -692,7 +692,7 @@ def finalize_run(
             )
         # As a fresh repair is judged (and as the sweep fold does): only if it beats the
         # current estimate -- a repair kept by resume may predate a redone, better one.
-        if outcome.accepted and _beats(outcome.score, result.scores.get(t)):
+        if outcome.accepted and is_higher(outcome.score, result.scores.get(t)):
             _accept(
                 result, t, outcome.transform, outcome.score, outcome.source, outcome.report
             )

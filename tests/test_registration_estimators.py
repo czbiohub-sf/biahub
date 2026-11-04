@@ -933,3 +933,77 @@ def test_focus_xy_translation_is_in_full_volume_coordinates_for_unequal_shapes()
     estimator._focus = lambda zyx: 12  # isolate the yx step
     result = estimator.estimate(mov, ref)
     np.testing.assert_allclose(result.matrix[1:3, 3], [0.0, 0.0], atol=0.5)
+
+
+def test_is_higher_needs_a_finite_strictly_greater_score():
+    from biahub.registration.estimators import is_higher
+
+    assert is_higher(0.6, 0.5) and not is_higher(0.5, 0.5)  # a tie keeps the incumbent
+    assert not is_higher(float("nan"), 0.5) and not is_higher(None, 0.5)  # NaN never wins
+    assert is_higher(0.1, float("nan")) and is_higher(
+        0.1, None
+    )  # a NaN incumbent can be beaten
+
+
+def test_select_best_keeps_the_incumbent_on_ties_and_never_a_nan():
+    from biahub.registration.estimators import (
+        CandidateUnavailableError,
+        EstimationError,
+        select_best,
+    )
+
+    a, b = Transform.from_translation([1.0, 0, 0]), Transform.from_translation([2.0, 0, 0])
+
+    def raises(error):
+        def attempt():
+            raise error
+
+        return attempt
+
+    chosen = select_best(
+        {
+            "tie": lambda: (b, 0.5),
+            "nan": lambda: (b, float("nan")),
+            "failed": raises(EstimationError("no beads")),
+            "not_ready": raises(CandidateUnavailableError("too few good timepoints")),
+        },
+        current=("current", a, 0.5),
+    )
+    assert (chosen.name, chosen.transform, chosen.score) == ("current", a, 0.5)
+    assert set(chosen.failures) == {"nan", "failed", "not_ready"}
+    assert chosen.scores["tie"] == 0.5
+    better = select_best({"first": lambda: (a, 0.7), "second": lambda: (b, 0.7)})
+    assert better.name == "first"  # a tie between candidates keeps the earlier
+    with pytest.raises(TypeError):
+        select_best({"bug": raises(TypeError("a bug"))})
+    # stop_at: once a candidate reaches it, later ones are not run
+    ran = []
+    select_best(
+        {
+            "good": lambda: ran.append("good") or (a, 0.9),
+            "late": lambda: ran.append("late") or (b, 1.0),
+        },
+        stop_at=0.8,
+    )
+    assert ran == ["good"]
+    assert select_best({"nan": lambda: (a, float("nan"))}).name is None  # nothing usable
+
+
+def test_propagation_does_not_return_a_transform_whose_score_is_nan():
+    # previous result vs initial transform: both NaN used to return the first, NaN and all
+    from biahub.registration.engine.series import _estimate_competing
+    from biahub.registration.estimators import EstimationError
+
+    class _Plain:
+        def estimate(self, mov, ref, seed=None):
+            return seed
+
+    with pytest.raises(EstimationError, match="from both"):
+        _estimate_competing(
+            _Plain(),
+            np.ones((2, 2, 2)),
+            np.ones((2, 2, 2)),
+            Transform.identity(3),
+            Transform.identity(3),
+            lambda transform, mov, ref: float("nan"),
+        )

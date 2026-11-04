@@ -32,6 +32,8 @@ from biahub.registration.estimators import (
     EstimationError,
     ScoreFn,
     TransformEstimator,
+    is_higher,
+    select_best,
 )
 
 if TYPE_CHECKING:  # an annotation only
@@ -125,13 +127,6 @@ class RunJournal:
         if not path.exists():
             return cls(run_id=run_id)
         return cls.from_dict(json.loads(path.read_text()), run_id=run_id)
-
-
-def _beats(candidate: float | None, current: float | None) -> bool:
-    """Return whether a finite candidate beats a missing / NaN or strictly lower score."""
-    if candidate is None or not np.isfinite(candidate):
-        return False
-    return current is None or not np.isfinite(current) or candidate > current
 
 
 @dataclass
@@ -234,7 +229,7 @@ def _keep_initial(estimator, estimate, seed, score_fn, mov, ref) -> tuple[tuple,
     so its blocks are forgotten.
     """
     kept = (seed, float(score_fn(seed, mov, ref)))
-    if estimate is not None and _beats(estimate[1], kept[1]):
+    if estimate is not None and is_higher(estimate[1], kept[1]):
         return estimate, "file+refined"
     _forget_blocks(estimator)
     return kept, "file"
@@ -285,28 +280,30 @@ def _estimate_competing(estimator, mov, ref, seed, competitor, score_fn) -> Tran
         return estimator.estimate(mov, ref, seed=seed)
     if "competitor" in inspect.signature(estimator.estimate).parameters:
         return estimator.estimate(mov, ref, seed=seed, competitor=competitor)
-    results, errors = [], []
-    for start in (seed, competitor):
-        try:
+    stages: dict[str, list | None] = {}
+
+    def from_start(name: str, start: Transform):
+        def attempt():
             transform = estimator.estimate(mov, ref, seed=start)
-        except EstimationError as e:
-            errors.append(str(e))
-            continue
-        score = score_fn(transform, mov, ref)
-        # a stack's record of its blocks belongs to the run that is kept
-        stages = getattr(estimator, "last_stages", None)
-        results.append((transform, float(score) if np.isfinite(score) else -np.inf, stages))
-    if not results:
+            stages[name] = getattr(estimator, "last_stages", None)
+            return transform, float(score_fn(transform, mov, ref))
+
+        return attempt
+
+    chosen = select_best(
+        {
+            "previous": from_start("previous", seed),
+            "initial": from_start("initial", competitor),
+        }
+    )
+    if chosen.name is None:
         raise EstimationError(
-            f"failed from both the previous result and the input seed: {'; '.join(errors)}"
+            "failed from both the previous result and the input seed: "
+            + "; ".join(chosen.failures.values())
         )
-    best = results[0]
-    for candidate in results[1:]:
-        if candidate[1] > best[1]:
-            best = candidate
     if hasattr(estimator, "last_stages"):
-        estimator.last_stages = best[2]
-    return best[0]
+        estimator.last_stages = stages[chosen.name]
+    return chosen.transform
 
 
 def _forget_blocks(estimator) -> None:

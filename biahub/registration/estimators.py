@@ -6,13 +6,15 @@ array level `mov` / `ref`; at the channel and CLI level `source` / `target`. `so
 always the moving side and `target` always the reference -- the two pairs are the same
 thing at two levels, never mixed within one signature. Each method's estimator lives with the method in
 `biahub.registration.methods`; this module holds what they share -- the protocols, the
-failure type, and the two compositions (`ChainedEstimator`: acquire then refine;
-`CompetingEstimator`: several arms, keep the best score).
+failure types, the one "keep the best" rule (`is_higher`, `select_best`) and the two
+compositions (`ChainedEstimator`: acquire then refine; `CompetingEstimator`: several arms,
+keep the best score).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -54,6 +56,74 @@ class NodeDetector(Protocol):
 
 class EstimationError(RuntimeError):
     """`estimate()` could not produce a transform (too few nodes or matches, degenerate fit)."""
+
+
+class CandidateUnavailableError(RuntimeError):
+    """A candidate has nothing to offer yet (e.g. a consensus before enough good timepoints)."""
+
+
+# The only exceptions that mean "this candidate failed"; anything else is a bug and propagates.
+CANDIDATE_FAILURES = (EstimationError, CandidateUnavailableError)
+
+
+def is_higher(candidate: float | None, current: float | None) -> bool:
+    """Whether `candidate` scores higher than `current`: a finite score, strictly greater.
+
+    A tie keeps the incumbent; NaN (or None) never wins; a NaN or missing incumbent is
+    beaten by any finite score. The one rule every "keep the best" in the engine uses.
+    """
+    if candidate is None or not np.isfinite(candidate):
+        return False
+    return current is None or not np.isfinite(current) or candidate > current
+
+
+@dataclass
+class Selection:
+    """What `select_best` kept, and what every candidate did.
+
+    `name` is the winner's (the incumbent's, or None if nothing was usable), with its
+    transform and score; `scores` every candidate's score, `failures` why any failed.
+    """
+
+    name: str | None
+    transform: Transform | None
+    score: float
+    scores: dict[str, float] = field(default_factory=dict)
+    failures: dict[str, str] = field(default_factory=dict)
+
+
+def select_best(
+    attempts: dict[str, Callable[[], tuple[Transform, float]]],
+    current: tuple[str, Transform, float] | None = None,
+    stop_at: float | None = None,
+) -> Selection:
+    """Run `attempts` in order and keep the best-scoring transform, by `is_higher`.
+
+    `current` is the incumbent (name, transform, score), kept unless a candidate beats
+    it; ties go to the incumbent, then to the earlier candidate. A candidate fails on
+    `CANDIDATE_FAILURES` or a non-finite score (kept in `failures`, never the winner);
+    any other exception propagates. With `stop_at`, later candidates are not run once
+    the best score reaches it. What to do when nothing is usable is the caller's.
+    """
+    name, transform, score = current if current is not None else (None, None, float("nan"))
+    scores: dict[str, float] = {}
+    failures: dict[str, str] = {}
+    for candidate, attempt in attempts.items():
+        if stop_at is not None and transform is not None and np.isfinite(score):
+            if score >= stop_at:
+                break
+        try:
+            candidate_transform, candidate_score = attempt()
+        except CANDIDATE_FAILURES as error:
+            failures[candidate] = f"{type(error).__name__}: {error}"
+            continue
+        scores[candidate] = float(candidate_score)
+        if not np.isfinite(candidate_score):
+            failures[candidate] = f"its transform scored {candidate_score}"
+            continue
+        if is_higher(candidate_score, score):
+            name, transform, score = candidate, candidate_transform, float(candidate_score)
+    return Selection(name, transform, score, scores, failures)
 
 
 def fit_pairs(
@@ -139,8 +209,8 @@ class ChainedEstimator:
             score = self.score_fn(current, mov, ref)
             if np.isfinite(score):
                 stages[k]["score"] = float(score)
-                if score > best_score:
-                    best, best_score, winner = current, score, k
+            if is_higher(score, best_score):
+                best, best_score, winner = current, score, k
         self._keep(stages, winner)
         if best is None:
             raise EstimationError("no stage of the chain produced a finite score")
@@ -182,32 +252,21 @@ class CompetingEstimator:
     ) -> Transform:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
-        best: Transform | None = None
-        best_score = -np.inf
-        self.last_winner = None
-        self.last_scores = {}
-        failures: dict[str, str] = {}
-        for index, (name, arm) in enumerate(self.arms.items()):
-            if (
-                index > 0
-                and self.escalate_below is not None
-                and best is not None
-                and best_score >= self.escalate_below
-            ):
-                break
-            try:
+
+        def run(arm):
+            def attempt():
                 transform = arm.estimate(mov, ref, seed=seed)
-            except EstimationError as e:
-                failures[name] = str(e)
-                continue
-            score = self.score_fn(transform, mov, ref)
-            self.last_scores[name] = float(score)
-            if not np.isfinite(score):
-                failures[name] = f"its transform scored {score}"
-            elif score > best_score:
-                best, best_score, self.last_winner = transform, score, name
-        if best is None:
+                return transform, self.score_fn(transform, mov, ref)
+
+            return attempt
+
+        chosen = select_best(
+            {name: run(arm) for name, arm in self.arms.items()}, stop_at=self.escalate_below
+        )
+        self.last_winner, self.last_scores = chosen.name, chosen.scores
+        if chosen.name is None:
             raise EstimationError(
-                "every arm failed: " + "; ".join(f"{k}: {v}" for k, v in failures.items())
+                "every arm failed: "
+                + "; ".join(f"{k}: {v}" for k, v in chosen.failures.items())
             )
-        return best
+        return chosen.transform
