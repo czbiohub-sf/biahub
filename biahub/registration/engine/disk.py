@@ -37,6 +37,8 @@ INITIAL_FILENAME = "initial_transforms.json"
 
 
 RUN_MANIFEST_FILENAME = "run_manifest.json"
+# At the top of a run folder: its positions and config (see RunFolder).
+RUN_FILENAME = "run.json"
 
 
 def _open_series(position_dirpath: Path, channel_name: str):
@@ -46,25 +48,92 @@ def _open_series(position_dirpath: Path, channel_name: str):
         return series, tuple(position.scale[-3:])
 
 
+def config_fingerprint(settings: EstimateTransformSettings) -> dict:
+    """Return what identifies a run's config: its settings, and the initial file's content.
+
+    With `transform.initial` from a file, a changed file is a different run. The one fingerprint behind both checks: `run.json` (a `--step` must use the config
+    `--init` planned) and the resume manifest (records may be reused).
+    """
+    fingerprint = {
+        "settings_sha256": hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
+    }
+    initial_file = settings.transform.initial_file
+    if initial_file is not None:
+        content = Path(initial_file).read_bytes()
+        fingerprint["initial_file_sha256"] = hashlib.sha256(content).hexdigest()
+    return fingerprint
+
+
 def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: Path) -> dict:
-    """Return what a resumed run must share with the run it resumes."""
-    digest = hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
+    """Return what a resumed run must share with the run it resumes: config and inputs."""
 
     def resolved(path):
         return None if path is None else str(Path(path).resolve())
 
-    seed_file = settings.transform.initial_file
     return {
-        "settings_sha256": digest,
+        **config_fingerprint(settings),
         "moving": resolved(source),
         "reference": resolved(target),
-        # the seed file's content, not only its name: a resumed run must start from the same
-        **(
-            {"seed_file_sha256": hashlib.sha256(Path(seed_file).read_bytes()).hexdigest()}
-            if seed_file is not None
-            else {}
-        ),
     }
+
+
+class RunFolder:
+    """A run's folder (`<output>/transforms/` for one estimate-transform call): its layout.
+
+    `run.json` records the run's positions and config fingerprint (written by `--init`).
+    With one position its work files (settings, plan, records) sit in the folder itself;
+    with several, each position's under `positions/<row>/<col>/<fov>/`.
+    """
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+
+    @property
+    def run_file(self) -> Path:
+        return self.path / RUN_FILENAME
+
+    def start(self, positions: list[str], config: dict) -> None:
+        """Record the run's positions and config fingerprint."""
+        self.path.mkdir(parents=True, exist_ok=True)
+        self.run_file.write_text(
+            json.dumps({"positions": positions, "config": config}, indent=2)
+        )
+
+    def _run(self) -> dict | None:
+        return json.loads(self.run_file.read_text()) if self.run_file.exists() else None
+
+    def positions(self) -> list[str] | None:
+        """Return the run's positions, or None when no `run.json` was written."""
+        run = self._run()
+        return None if run is None else run["positions"]
+
+    def config(self) -> dict | None:
+        """Return the config fingerprint `--init` recorded (None: none, or an older run)."""
+        run = self._run()
+        return None if run is None else run.get("config")
+
+    def work_dir(self, key: str | None, positions: list[str] | None = None) -> Path:
+        """One position's work folder: the run folder itself, or `positions/<key>/`."""
+        positions = self.positions() if positions is None else positions
+        if key is None or positions is None or len(positions) == 1:
+            return self.path
+        return self.path / "positions" / key
+
+    def work_dirs(self) -> list[tuple[str | None, Path]]:
+        """Every position's (key, work folder); a single position's key is None.
+
+        Without a `run.json` (an older run), the folder itself and any `positions/*/*/*/`
+        found on disk.
+        """
+        positions = self.positions()
+        if positions is None:
+            found = sorted(d for d in (self.path / "positions").glob("*/*/*") if d.is_dir())
+            return [(None, self.path)] + [
+                ("/".join(d.relative_to(self.path / "positions").parts), d) for d in found
+            ]
+        if len(positions) == 1:
+            return [(None, self.path)]
+        return [(key, self.work_dir(key, positions)) for key in positions]
 
 
 def _start_run(

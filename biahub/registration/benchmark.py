@@ -409,20 +409,10 @@ def block_candidates(run_dir) -> dict:
     """
     import json
 
+    from biahub.registration.engine.disk import RunFolder
     from biahub.registration.engine.series import TimepointRecord
 
-    run_dir = Path(run_dir)
-    run_file = run_dir / "run.json"  # the run's positions: only its own layout is read
-    positions = json.loads(run_file.read_text())["positions"] if run_file.exists() else None
-    if positions is None:
-        record_dirs = [(None, run_dir / "timepoints")] + [
-            ("/".join(d.parent.relative_to(run_dir / "positions").parts), d)
-            for d in sorted((run_dir / "positions").glob("*/*/*/timepoints"))
-        ]
-    elif len(positions) == 1:
-        record_dirs = [(None, run_dir / "timepoints")]
-    else:
-        record_dirs = [(key, run_dir / "positions" / key / "timepoints") for key in positions]
+    record_dirs = [(key, work / "timepoints") for key, work in RunFolder(run_dir).work_dirs()]
     candidates: dict = {}
     for position, directory in record_dirs:
         for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:

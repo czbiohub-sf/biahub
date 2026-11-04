@@ -12,7 +12,6 @@ Nextflow workflow can own the fan-out like it does for every other step.
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 from concurrent.futures import ThreadPoolExecutor
@@ -48,6 +47,7 @@ from biahub.registration.engine import (
     init_run,
     run_timepoint_jobs,
 )
+from biahub.registration.engine.disk import RunFolder, config_fingerprint
 from biahub.settings import (
     TransformEntry,
     TransformSettings,
@@ -329,8 +329,6 @@ def pool_positions(
 # Positions estimated at once; each driver fans its own timepoints out to SLURM.
 MAX_CONCURRENT_POSITIONS = 8
 
-# At the top of a run folder: the positions and the config `--init` started the run with.
-RUN_FILENAME = "run.json"
 
 STEPS = ("estimate", "flag", "repair", "sweep", "finalize")
 
@@ -361,10 +359,8 @@ class _Run:
             if not seed_file.is_file():
                 raise click.UsageError(f"transform.initial.file {seed_file} does not exist")
             self.settings.transform.initial.file = str(seed_file)
-        digest = hashlib.sha256(self.settings.model_dump_json().encode())
-        if seed_file is not None:  # its content too: a changed file is a different run
-            digest.update(seed_file.read_bytes())
-        self.config_sha256 = digest.hexdigest()
+        self.config = config_fingerprint(self.settings)
+        self.folder = RunFolder(self.output_dir)
         self.movings = [Path(p) for p in moving_position_dirpaths]
         self.keys = [position_key(p) for p in self.movings]
         if self.settings.reference.frame == "cross":
@@ -384,35 +380,28 @@ class _Run:
             raise click.UsageError(
                 f"pool needs estimates on two or more positions; got {len(self.keys)}"
             )
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        (self.output_dir / RUN_FILENAME).write_text(
-            json.dumps({"positions": self.keys, "config_sha256": self.config_sha256}, indent=2)
-        )
+        self.folder.start(self.keys, self.config)
         self.run_positions = list(self.keys)
 
     def load(self) -> None:
         """Read what `--init` recorded; refuse positions or a config it did not start."""
-        path = self.output_dir / RUN_FILENAME
-        if not path.exists():
+        positions = self.folder.positions()
+        if positions is None:
             raise click.UsageError(f"no run for {self.output_filepath}: run with --init first")
-        run = json.loads(path.read_text())
-        if run["config_sha256"] != self.config_sha256:
+        if self.folder.config() != self.config:
             raise click.UsageError(
                 f"the config changed since --init started {self.output_dir}; run --init again"
             )
-        unknown = sorted(set(self.keys) - set(run["positions"]))
+        unknown = sorted(set(self.keys) - set(positions))
         if unknown:
             raise click.UsageError(
-                f"positions {unknown} are not in the run --init started (it has "
-                f"{run['positions']})"
+                f"positions {unknown} are not in the run --init started (it has {positions})"
             )
-        self.run_positions = run["positions"]
+        self.run_positions = positions
 
     def work_dir(self, key: str) -> Path:
         """One position's run folder: the run folder itself, or `positions/<key>/`."""
-        if len(self.run_positions) == 1:
-            return self.output_dir
-        return self.output_dir / "positions" / key
+        return self.folder.work_dir(key, self.run_positions)
 
     def moving(self, key: str) -> Path:
         return self.movings[self.keys.index(key)]

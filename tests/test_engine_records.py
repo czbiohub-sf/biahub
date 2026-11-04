@@ -75,3 +75,68 @@ def test_a_pass_record_round_trips_and_falls_back_when_nothing_was_accepted():
     assert np.isnan(outcome.scores["t-1"]) and outcome.failures == {
         "initial": "EstimationError: x"
     }
+
+
+def test_the_run_folder_knows_its_layout(tmp_path):
+    # one position: the work files sit in the run folder; several: under positions/<key>/
+    from biahub.registration.engine.disk import RunFolder
+
+    one = RunFolder(tmp_path / "one")
+    one.start(["A/1/0"], {"settings_sha256": "x"})
+    assert one.work_dir("A/1/0") == one.path and one.positions() == ["A/1/0"]
+    many = RunFolder(tmp_path / "many")
+    many.start(["A/1/0", "A/1/1"], {"settings_sha256": "x"})
+    assert many.work_dir("A/1/1") == many.path / "positions" / "A/1/1"
+    assert [key for key, _ in many.work_dirs()] == ["A/1/0", "A/1/1"]
+    assert many.config() == {"settings_sha256": "x"}
+    assert RunFolder(tmp_path / "none").work_dirs() == [(None, tmp_path / "none")]
+
+
+def test_the_config_fingerprint_is_the_resume_manifests_too(tmp_path):
+    # one fingerprint: the run's config check (run.json) and the resume manifest agree
+    from biahub.registration.engine.disk import _run_fingerprint, config_fingerprint
+    from biahub.settings import EstimateTransformSettings
+
+    seed = tmp_path / "plate.yml"
+    seed.write_text("transforms: []\n")
+    settings = EstimateTransformSettings(
+        moving={"channel": "GFP"},
+        reference={"frame": "first"},
+        method="phase_cross_corr",
+        transform={"initial": {"from": "file", "file": str(seed)}},
+    )
+    config = config_fingerprint(settings)
+    assert set(config) == {"settings_sha256", "initial_file_sha256"}
+    manifest = _run_fingerprint(settings, tmp_path / "mov", tmp_path / "ref")
+    assert {k: manifest[k] for k in config} == config
+    seed.write_text("transforms: [changed]\n")
+    assert config_fingerprint(settings)["initial_file_sha256"] != config["initial_file_sha256"]
+
+
+def test_bead_landmarks_find_the_estimates_settings_in_a_multi_position_run(tmp_path):
+    # evaluate-transform read run_dir/estimate_transform_settings.yml only; with several
+    # positions the settings are under positions/<key>/, so --landmarks beads failed
+    from biahub.evaluate_transform import _bead_detection
+    from biahub.registration.engine.disk import ENGINE_SETTINGS_FILENAME, RunFolder
+    from biahub.settings import EstimateTransformSettings
+    from biahub.utils.config import model_to_yaml
+
+    run = RunFolder(tmp_path / "transforms")
+    run.start(["A/1/0", "A/1/1"], {"settings_sha256": "x"})
+    peaks = {
+        "threshold_abs": 321,
+        "nms_distance": 4,
+        "min_distance": 0,
+        "block_size": [8, 8, 8],
+    }
+    settings = EstimateTransformSettings(
+        moving={"channel": "GFP"},
+        reference={"frame": "cross", "channel": "Phase3D"},
+        method="bead_matching",
+        bead_matching={"source_peaks_settings": peaks, "target_peaks_settings": peaks},
+    )
+    for _, work_dir in run.work_dirs():
+        work_dir.mkdir(parents=True)
+        model_to_yaml(settings, work_dir / ENGINE_SETTINGS_FILENAME)
+    detection = _bead_detection(run.path, None)
+    assert detection["moving"]["threshold_abs"] == 321

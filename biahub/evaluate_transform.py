@@ -35,11 +35,14 @@ def _bead_detection(run_dir: Path, threshold: float | None) -> dict:
     """Return bead detection settings: `threshold` for both, else the estimate's own."""
     if threshold is not None:
         return {"threshold_abs": threshold}
+    from biahub.registration.engine.disk import ENGINE_SETTINGS_FILENAME, RunFolder
     from biahub.settings import load_estimate_transform_settings
 
-    settings_file = run_dir / "estimate_transform_settings.yml"
+    # every position of a run shares its settings: the first work folder that has them
+    files = [w / ENGINE_SETTINGS_FILENAME for _, w in RunFolder(run_dir).work_dirs()]
+    settings_file = next((f for f in files if f.exists()), None)
     final = None
-    if settings_file.exists():
+    if settings_file is not None:
         final = load_estimate_transform_settings(settings_file).stack_settings()[-1]
     if final is None or final.bead_matching is None:
         raise click.UsageError(
