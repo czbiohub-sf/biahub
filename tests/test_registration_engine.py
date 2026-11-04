@@ -2,15 +2,13 @@ import numpy as np
 import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.engine.core import (
-    RunJournal,
-    estimate_series,
+from biahub.registration.engine.core import transforms_for_file
+from biahub.registration.engine.fallback import (
     flag_series,
     neighbour_consensus_initial_candidates,
     polish,
     repair_timepoint,
     sweep_timepoint,
-    transforms_for_file,
 )
 from biahub.registration.engine.policies import (
     ConsensusInitialTransform,
@@ -19,6 +17,7 @@ from biahub.registration.engine.policies import (
     FixedInitialTransform,
     PreviousFrame,
 )
+from biahub.registration.engine.series import RunJournal, estimate_series
 from biahub.registration.estimators import EstimationError
 
 IDENTITY = Transform.identity(3)

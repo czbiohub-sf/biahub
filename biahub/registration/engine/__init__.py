@@ -8,20 +8,22 @@ works wherever they live.
 from biahub.registration.engine.core import (
     JOB_FAILED_PREFIX,
     MAX_MINUTES,
-    PassResult,
     block_failure,
     build_beads_estimator,
     build_estimator,
     estimate_transform_series,
     finalize_run,
     flag_run,
-    flag_timepoints,
     init_run,
+    run_timepoint_jobs,
+    transforms_for_file,
+)
+from biahub.registration.engine.fallback import (
+    PassResult,
+    flag_timepoints,
     neighbour_consensus_initial_candidates,
     repair,
-    run_timepoint_jobs,
     select_flagged,
-    transforms_for_file,
 )
 from biahub.registration.engine.series import (
     RunJournal,

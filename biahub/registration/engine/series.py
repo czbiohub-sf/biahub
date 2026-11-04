@@ -35,7 +35,7 @@ from biahub.registration.estimators import (
 )
 
 if TYPE_CHECKING:  # an annotation only
-    from biahub.registration.engine.core import PassResult
+    from biahub.registration.engine.fallback import PassResult
 
 
 @dataclass
