@@ -1229,3 +1229,63 @@ def test_a_leftover_motion_run_plans_memory_for_its_raw_shift(tmp_path):
         "mem_gb"
     ]
     assert mem_gb >= LEFTOVER_MOTION_VOLUMES * np.prod(zyx) * 4 / 2**30
+
+
+def test_a_job_reads_each_frame_once_and_computes_the_neighbour_median_once(
+    tmp_path, monkeypatch
+):
+    # Each job rebuilt the reference policy for its report (so the neighbour median was
+    # computed again) and read frame t once per use (estimate, report, leftover motion).
+    from collections import Counter
+
+    import biahub.registration.engine.policies as policies
+
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    frames = [
+        ndi_shift(ref, shift=(0.0, 0.2 * t, 0.0), order=1, mode="constant") for t in range(5)
+    ]
+    plate = _write_plate(tmp_path / "frames.zarr", [(f, f) for f in frames])
+    reads, medians = Counter(), Counter()
+    real_open = cluster._open_series
+
+    class _Counting:
+        def __init__(self, series):
+            self.series = series
+            self.shape = series.shape
+
+        def __len__(self):
+            return len(self.series)
+
+        def __getitem__(self, t):
+            reads[int(t)] += 1
+            return self.series[t]
+
+    monkeypatch.setattr(
+        cluster, "_open_series", lambda *a: (lambda s, um: (_Counting(s), um))(*real_open(*a))
+    )
+    real_gather = policies.NeighbourMedian._gather
+
+    def counting_gather(self, mov, t):
+        if self._t != t:
+            medians[t] += 1
+        return real_gather(self, mov, t)
+
+    monkeypatch.setattr(policies.NeighbourMedian, "_gather", counting_gather)
+    config = _write_config(
+        tmp_path,
+        source="GFP",
+        reference=ReferenceSettings(frame="neighbours", window=1, leftover_motion={}),
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+        score={"report": ["correlation"]},
+    )
+    _run(plate, config, tmp_path / "out" / "transforms.yml")
+    assert medians == Counter({t: 1 for t in range(5)})  # one median per job
+    # each job reads the frames it needs once: t, its neighbours t-1 and t+1 (t-1 also
+    # for leftover motion). A self-reference frame never reads the reference series.
+    needed = Counter()
+    for t in range(5):
+        for k in {t - 1, t, t + 1} & set(range(5)):
+            needed[k] += 1
+    assert reads == needed

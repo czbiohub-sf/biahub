@@ -59,6 +59,7 @@ from biahub.registration.engine.fallback import (
 from biahub.registration.engine.policies import (
     FixedInitialTransform,
     InitialTransformPolicy,
+    ReferencePolicy,
 )
 from biahub.registration.engine.series import (
     SeriesResult,
@@ -88,12 +89,13 @@ from biahub.utils.cluster import (
 from biahub.utils.config import yaml_to_model
 
 
-def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
+def _bead_metrics(settings, result, t, mov, ref, reference_policy=None) -> dict | None:
     """Continuous bead residuals next to the score, for the beads method."""
     final = _final(settings)
     if final.method != "bead_matching" or t not in result.transforms:
         return None
-    ref_t = np.asarray(_reference_policy(settings, ref).reference_for(mov, t))
+    policy = reference_policy or _reference_policy(settings, ref)
+    ref_t = np.asarray(policy.reference_for(mov, t))
     metrics = bead_alignment_metrics(
         result.transforms[t], np.asarray(mov[t]), ref_t, final.bead_matching
     )
@@ -101,7 +103,7 @@ def _bead_metrics(settings, result, t, mov, ref) -> dict | None:
 
 
 def _report_metrics(
-    settings, transform, t, mov, ref, score: float | None = None
+    settings, transform, t, mov, ref, score: float | None = None, reference_policy=None
 ) -> dict | None:
     """Return score.report metrics of `transform` at `t`, on the raw warped pair.
 
@@ -112,7 +114,8 @@ def _report_metrics(
     """
     if not settings.score.report or transform is None:
         return None
-    ref_t = np.asarray(_reference_policy(settings, ref).reference_for(mov, t))
+    policy = reference_policy or _reference_policy(settings, ref)
+    ref_t = np.asarray(policy.reference_for(mov, t))
     mov_t = np.asarray(mov[t])
     click.echo(f"t={t}: report metrics {settings.score.report}, and the unregistered pair's")
     report = {}
@@ -151,6 +154,12 @@ def _anchor_centroid(settings: EstimateTransformSettings, mov, t: int) -> list[f
     return centroid.tolist() if np.isfinite(centroid).all() else None
 
 
+def _previous_in_run(settings: EstimateTransformSettings, mov, t: int) -> int | None:
+    """Return the run's timepoint before `t` (None at its first)."""
+    earlier = [k for k in resolve_time_indices(settings.time_indices, len(mov)) if k < t]
+    return earlier[-1] if earlier else None
+
+
 def _leftover_raw_shift(settings: EstimateTransformSettings, mov, t: int) -> dict | None:
     """Return frame t's raw shift from the run's previous timepoint (`reference.leftover_motion`).
 
@@ -159,12 +168,44 @@ def _leftover_raw_shift(settings: EstimateTransformSettings, mov, t: int) -> dic
     """
     if settings.reference.leftover_motion is None:
         return None
-    run = resolve_time_indices(settings.time_indices, len(mov))
-    earlier = [k for k in run if k < t]
-    if not earlier:
+    previous = _previous_in_run(settings, mov, t)
+    if previous is None:
         return None
-    shift = raw_shift(mov[earlier[-1]], mov[t])
-    return {"from": earlier[-1], "shift": None if shift is None else shift.tolist()}
+    shift = raw_shift(mov[previous], mov[t])
+    return {"from": previous, "shift": None if shift is None else shift.tolist()}
+
+
+class _JobFrames:
+    """A frame series whose frames a job uses more than once (`keep`) are read once.
+
+    Other frames (e.g. a neighbour window, read once by the reference policy) pass
+    straight through, so they are not all held at once. Kept frames are read-only: a
+    step that changed one in place would corrupt the next one's input.
+    """
+
+    def __init__(self, series):
+        self.series = series
+        self.shape = series.shape
+        self.keep: set[int] = set()
+        self._kept: dict[int, np.ndarray] = {}
+
+    def __len__(self) -> int:
+        return len(self.series)
+
+    def __getitem__(self, t):
+        if not isinstance(t, (int, np.integer)) or int(t) not in self.keep:
+            return self.series[t]
+        t = int(t)
+        if t not in self._kept:
+            frame = np.asarray(self.series[t])
+            frame.flags.writeable = False
+            self._kept[t] = frame
+        return self._kept[t]
+
+    def keep_only(self, timepoints) -> None:
+        """Keep these frames (read on first use); forget the others."""
+        self.keep = {int(t) for t in timepoints if t is not None}
+        self._kept = {t: f for t, f in self._kept.items() if t in self.keep}
 
 
 class _JobInputs(NamedTuple):
@@ -177,6 +218,9 @@ class _JobInputs(NamedTuple):
     score_fn: ScoreFn
     # where each timepoint starts (`transform.initial`)
     initial: InitialTransformPolicy
+    # what each timepoint is compared against, built once for the job (its caches, e.g.
+    # the neighbour median, serve the estimate and the per-timepoint extras alike)
+    reference_policy: ReferencePolicy
 
 
 def _job_inputs(
@@ -187,12 +231,21 @@ def _job_inputs(
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
     ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
+    mov, ref = _JobFrames(mov), _JobFrames(ref)
     estimator, score_fn, _ = build_estimator(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
     initial = _initial_policy(settings, Path(settings_path).parent)
     return _JobInputs(
-        settings, mov, ref, mov_voxel_size, ref_voxel_size, estimator, score_fn, initial
+        settings,
+        mov,
+        ref,
+        mov_voxel_size,
+        ref_voxel_size,
+        estimator,
+        score_fn,
+        initial,
+        _reference_policy(settings, ref),
     )
 
 
@@ -206,11 +259,18 @@ def _estimate_timepoint_job(
     """One independent estimate, from the config seed, written as a JSON record."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
+    # t is read by the estimate and every extra; the previous timepoint only by leftover
+    # motion (kept otherwise, it would be one more volume than the job's memory plan)
+    previous = (
+        _previous_in_run(settings, mov, t) if settings.reference.leftover_motion else None
+    )
+    mov.keep_only([t, previous])
+    ref.keep_only([t])
     estimator, score_fn = job.estimator, job.score_fn
 
     result = estimate_series(
         mov,
-        _reference_policy(settings, ref),
+        job.reference_policy,
         estimator,
         FixedInitialTransform(job.initial.initial_for(t)),
         score_fn,
@@ -226,9 +286,15 @@ def _estimate_timepoint_job(
         arm=getattr(estimator, "last_winner", None),
         # a stack: what each block did (its transform, score, error) and which won
         blocks=getattr(estimator, "last_stages", None),
-        metrics=_bead_metrics(settings, result, t, mov, ref),
+        metrics=_bead_metrics(settings, result, t, mov, ref, job.reference_policy),
         report=_report_metrics(
-            settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
+            settings,
+            result.transforms.get(t),
+            t,
+            mov,
+            ref,
+            score=result.scores.get(t),
+            reference_policy=job.reference_policy,
         ),
         centroid=_anchor_centroid(settings, mov, t),
         raw_shift=_leftover_raw_shift(settings, mov, t),
@@ -264,8 +330,21 @@ def _estimate_propagated_job(
     records = dict(done)
     records_dir.mkdir(parents=True, exist_ok=True)
 
+    order = list(time_indices)
+
+    def keep_for(t: int) -> None:
+        # t (its extras) and the next timepoint (estimated next, then its extras)
+        following = order[order.index(t) + 1] if order.index(t) + 1 < len(order) else None
+        mov.keep_only([t, following])
+        ref.keep_only([following])
+
+    if order:
+        mov.keep_only([order[0]])
+        ref.keep_only([order[0]])
+
     def write_record(t: int, result: SeriesResult) -> None:
         if t in done:
+            keep_for(t)
             return
         stand_in = result.stand_ins.get(t)
         record = TimepointRecord(
@@ -277,19 +356,26 @@ def _estimate_propagated_job(
             stand_in_from=stand_in[1] if stand_in else None,
             arm=getattr(estimator, "last_winner", None),
             blocks=getattr(estimator, "last_stages", None),
-            metrics=_bead_metrics(settings, result, t, mov, ref),
+            metrics=_bead_metrics(settings, result, t, mov, ref, job.reference_policy),
             report=_report_metrics(
-                settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
+                settings,
+                result.transforms.get(t),
+                t,
+                mov,
+                ref,
+                score=result.scores.get(t),
+                reference_policy=job.reference_policy,
             ),
             centroid=_anchor_centroid(settings, mov, t),
             raw_shift=_leftover_raw_shift(settings, mov, t),
         ).to_dict()
         _write_json(records_dir / f"{t}.json", record)
         records[t] = record
+        keep_for(t)
 
     estimate_propagated(
         mov,
-        _reference_policy(settings, ref),
+        job.reference_policy,
         estimator,
         seed,
         score_fn,
@@ -314,6 +400,8 @@ def _repair_timepoint_job(
     """Repair one flagged timepoint against the frozen whole-run history."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
+    mov.keep_only([t])
+    ref.keep_only([t])
     estimator, score_fn, seed = job.estimator, job.score_fn, job.initial.initial_for(t)
     repair_settings = settings.fallback.repair
 
@@ -325,7 +413,7 @@ def _repair_timepoint_job(
     outcome = repair_timepoint(
         t,
         mov,
-        _reference_policy(settings, ref),
+        job.reference_policy,
         estimator,
         score_fn,
         series,
@@ -354,6 +442,7 @@ def _repair_timepoint_job(
             mov,
             ref,
             score=outcome.score,
+            reference_policy=job.reference_policy,
         ),
     ).to_dict()
     record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -372,6 +461,8 @@ def _sweep_timepoint_job(
     """Sweep one flagged timepoint against its own pre-fallback estimate."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
+    mov.keep_only([t])
+    ref.keep_only([t])
     score_fn, seed = job.score_fn, job.initial.initial_for(t)
     trials = {
         name: build_estimator(
@@ -381,9 +472,7 @@ def _sweep_timepoint_job(
     }
 
     series = _load_series(records_dir, [t], settings.transform.type, resumed=[t])
-    outcome = sweep_timepoint(
-        t, mov, _reference_policy(settings, ref), trials, seed, score_fn, series
-    )
+    outcome = sweep_timepoint(t, mov, job.reference_policy, trials, seed, score_fn, series)
     record = PassRecord(
         t=t,
         accepted=outcome.accepted,
@@ -399,6 +488,7 @@ def _sweep_timepoint_job(
             mov,
             ref,
             score=outcome.score,
+            reference_policy=job.reference_policy,
         ),
     ).to_dict()
     record_path.parent.mkdir(parents=True, exist_ok=True)
