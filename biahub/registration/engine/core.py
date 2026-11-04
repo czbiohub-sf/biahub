@@ -35,6 +35,19 @@ from numpy.typing import ArrayLike
 from biahub.cli.monitor import monitor_jobs
 from biahub.cli.parsing import position_key, sbatch_to_submitit
 from biahub.core.transform import Transform
+from biahub.registration.engine.policies import (
+    ConsensusInitialTransform,
+    CrossChannel,
+    FileInitialTransform,
+    FixedFrame,
+    FixedInitialTransform,
+    InitialTransformPolicy,
+    NeighbourMedian,
+    PreviousFrame,
+    ReferencePolicy,
+    ShapesInitialTransform,
+    is_empty,
+)
 from biahub.registration.estimators import (
     ChainedEstimator,
     CompetingEstimator,
@@ -62,19 +75,6 @@ from biahub.registration.metrics import (
     metric_fn,
     raw_shift,
     smooth_track,
-)
-from biahub.registration.policies import (
-    ConsensusInitialTransform,
-    CrossChannel,
-    FileInitialTransform,
-    FixedFrame,
-    FixedInitialTransform,
-    InitialTransformPolicy,
-    NeighbourMedian,
-    PreviousFrame,
-    ReferencePolicy,
-    ShapesInitialTransform,
-    is_empty,
 )
 from biahub.registration.preprocess import (
     PreprocessedEstimator,

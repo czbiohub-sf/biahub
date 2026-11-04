@@ -12,14 +12,14 @@ from biahub.registration.engine.core import (
     sweep_timepoint,
     transforms_for_file,
 )
-from biahub.registration.estimators import EstimationError
-from biahub.registration.policies import (
+from biahub.registration.engine.policies import (
     ConsensusInitialTransform,
     CrossChannel,
     FixedFrame,
     FixedInitialTransform,
     PreviousFrame,
 )
+from biahub.registration.estimators import EstimationError
 
 IDENTITY = Transform.identity(3)
 

@@ -1,6 +1,6 @@
 import numpy as np
 
-from biahub.registration.policies import (
+from biahub.registration.engine.policies import (
     CrossChannel,
     FixedFrame,
     PreviousFrame,
@@ -70,7 +70,7 @@ def test_policies_index_one_frame_and_never_materialize_the_series():
 
 
 def test_a_neighbour_median_reference_leaves_out_t_and_keeps_inside_the_run():
-    from biahub.registration.policies import NeighbourMedian
+    from biahub.registration.engine.policies import NeighbourMedian
 
     frames = np.stack([np.full((2, 2), float(v)) for v in [1, 2, 0, 4, 5, 60, 7, 8]])
     mov = _LazySeries(frames)  # frame 2 is empty; frame 5 is a jump
@@ -93,7 +93,7 @@ def test_a_neighbour_median_holds_its_frames_once():
     # median sorting another; now the peak is 2 x window frames, the one read and the median
     import tracemalloc
 
-    from biahub.registration.policies import NeighbourMedian
+    from biahub.registration.engine.policies import NeighbourMedian
 
     frames = np.random.default_rng(0).random((13, 16, 64, 64)).astype(np.float32)
     frame_bytes = frames[0].nbytes

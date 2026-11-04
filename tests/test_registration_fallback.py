@@ -2,7 +2,7 @@ import numpy as np
 
 from biahub.core.transform import Transform
 from biahub.registration.engine import RunJournal, repair
-from biahub.registration.policies import FixedInitialTransform
+from biahub.registration.engine.policies import FixedInitialTransform
 
 
 class _EchoEstimator:

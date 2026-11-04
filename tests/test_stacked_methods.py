@@ -298,8 +298,8 @@ def test_propagated_blocks_are_the_winning_runs_and_empty_frames_have_none():
 
     from biahub.core.transform import Transform
     from biahub.registration.engine import estimate_propagated
+    from biahub.registration.engine.policies import CrossChannel
     from biahub.registration.estimators import ChainedEstimator
-    from biahub.registration.policies import CrossChannel
 
     def score(t, mov, ref):  # best near x = 3
         return -abs(t.translation[2] - 3)

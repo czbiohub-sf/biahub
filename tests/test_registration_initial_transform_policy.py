@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.policies import (
+from biahub.registration.engine.policies import (
     ConsensusInitialTransform,
     FixedInitialTransform,
     InitialTransformPolicy,
@@ -77,7 +77,7 @@ def test_consensus_seed_excludes_t_itself_even_if_it_scores_well():
 
 def test_a_shapes_initial_transform_is_the_approximate_transform_from_the_two_grids():
     # what init_run computes today: get_aprox_transform's matrix, read as inverse
-    from biahub.registration.policies import ShapesInitialTransform
+    from biahub.registration.engine.policies import ShapesInitialTransform
     from biahub.registration.seed import get_aprox_transform
 
     grids = dict(
@@ -101,7 +101,7 @@ def test_a_shapes_initial_transform_is_the_approximate_transform_from_the_two_gr
 
 
 def test_a_file_initial_transform_gives_each_timepoints_and_asks_to_be_kept_unless_beaten():
-    from biahub.registration.policies import FileInitialTransform
+    from biahub.registration.engine.policies import FileInitialTransform
 
     by_t = {
         0: Transform.from_translation([1.0, 2.0, 3.0]),
