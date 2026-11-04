@@ -8,7 +8,6 @@ from biahub.core.nodes.costs import MatchingTooLargeError, spectral_affinity
 from biahub.core.nodes.graph import Graph
 from biahub.core.nodes.matching import GraphMatcher
 from biahub.core.transform import Transform
-from biahub.registration.engine import build_beads_estimator
 from biahub.registration.estimators import (
     ChainedEstimator,
     CompetingEstimator,
@@ -18,6 +17,7 @@ from biahub.registration.estimators import (
 from biahub.registration.methods.landmark.bead_matching import (
     BeadNodeDetector,
     NodeGraphEstimator,
+    build_beads_estimator,
 )
 from biahub.settings import (
     AffineTransformSettings,

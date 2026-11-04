@@ -5,7 +5,6 @@ from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.nodes.point_set import vote_drift, vote_icp_register
 from biahub.core.transform import Transform
-from biahub.registration.engine import build_beads_estimator
 from biahub.registration.estimators import (
     ChainedEstimator,
     EstimationError,
@@ -16,6 +15,7 @@ from biahub.registration.methods.landmark.bead_matching import (
     NodeGraphEstimator,
     VoteIcpEstimator,
     VoteSeedCorrection,
+    build_beads_estimator,
 )
 from biahub.registration.metrics import score_transform
 from biahub.settings import (

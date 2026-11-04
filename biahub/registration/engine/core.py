@@ -63,7 +63,6 @@ from biahub.registration.engine.series import (
 )
 from biahub.registration.estimators import (
     ChainedEstimator,
-    CompetingEstimator,
     ScoreFn,
     TransformEstimator,
 )
@@ -73,9 +72,7 @@ from biahub.registration.methods.intensity.local_phase_cross_corr import LocalPC
 from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
 from biahub.registration.methods.interactive.manual import ManualEstimator
 from biahub.registration.methods.landmark.bead_matching import (
-    NodeGraphEstimator,
-    VoteIcpEstimator,
-    VoteSeedCorrection,
+    build_beads_estimator,
 )
 from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimator
 from biahub.registration.metrics import (
@@ -94,7 +91,6 @@ from biahub.registration.utils import resolve_time_indices
 from biahub.settings import (
     AffineTransformSettings,
     AnchorSettings,
-    BeadsMatchSettings,
     EstimateTransformSettings,
     InitialTransformSettings,
 )
@@ -195,57 +191,6 @@ def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSett
         # the legacy field knows first / previous: a cross registration and a neighbour
         # median give absolute transforms, like first
         t_reference="previous" if settings.reference.frame == "previous" else "first",
-    )
-
-
-def build_beads_estimator(
-    beads_match_settings: BeadsMatchSettings,
-    affine_transform_settings: AffineTransformSettings,
-    score_fn: ScoreFn | None = None,
-    iterations: int | None = None,
-) -> TransformEstimator:
-    """Build the beads method as configured: matcher, estimation mode, seed correction, arms.
-
-    `estimation_mode: vote_icp` swaps the graph matcher for `VoteIcpEstimator`; a
-    `seed_correction_settings.mode` other than `none` chains a `VoteSeedCorrection` in
-    front; `spectral_arm` on returns a `CompetingEstimator` of the configured matcher
-    and a spectral-acquire-then-refine cascade, the higher-scoring arm wins.
-    """
-    score_fn = score_fn or metric_fn("overlap", beads_match_settings)
-
-    def node_graph(settings: BeadsMatchSettings) -> NodeGraphEstimator:
-        return NodeGraphEstimator.from_beads_settings(
-            settings, affine_transform_settings, iterations=iterations, score_fn=score_fn
-        )
-
-    if beads_match_settings.estimation_mode == "vote_icp":
-        configured: TransformEstimator = VoteIcpEstimator.from_beads_settings(
-            beads_match_settings,
-            score_fn=score_fn,
-            transform_type=affine_transform_settings.transform_type,
-        )
-    else:
-        configured = node_graph(beads_match_settings)
-    if beads_match_settings.seed_correction_settings.mode != "none":
-        configured = ChainedEstimator(
-            [VoteSeedCorrection.from_beads_settings(beads_match_settings), configured],
-            score_fn=score_fn,
-        )
-    if beads_match_settings.spectral_arm == "off":
-        return configured
-    spectral_settings = beads_match_settings.model_copy(deep=True)
-    spectral_settings.algorithm = "spectral"
-    cascade = ChainedEstimator(
-        [node_graph(spectral_settings), node_graph(beads_match_settings)], score_fn=score_fn
-    )
-    return CompetingEstimator(
-        {beads_match_settings.algorithm: configured, "spectral+hungarian": cascade},
-        score_fn=score_fn,
-        escalate_below=(
-            beads_match_settings.qc_settings.score_threshold
-            if beads_match_settings.spectral_arm == "on_low_score"
-            else None
-        ),
     )
 
 

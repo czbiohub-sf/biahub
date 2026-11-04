@@ -42,10 +42,13 @@ from biahub.core.nodes.matching import GraphMatcher
 from biahub.core.nodes.point_set import vote_drift, vote_icp_register
 from biahub.core.transform import Transform
 from biahub.registration.estimators import (
+    ChainedEstimator,
+    CompetingEstimator,
     EstimationError,
     NodeDetector,
     NodeMatcher,
     ScoreFn,
+    TransformEstimator,
     fit_pairs,
 )
 from biahub.settings import (
@@ -789,3 +792,57 @@ def _vote_icp_register(**kwargs):
         return vote_icp_register(**kwargs)
     except ValueError as error:
         raise EstimationError(str(error)) from error
+
+
+def build_beads_estimator(
+    beads_match_settings: BeadsMatchSettings,
+    affine_transform_settings: AffineTransformSettings,
+    score_fn: ScoreFn | None = None,
+    iterations: int | None = None,
+) -> TransformEstimator:
+    """Build the beads method as configured: matcher, estimation mode, seed correction, arms.
+
+    `estimation_mode: vote_icp` swaps the graph matcher for `VoteIcpEstimator`; a
+    `seed_correction_settings.mode` other than `none` chains a `VoteSeedCorrection` in
+    front; `spectral_arm` on returns a `CompetingEstimator` of the configured matcher
+    and a spectral-acquire-then-refine cascade, the higher-scoring arm wins.
+    """
+    # imported here: metrics imports this module (overlap_score, peaks_from_beads)
+    from biahub.registration.metrics import metric_fn
+
+    score_fn = score_fn or metric_fn("overlap", beads_match_settings)
+
+    def node_graph(settings: BeadsMatchSettings) -> NodeGraphEstimator:
+        return NodeGraphEstimator.from_beads_settings(
+            settings, affine_transform_settings, iterations=iterations, score_fn=score_fn
+        )
+
+    if beads_match_settings.estimation_mode == "vote_icp":
+        configured: TransformEstimator = VoteIcpEstimator.from_beads_settings(
+            beads_match_settings,
+            score_fn=score_fn,
+            transform_type=affine_transform_settings.transform_type,
+        )
+    else:
+        configured = node_graph(beads_match_settings)
+    if beads_match_settings.seed_correction_settings.mode != "none":
+        configured = ChainedEstimator(
+            [VoteSeedCorrection.from_beads_settings(beads_match_settings), configured],
+            score_fn=score_fn,
+        )
+    if beads_match_settings.spectral_arm == "off":
+        return configured
+    spectral_settings = beads_match_settings.model_copy(deep=True)
+    spectral_settings.algorithm = "spectral"
+    cascade = ChainedEstimator(
+        [node_graph(spectral_settings), node_graph(beads_match_settings)], score_fn=score_fn
+    )
+    return CompetingEstimator(
+        {beads_match_settings.algorithm: configured, "spectral+hungarian": cascade},
+        score_fn=score_fn,
+        escalate_below=(
+            beads_match_settings.qc_settings.score_threshold
+            if beads_match_settings.spectral_arm == "on_low_score"
+            else None
+        ),
+    )

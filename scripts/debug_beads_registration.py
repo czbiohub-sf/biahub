@@ -28,7 +28,7 @@ from biahub.registration.methods.landmark.bead_matching import (
     matches_from_beads,
     peaks_from_beads,
 )
-from biahub.registration.engine import build_beads_estimator
+from biahub.registration.methods.landmark.bead_matching import build_beads_estimator
 from biahub.registration.metrics import metric_fn
 
 # %% Dataset configuration

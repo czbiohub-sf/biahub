@@ -9,7 +9,6 @@ from biahub.registration.engine.cluster import estimate_transform_series, run_ti
 from biahub.registration.engine.core import (
     MAX_MINUTES,
     block_failure,
-    build_beads_estimator,
     build_estimator,
     finalize_run,
     flag_run,
@@ -30,6 +29,7 @@ from biahub.registration.engine.series import (
     estimate_propagated,
     estimate_series,
 )
+from biahub.registration.methods.landmark.bead_matching import build_beads_estimator
 
 __all__ = [
     "JOB_FAILED_PREFIX",
