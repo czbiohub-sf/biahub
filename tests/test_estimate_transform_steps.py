@@ -220,7 +220,7 @@ def test_a_retried_step_with_resume_keeps_finished_timepoints(
     _ok("--step", "flag", *common)
     _ok("--step", "repair", *common)
 
-    import biahub.registration.engine as engine
+    import biahub.registration.engine.core as engine
 
     def _must_not_run(*args, **kwargs):
         raise AssertionError("a finished timepoint was redone")
@@ -235,7 +235,7 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
     # An unexpected error on one timepoint (e.g. an unreadable chunk) must not stop the
     # steps -- under Nextflow that would end the run -- but be recorded as a failed job,
     # as the plain run does: the file is written, that timepoint unreliable with the error.
-    import biahub.registration.engine as engine
+    import biahub.registration.engine.core as engine
 
     real = engine._estimate_timepoint_job
 
@@ -288,7 +288,7 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
 def test_a_crashed_propagated_step_is_redone_on_resume(tmp_path, monkeypatch):
     # The sequential job raising records every unreached timepoint as failed; a retry with
     # --resume must estimate them again, not keep the stand-ins.
-    import biahub.registration.engine as engine
+    import biahub.registration.engine.core as engine
 
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, SHAPE)

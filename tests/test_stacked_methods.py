@@ -176,7 +176,7 @@ def test_a_stack_estimates_end_to_end_and_names_its_blocks(beads_plate, tmp_path
 
 
 def test_a_stack_plans_for_its_heaviest_and_interactive_blocks(beads_plate, tmp_path):
-    from biahub.registration import engine
+    from biahub.registration.engine import core as engine
 
     ants_alone = engine.init_run(
         beads_plate, beads_plate, _settings([{"ants": {}}]), tmp_path / "a"
@@ -297,8 +297,9 @@ def test_propagated_blocks_are_the_winning_runs_and_empty_frames_have_none():
     import numpy as np
 
     from biahub.core.transform import Transform
-    from biahub.registration.engine import CrossChannel, estimate_propagated
+    from biahub.registration.engine import estimate_propagated
     from biahub.registration.estimators import ChainedEstimator
+    from biahub.registration.policies import CrossChannel
 
     def score(t, mov, ref):  # best near x = 3
         return -abs(t.translation[2] - 3)
@@ -354,7 +355,7 @@ def test_a_focus_only_stack_keeps_the_across_gap_rule_and_a_mixed_one_does_not()
 
 
 def test_a_stack_gets_time_for_each_block(beads_plate, tmp_path):
-    from biahub.registration import engine
+    from biahub.registration.engine import core as engine
 
     one = engine.init_run(beads_plate, beads_plate, _settings([{"ants": {}}]), tmp_path / "a")
     two = engine.init_run(

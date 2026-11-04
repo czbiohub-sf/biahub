@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.engine import (
+from biahub.registration.engine.core import (
     RunJournal,
     estimate_series,
     flag_series,
@@ -725,7 +725,7 @@ def test_estimate_series_reports_an_empty_frame_without_estimating():
 
 
 def test_the_propagation_budget_scales_with_timepoints_within_the_partition():
-    from biahub.registration.engine import MAX_MINUTES, _propagation_minutes
+    from biahub.registration.engine.core import MAX_MINUTES, _propagation_minutes
 
     assert _propagation_minutes(1) == 30  # the floor
     assert _propagation_minutes(125) == 1250  # 10 min per timepoint

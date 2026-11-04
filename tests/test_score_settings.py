@@ -64,7 +64,7 @@ def _pair():
 def test_score_blocks_run_after_the_warp_inside_the_raw_overlap():
     # correlation with a sobel block is exactly the Sobel correlation ANTs scored with:
     # warp, find the overlap on the raw volumes, filter, compare.
-    from biahub.registration.engine import _score_fn
+    from biahub.registration.engine.core import _score_fn
     from biahub.registration.metrics import correlation_score
 
     mov, ref = _pair()
@@ -83,7 +83,7 @@ def test_score_blocks_run_after_the_warp_inside_the_raw_overlap():
 
 
 def test_the_methods_blocks_do_not_change_the_score():
-    from biahub.registration.engine import _score_fn
+    from biahub.registration.engine.core import _score_fn
 
     mov, ref = _pair()
     transform = Transform.from_translation([-1.0, 2.0, -3.0])
@@ -103,7 +103,7 @@ def test_score_blocks_do_not_see_the_edge_of_the_empty_padding():
     # Shifting the moving volume back in z leaves an empty slab in the warped volume. Its
     # edge is not content: with a sobel block the exact transform must still score like a
     # perfect match (DragonFly: the edge made every z-shifted transform score below identity).
-    from biahub.registration.engine import _score_fn
+    from biahub.registration.engine.core import _score_fn
     from tests.test_registration_estimators import _synthetic_blob_volume
 
     rng = np.random.default_rng(6)
@@ -123,7 +123,7 @@ def test_score_blocks_do_not_see_the_edge_of_the_empty_padding():
 def test_a_clip_score_block_takes_its_percentiles_inside_the_overlap():
     # Percentiles over the whole warped volume counted its empty padding, so the exact
     # transform scored lower the more padding it left.
-    from biahub.registration.engine import _score_fn
+    from biahub.registration.engine.core import _score_fn
     from tests.test_registration_estimators import _synthetic_blob_volume
 
     rng = np.random.default_rng(7)
@@ -158,7 +158,7 @@ def test_the_padding_margin_covers_diagonal_neighbours():
 
 def test_report_metrics_share_one_warp(monkeypatch):
     # Every report metric used to warp the volume again (~100 s each on a 2048 x 2048 pair).
-    from biahub.registration import engine
+    from biahub.registration.engine import core as engine
     from biahub.registration.metrics import correlation_score, normalized_mutual_information
 
     mov, ref = _pair()
@@ -185,7 +185,7 @@ def test_report_metrics_share_one_warp(monkeypatch):
 def test_the_report_compares_with_the_unregistered_pair_and_warns_when_it_scores_higher(
     capsys,
 ):
-    from biahub.registration import engine
+    from biahub.registration.engine import core as engine
     from biahub.registration.metrics import correlation_score
 
     mov, ref = _pair()
@@ -243,7 +243,7 @@ def test_the_score_margin_is_the_reach_on_the_most_filtered_volume(blocks, footp
 def test_a_clip_after_a_filter_does_not_sample_the_filters_padding_edge():
     # After a sobel block the voxels by the padding hold an artificial edge; clip
     # percentiles taken over them clipped the warped volume differently from the reference.
-    from biahub.registration.engine import _score_fn
+    from biahub.registration.engine.core import _score_fn
     from tests.test_registration_estimators import _synthetic_blob_volume
 
     rng = np.random.default_rng(9)

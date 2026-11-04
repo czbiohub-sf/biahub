@@ -209,7 +209,7 @@ def test_resume_accepts_the_same_inputs_written_another_way(
 
 
 def test_a_failed_job_is_never_filled_from_a_record_on_disk(tmp_path):
-    from biahub.registration.engine import _load_series
+    from biahub.registration.engine.core import _load_series
 
     stale = {"t": 1, "matrix": np.eye(4).tolist(), "score": 0.9, "error": None}
     (tmp_path / "1.json").write_text(json.dumps(stale))
@@ -292,7 +292,7 @@ def test_an_sbatch_time_limit_is_kept_by_every_phase(
 ):
     import submitit
 
-    from biahub.registration import engine
+    from biahub.registration.engine import core as engine
 
     times = []
 
@@ -763,7 +763,7 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
     journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
     assert [(a["t"], a["pass_name"]) for a in journal["attempts"]] == [(2, "sweep")]
 
-    import biahub.registration.engine as engine
+    import biahub.registration.engine.core as engine
 
     def _must_not_run(*args, **kwargs):
         raise AssertionError("resume must reuse the sweep record")
@@ -779,7 +779,7 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
 def test_an_ants_estimate_is_sized_for_its_measured_peak_memory():
     # ANTs on a 66 x 2048 x 2048 DragonFly pair peaked at 14.5-22.6 GB (SLURM MaxRSS over
     # 12 jobs); the plan once asked for 12 GB and every first attempt ran out of memory.
-    from biahub.registration.engine import _estimate_job_resources
+    from biahub.registration.engine.core import _estimate_job_resources
 
     cpus, gb_ram_per_cpu = _estimate_job_resources("ants", (66, 2048, 2048))
     assert cpus * gb_ram_per_cpu >= 1.25 * 22.6
@@ -847,7 +847,7 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
 ):
     # The report follows the transform that wins: a repair job records the metrics of its
     # own transform, and folding it in replaces the estimate's.
-    import biahub.registration.engine as engine
+    import biahub.registration.engine.core as engine
 
     from biahub.core.transform import Transform
     from biahub.registration.metrics import correlation_score
@@ -901,7 +901,7 @@ def test_repair_and_sweep_reports_get_the_score_to_compare_with_unregistered(
 ):
     # Without the score the report cannot warn that a fallback's transform scores below
     # the unregistered pair.
-    import biahub.registration.engine as engine
+    import biahub.registration.engine.core as engine
 
     from biahub.core.transform import Transform
     from biahub.utils.config import yaml_to_model
