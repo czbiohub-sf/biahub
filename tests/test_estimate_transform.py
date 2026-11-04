@@ -889,7 +889,11 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
 
     series = engine._load_series(run / "timepoints", [0, 1], "euclidean", resumed=[0, 1])
     estimate_report = series.reports[1]
-    outcome = engine._load_pass(record, "euclidean", fallback=series.transforms[1])
+    from biahub.registration.engine.fallback import PassRecord
+
+    outcome = PassRecord.from_dict(record).to_result(
+        "euclidean", fallback=series.transforms[1]
+    )
     engine._accept(series, 1, outcome.transform, outcome.score, outcome.source, outcome.report)
     assert series.reports[1] == record["report"] != estimate_report
 

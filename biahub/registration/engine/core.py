@@ -29,7 +29,6 @@ from biahub.registration.engine.disk import (
     INITIAL_FILENAME,
     RUN_PLAN_FILENAME,
     _flags,
-    _load_pass,
     _load_series,
     _read_record,
     _record_dirs,
@@ -40,6 +39,7 @@ from biahub.registration.engine.disk import (
     _write_json,
 )
 from biahub.registration.engine.fallback import (
+    PassRecord,
     PassResult,
     _accept,
     _fold_sweep,
@@ -664,8 +664,8 @@ def finalize_run(
             record = _read_record(records_dir / f"{t}.json")
             if record is None:  # never ran (or unreadable)
                 return None
-        return _load_pass(
-            record, transform_type, fallback=result.transforms.get(t, initial.initial_for(t))
+        return PassRecord.from_dict(record).to_result(
+            transform_type, fallback=result.transforms.get(t, initial.initial_for(t))
         )
 
     for t in flags["repair"]:

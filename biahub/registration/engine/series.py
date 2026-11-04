@@ -13,7 +13,7 @@ import json
 import uuid
 
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -163,6 +163,68 @@ class SeriesResult:
     raw_shifts: dict[int, dict] = field(default_factory=dict)
     leftover_motion: dict | None = None
     journal: RunJournal = field(default_factory=RunJournal)
+
+
+@dataclass
+class TimepointRecord:
+    """One timepoint's estimate, as a job writes it (`timepoints/<t>.json`).
+
+    Read back by resume, finalize and the benchmark: one type for every writer and
+    reader. Keys a record lacks take these defaults; keys it has that are not fields
+    (older or newer records) are ignored. `failed`: the job raised, so a resume redoes it.
+    """
+
+    t: int
+    matrix: list | None = None  # the accepted estimate (forward), else None
+    score: float | None = None
+    error: str | None = None
+    failed: bool = False
+    stand_in: list | None = None  # propagation: what the next timepoint starts from
+    stand_in_from: str | None = None
+    initialized_from: str | None = None  # "file" or "file+refined" (from: file)
+    arm: str | None = None  # competing arms: the one that won
+    blocks: list[dict] | None = None  # a stack: what each block did
+    metrics: dict | None = None  # bead alignment metrics
+    report: dict | None = None  # score.report metrics of the accepted estimate
+    centroid: list[float] | None = None  # reference.anchor
+    raw_shift: dict | None = None  # reference.leftover_motion
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TimepointRecord:
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def fold_into(self, result: SeriesResult, transform_type: str) -> Transform | None:
+        """Fold this record into `result`; return what the next timepoint starts from."""
+        t = self.t
+        result.scores[t] = float("nan") if self.score is None else self.score
+        if self.error:
+            result.errors[t] = self.error
+        carried = None
+        if self.matrix is not None:
+            carried = Transform(
+                np.asarray(self.matrix, dtype=float), transform_type=transform_type
+            )
+            result.transforms[t] = carried
+            if self.report:
+                result.reports[t] = self.report
+        elif self.stand_in is not None:
+            carried = Transform(
+                np.asarray(self.stand_in, dtype=float), transform_type=transform_type
+            )
+            result.stand_ins[t] = (carried, self.stand_in_from or "initial")
+        if self.blocks:
+            result.blocks[t] = self.blocks
+        if self.initialized_from:
+            result.initialized_from[t] = self.initialized_from
+        if self.centroid is not None:
+            result.centroids[t] = self.centroid
+        if self.raw_shift:
+            result.raw_shifts[t] = self.raw_shift
+        return carried
 
 
 OnTimepoint = Callable[[int, SeriesResult], None]
@@ -321,6 +383,7 @@ def estimate_propagated(
     time_indices: Iterable[int],
     done: dict[int, dict] | None = None,
     on_timepoint: OnTimepoint | None = None,
+    transform_type: str = "affine",
 ) -> SeriesResult:
     """Estimate timepoints in order, each starting from the previous one's result.
 
@@ -342,7 +405,7 @@ def estimate_propagated(
         if t in done:
             # Carry the chain on as the fresh run did: the reference frame restarts it, an
             # empty frame (no transform, no stand-in) leaves it alone.
-            carried = _record_into(result, t, done[t])
+            carried = TimepointRecord.from_dict(done[t]).fold_into(result, transform_type)
             if _compares_with_itself(reference_policy, mov, t):
                 previous = None
             elif carried is not None:
@@ -380,18 +443,3 @@ def estimate_propagated(
         if on_timepoint is not None:
             on_timepoint(t, result)
     return result
-
-
-def _record_into(result: SeriesResult, t: int, record: dict) -> Transform | None:
-    """Fold a timepoint record into `result`; return what the next timepoint starts from."""
-    result.scores[t] = float("nan") if record.get("score") is None else record["score"]
-    if record.get("error"):
-        result.errors[t] = record["error"]
-    if record.get("matrix") is not None:
-        result.transforms[t] = Transform(np.asarray(record["matrix"], dtype=float))
-        return result.transforms[t]
-    if record.get("stand_in") is not None:
-        stand_in = Transform(np.asarray(record["stand_in"], dtype=float))
-        result.stand_ins[t] = (stand_in, record.get("stand_in_from", "initial"))
-        return stand_in
-    return None

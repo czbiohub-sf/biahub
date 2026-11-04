@@ -409,6 +409,8 @@ def block_candidates(run_dir) -> dict:
     """
     import json
 
+    from biahub.registration.engine.series import TimepointRecord
+
     run_dir = Path(run_dir)
     run_file = run_dir / "run.json"  # the run's positions: only its own layout is read
     positions = json.loads(run_file.read_text())["positions"] if run_file.exists() else None
@@ -424,11 +426,11 @@ def block_candidates(run_dir) -> dict:
     candidates: dict = {}
     for position, directory in record_dirs:
         for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
-            record = json.loads(path.read_text())
-            for block in record.get("blocks") or []:
+            record = TimepointRecord.from_dict(json.loads(path.read_text()))
+            for block in record.blocks or []:
                 if block["matrix"] is None:
                     continue
-                key = record["t"] if position is None else (position, record["t"])
+                key = record.t if position is None else (position, record.t)
                 candidates.setdefault(block["block"], {})[key] = Transform(
                     np.asarray(block["matrix"], dtype=float)
                 )

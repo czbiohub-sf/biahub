@@ -8,7 +8,7 @@ transform); sweep from other method settings; polish refines an accepted candida
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 import click
 import numpy as np
@@ -214,6 +214,54 @@ class PassResult:
     reseed_score: float | None = None  # the accepted candidate's score before polish
     # score.report metrics of the accepted transform
     report: dict[str, float | None] | None = None
+
+
+@dataclass
+class PassRecord:
+    """One flagged timepoint's repair or sweep, as a job writes it (`repairs/<t>.json`).
+
+    Read back by finalize as a `PassResult` (`to_result`); one type for the writers and
+    the reader. `matrix` is the accepted candidate's transform, else None.
+    """
+
+    t: int
+    matrix: list | None
+    score: float | None
+    accepted: bool
+    source: str
+    candidate_scores: dict[str, float | None]
+    candidate_failures: dict[str, str]
+    polish_rounds: int = 0
+    reseed_score: float | None = None
+    report: dict | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> PassRecord:
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def to_result(self, transform_type: str, fallback: Transform) -> PassResult:
+        """Return this pass as a `PassResult`; `fallback` stands in when none was accepted."""
+        return PassResult(
+            transform=(
+                Transform(np.asarray(self.matrix, dtype=float), transform_type=transform_type)
+                if self.matrix is not None
+                else fallback
+            ),
+            score=-np.inf if self.score is None else self.score,
+            accepted=self.accepted,
+            source=self.source,
+            scores={
+                k: float("nan") if v is None else v for k, v in self.candidate_scores.items()
+            },
+            failures=self.candidate_failures,
+            polish_rounds=self.polish_rounds,
+            reseed_score=self.reseed_score,
+            report=self.report,
+        )
 
 
 def _best_of(

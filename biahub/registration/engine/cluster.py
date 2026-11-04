@@ -51,6 +51,7 @@ from biahub.registration.engine.disk import (
     _write_json,
 )
 from biahub.registration.engine.fallback import (
+    PassRecord,
     neighbour_consensus_initial_candidates,
     repair_timepoint,
     sweep_timepoint,
@@ -61,6 +62,7 @@ from biahub.registration.engine.policies import (
 )
 from biahub.registration.engine.series import (
     SeriesResult,
+    TimepointRecord,
     estimate_propagated,
     estimate_series,
 )
@@ -215,22 +217,22 @@ def _estimate_timepoint_job(
         [t],
         keep_initial=getattr(job.initial, "keep_unless_beaten", False),
     )
-    record = {
-        "t": t,
-        "matrix": result.transforms[t].to_list() if t in result.transforms else None,
-        "score": _finite_or_none(result.scores.get(t)),
-        "error": result.errors.get(t),
-        "initialized_from": result.initialized_from.get(t),
-        "arm": getattr(estimator, "last_winner", None),
+    record = TimepointRecord(
+        t=t,
+        matrix=result.transforms[t].to_list() if t in result.transforms else None,
+        score=_finite_or_none(result.scores.get(t)),
+        error=result.errors.get(t),
+        initialized_from=result.initialized_from.get(t),
+        arm=getattr(estimator, "last_winner", None),
         # a stack: what each block did (its transform, score, error) and which won
-        "blocks": getattr(estimator, "last_stages", None),
-        "metrics": _bead_metrics(settings, result, t, mov, ref),
-        "report": _report_metrics(
+        blocks=getattr(estimator, "last_stages", None),
+        metrics=_bead_metrics(settings, result, t, mov, ref),
+        report=_report_metrics(
             settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
         ),
-        "centroid": _anchor_centroid(settings, mov, t),
-        "raw_shift": _leftover_raw_shift(settings, mov, t),
-    }
+        centroid=_anchor_centroid(settings, mov, t),
+        raw_shift=_leftover_raw_shift(settings, mov, t),
+    ).to_dict()
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
     return record
@@ -266,22 +268,22 @@ def _estimate_propagated_job(
         if t in done:
             return
         stand_in = result.stand_ins.get(t)
-        record = {
-            "t": t,
-            "matrix": result.transforms[t].to_list() if t in result.transforms else None,
-            "score": _finite_or_none(result.scores.get(t)),
-            "error": result.errors.get(t),
-            "stand_in": stand_in[0].to_list() if stand_in else None,
-            "stand_in_from": stand_in[1] if stand_in else None,
-            "arm": getattr(estimator, "last_winner", None),
-            "blocks": getattr(estimator, "last_stages", None),
-            "metrics": _bead_metrics(settings, result, t, mov, ref),
-            "report": _report_metrics(
+        record = TimepointRecord(
+            t=t,
+            matrix=result.transforms[t].to_list() if t in result.transforms else None,
+            score=_finite_or_none(result.scores.get(t)),
+            error=result.errors.get(t),
+            stand_in=stand_in[0].to_list() if stand_in else None,
+            stand_in_from=stand_in[1] if stand_in else None,
+            arm=getattr(estimator, "last_winner", None),
+            blocks=getattr(estimator, "last_stages", None),
+            metrics=_bead_metrics(settings, result, t, mov, ref),
+            report=_report_metrics(
                 settings, result.transforms.get(t), t, mov, ref, score=result.scores.get(t)
             ),
-            "centroid": _anchor_centroid(settings, mov, t),
-            "raw_shift": _leftover_raw_shift(settings, mov, t),
-        }
+            centroid=_anchor_centroid(settings, mov, t),
+            raw_shift=_leftover_raw_shift(settings, mov, t),
+        ).to_dict()
         _write_json(records_dir / f"{t}.json", record)
         records[t] = record
 
@@ -294,6 +296,7 @@ def _estimate_propagated_job(
         time_indices,
         done=done,
         on_timepoint=write_record,
+        transform_type=settings.transform.type,
     )
     return records
 
@@ -334,17 +337,17 @@ def _repair_timepoint_job(
         ),
         polish_rounds=repair_settings.polish_rounds,
     )
-    record = {
-        "t": t,
-        "accepted": outcome.accepted,
-        "source": outcome.source,
-        "score": _finite_or_none(outcome.score),
-        "matrix": outcome.transform.to_list() if outcome.accepted else None,
-        "candidate_scores": {k: _finite_or_none(v) for k, v in outcome.scores.items()},
-        "candidate_failures": outcome.failures,
-        "polish_rounds": outcome.polish_rounds,
-        "reseed_score": _finite_or_none(outcome.reseed_score),
-        "report": _report_metrics(
+    record = PassRecord(
+        t=t,
+        accepted=outcome.accepted,
+        source=outcome.source,
+        score=_finite_or_none(outcome.score),
+        matrix=outcome.transform.to_list() if outcome.accepted else None,
+        candidate_scores={k: _finite_or_none(v) for k, v in outcome.scores.items()},
+        candidate_failures=outcome.failures,
+        polish_rounds=outcome.polish_rounds,
+        reseed_score=_finite_or_none(outcome.reseed_score),
+        report=_report_metrics(
             settings,
             outcome.transform if outcome.accepted else None,
             t,
@@ -352,7 +355,7 @@ def _repair_timepoint_job(
             ref,
             score=outcome.score,
         ),
-    }
+    ).to_dict()
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
     return record
@@ -381,15 +384,15 @@ def _sweep_timepoint_job(
     outcome = sweep_timepoint(
         t, mov, _reference_policy(settings, ref), trials, seed, score_fn, series
     )
-    record = {
-        "t": t,
-        "accepted": outcome.accepted,
-        "source": outcome.source,
-        "score": _finite_or_none(outcome.score),
-        "matrix": outcome.transform.to_list() if outcome.accepted else None,
-        "candidate_scores": {k: _finite_or_none(v) for k, v in outcome.scores.items()},
-        "candidate_failures": outcome.failures,
-        "report": _report_metrics(
+    record = PassRecord(
+        t=t,
+        accepted=outcome.accepted,
+        source=outcome.source,
+        score=_finite_or_none(outcome.score),
+        matrix=outcome.transform.to_list() if outcome.accepted else None,
+        candidate_scores={k: _finite_or_none(v) for k, v in outcome.scores.items()},
+        candidate_failures=outcome.failures,
+        report=_report_metrics(
             settings,
             outcome.transform if outcome.accepted else None,
             t,
@@ -397,7 +400,7 @@ def _sweep_timepoint_job(
             ref,
             score=outcome.score,
         ),
-    }
+    ).to_dict()
     record_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(record_path, record)
     return record

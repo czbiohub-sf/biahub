@@ -17,16 +17,12 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import click
-import numpy as np
 
 from iohub import open_ome_zarr
 
-from biahub.core.transform import Transform
-from biahub.registration.engine.fallback import (
-    PassResult,
-)
 from biahub.registration.engine.series import (
     SeriesResult,
+    TimepointRecord,
 )
 from biahub.settings import (
     EstimateTransformSettings,
@@ -134,52 +130,8 @@ def _load_series(
                 result.scores[t] = float("nan")
                 result.errors[t] = "no record: job did not finish"
                 continue
-        if record["matrix"] is not None:
-            result.transforms[t] = Transform(
-                np.asarray(record["matrix"], dtype=float), transform_type=transform_type
-            )
-            if record.get("report"):
-                result.reports[t] = record["report"]
-        elif record.get("stand_in") is not None:
-            result.stand_ins[t] = (
-                Transform(
-                    np.asarray(record["stand_in"], dtype=float), transform_type=transform_type
-                ),
-                record.get("stand_in_from") or "initial",
-            )
-        result.scores[t] = float("nan") if record["score"] is None else record["score"]
-        if record.get("blocks"):
-            result.blocks[t] = record["blocks"]
-        if record.get("initialized_from"):
-            result.initialized_from[t] = record["initialized_from"]
-        if "centroid" in record:
-            result.centroids[t] = record["centroid"]
-        if record.get("raw_shift"):
-            result.raw_shifts[t] = record["raw_shift"]
-        if record["error"]:
-            result.errors[t] = record["error"]
+        TimepointRecord.from_dict(record).fold_into(result, transform_type)
     return result
-
-
-def _load_pass(record: dict, transform_type: str, fallback: Transform) -> PassResult:
-    return PassResult(
-        transform=(
-            Transform(np.asarray(record["matrix"], dtype=float), transform_type=transform_type)
-            if record["matrix"] is not None
-            else fallback
-        ),
-        score=-np.inf if record["score"] is None else record["score"],
-        accepted=record["accepted"],
-        source=record["source"],
-        scores={
-            k: (float("nan") if v is None else v)
-            for k, v in record["candidate_scores"].items()
-        },
-        failures=record["candidate_failures"],
-        polish_rounds=record.get("polish_rounds", 0),
-        reseed_score=record.get("reseed_score"),
-        report=record.get("report"),
-    )
 
 
 def _write_json(path: Path, obj, indent: int | None = None) -> None:
@@ -213,13 +165,7 @@ def _failed_record(t: int, error: Exception) -> dict:
 
     `failed` marks it as not finished, so a retry with resume does it again.
     """
-    return {
-        "t": t,
-        "matrix": None,
-        "score": None,
-        "error": _job_failure(error),
-        "failed": True,
-    }
+    return TimepointRecord(t=t, error=_job_failure(error), failed=True).to_dict()
 
 
 def _finished(record_path: Path) -> bool:
