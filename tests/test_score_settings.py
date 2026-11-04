@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 from scipy.ndimage import shift as ndi_shift
 
+import biahub.registration.engine.cluster as cluster
+
 from biahub.core.transform import Transform
 from biahub.settings import EstimateTransformSettings
 
@@ -158,7 +160,6 @@ def test_the_padding_margin_covers_diagonal_neighbours():
 
 def test_report_metrics_share_one_warp(monkeypatch):
     # Every report metric used to warp the volume again (~100 s each on a 2048 x 2048 pair).
-    from biahub.registration.engine import core as engine
     from biahub.registration.metrics import correlation_score, normalized_mutual_information
 
     mov, ref = _pair()
@@ -175,7 +176,7 @@ def test_report_metrics_share_one_warp(monkeypatch):
     monkeypatch.setattr(
         Transform, "apply", lambda self, *a, **k: warps.append(1) or real(self, *a, **k)
     )
-    report = engine._report_metrics(settings, transform, 0, mov[None], ref[None])
+    report = cluster._report_metrics(settings, transform, 0, mov[None], ref[None])
     assert (
         len(warps) == 2
     )  # one for the result, one for the unregistered pair -- not per metric
@@ -191,13 +192,13 @@ def test_the_report_compares_with_the_unregistered_pair_and_warns_when_it_scores
     mov, ref = _pair()
     settings = _settings("ants", score={"report": ["correlation"]})
     good = Transform.from_translation([-1.0, 2.0, -3.0])  # undoes the pair's shift
-    report = engine._report_metrics(settings, good, 0, mov[None], ref[None], score=0.99)
+    report = cluster._report_metrics(settings, good, 0, mov[None], ref[None], score=0.99)
     identity = Transform.identity(3)
     assert report["unregistered_correlation"] == correlation_score(identity, mov, ref)
     assert report["unregistered_score"] == engine._score_fn(settings)(identity, mov, ref)
     assert "unregistered pair scores" not in capsys.readouterr().out
 
-    engine._report_metrics(settings, good, 0, mov[None], ref[None], score=-1.0)
+    cluster._report_metrics(settings, good, 0, mov[None], ref[None], score=-1.0)
     assert (
         "unregistered pair scores" in capsys.readouterr().out
     )  # a score that ranks it higher
@@ -205,7 +206,7 @@ def test_the_report_compares_with_the_unregistered_pair_and_warns_when_it_scores
     # an identity result (a stabilization reference frame) is the unregistered pair: the
     # tie is expected, not a sign of a poor metric
     identity_score = report["unregistered_score"]
-    engine._report_metrics(settings, identity, 0, mov[None], ref[None], score=identity_score)
+    cluster._report_metrics(settings, identity, 0, mov[None], ref[None], score=identity_score)
     assert "unregistered pair scores" not in capsys.readouterr().out
 
 

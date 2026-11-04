@@ -7,6 +7,8 @@ import pytest
 from iohub import open_ome_zarr
 from scipy.ndimage import shift as ndi_shift
 
+import biahub.registration.engine.cluster as cluster
+
 from biahub.estimate_transform import estimate_transform
 from biahub.settings import (
     AntsRegistrationSettings,
@@ -292,8 +294,6 @@ def test_an_sbatch_time_limit_is_kept_by_every_phase(
 ):
     import submitit
 
-    from biahub.registration.engine import core as engine
-
     times = []
 
     class RecordingExecutor(submitit.AutoExecutor):
@@ -302,7 +302,7 @@ def test_an_sbatch_time_limit_is_kept_by_every_phase(
                 times.append(kwargs["slurm_time"])
             return super().update_parameters(**kwargs)
 
-    monkeypatch.setattr(engine.submitit, "AutoExecutor", RecordingExecutor)
+    monkeypatch.setattr(cluster.submitit, "AutoExecutor", RecordingExecutor)
     sbatch = tmp_path / "time.sbatch"
     sbatch.write_text("#!/bin/bash\n#SBATCH --time=7\n")
     output = tmp_path / "out" / "transforms.yml"
@@ -763,12 +763,10 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
     journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
     assert [(a["t"], a["pass_name"]) for a in journal["attempts"]] == [(2, "sweep")]
 
-    import biahub.registration.engine.core as engine
-
     def _must_not_run(*args, **kwargs):
         raise AssertionError("resume must reuse the sweep record")
 
-    monkeypatch.setattr(engine, "_sweep_timepoint_job", _must_not_run)
+    monkeypatch.setattr(cluster, "_sweep_timepoint_job", _must_not_run)
     _run(beads_plate_with_a_blank_timepoint, config, output, resume=True)
     resumed = json.loads(
         (output.with_suffix("") / "estimate_transform_report.json").read_text()
@@ -860,7 +858,7 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
     )
     settings_path = run / "estimate_transform_settings.yml"
     for t in (0, 1):
-        engine._estimate_timepoint_job(
+        cluster._estimate_timepoint_job(
             beads_plate, beads_plate, settings_path, t, run / "timepoints" / f"{t}.json"
         )
     repaired = Transform.from_translation([-1.0, 3.0, -4.0])  # 1 voxel off the estimate
@@ -868,8 +866,8 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
     def accepted_repair(t, *args, **kwargs):
         return engine.PassResult(transform=repaired, score=2.0, accepted=True, source="t-1")
 
-    monkeypatch.setattr(engine, "repair_timepoint", accepted_repair)
-    record = engine._repair_timepoint_job(
+    monkeypatch.setattr(cluster, "repair_timepoint", accepted_repair)
+    record = cluster._repair_timepoint_job(
         beads_plate,
         beads_plate,
         settings_path,
@@ -921,19 +919,19 @@ def test_repair_and_sweep_reports_get_the_score_to_compare_with_unregistered(
     )
     settings_path = run / "estimate_transform_settings.yml"
     for t in (0, 1):
-        engine._estimate_timepoint_job(
+        cluster._estimate_timepoint_job(
             beads_plate, beads_plate, settings_path, t, run / "timepoints" / f"{t}.json"
         )
     accepted = engine.PassResult(
         transform=Transform.identity(3), score=-1.0, accepted=True, source="t-1"
     )
-    monkeypatch.setattr(engine, "repair_timepoint", lambda *a, **k: accepted)
-    monkeypatch.setattr(engine, "sweep_timepoint", lambda *a, **k: accepted)
+    monkeypatch.setattr(cluster, "repair_timepoint", lambda *a, **k: accepted)
+    monkeypatch.setattr(cluster, "sweep_timepoint", lambda *a, **k: accepted)
     scores = []
     monkeypatch.setattr(
-        engine, "_report_metrics", lambda *a, score=None, **k: scores.append(score) or {}
+        cluster, "_report_metrics", lambda *a, score=None, **k: scores.append(score) or {}
     )
-    engine._repair_timepoint_job(
+    cluster._repair_timepoint_job(
         beads_plate,
         beads_plate,
         settings_path,
@@ -943,7 +941,7 @@ def test_repair_and_sweep_reports_get_the_score_to_compare_with_unregistered(
         run / "timepoints",
         run / "repairs" / "1.json",
     )
-    engine._sweep_timepoint_job(
+    cluster._sweep_timepoint_job(
         beads_plate,
         beads_plate,
         settings_path,

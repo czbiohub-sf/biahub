@@ -5,16 +5,15 @@ public names are re-exported here, so `from biahub.registration.engine import in
 works wherever they live.
 """
 
+from biahub.registration.engine.cluster import estimate_transform_series, run_timepoint_jobs
 from biahub.registration.engine.core import (
     MAX_MINUTES,
     block_failure,
     build_beads_estimator,
     build_estimator,
-    estimate_transform_series,
     finalize_run,
     flag_run,
     init_run,
-    run_timepoint_jobs,
     transforms_for_file,
 )
 from biahub.registration.engine.disk import JOB_FAILED_PREFIX

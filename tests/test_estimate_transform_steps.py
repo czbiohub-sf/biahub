@@ -9,6 +9,8 @@ from click.testing import CliRunner
 from iohub import open_ome_zarr
 from scipy.ndimage import shift as ndi_shift
 
+import biahub.registration.engine.cluster as cluster
+
 from biahub.cli.main import cli
 from biahub.estimate_transform import JOBS_FAILED_EXIT_CODE, estimate_transform
 from biahub.settings import PhaseCrossCorrSettings, load_transform_settings
@@ -220,12 +222,10 @@ def test_a_retried_step_with_resume_keeps_finished_timepoints(
     _ok("--step", "flag", *common)
     _ok("--step", "repair", *common)
 
-    import biahub.registration.engine.core as engine
-
     def _must_not_run(*args, **kwargs):
         raise AssertionError("a finished timepoint was redone")
 
-    monkeypatch.setattr(engine, f"_{step}_timepoint_job", _must_not_run)
+    monkeypatch.setattr(cluster, f"_{step}_timepoint_job", _must_not_run)
     _ok("--step", step, "--resume", *common)
 
 
@@ -235,24 +235,23 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
     # An unexpected error on one timepoint (e.g. an unreadable chunk) must not stop the
     # steps -- under Nextflow that would end the run -- but be recorded as a failed job,
     # as the plain run does: the file is written, that timepoint unreliable with the error.
-    import biahub.registration.engine.core as engine
 
-    real = engine._estimate_timepoint_job
+    real = cluster._estimate_timepoint_job
 
     def crash_at_t1(source, target, settings_path, t, record_path):
         if t == 1:
             raise RuntimeError("blosc encoded value is invalid")
         return real(source, target, settings_path, t, record_path)
 
-    real_repair = engine._repair_timepoint_job
+    real_repair = cluster._repair_timepoint_job
 
     def repair_crashes_at_t1(source, target, settings_path, t, *args):
         if t == 1:
             raise RuntimeError("blosc encoded value is invalid")
         return real_repair(source, target, settings_path, t, *args)
 
-    monkeypatch.setattr(engine, "_estimate_timepoint_job", crash_at_t1)
-    monkeypatch.setattr(engine, "_repair_timepoint_job", repair_crashes_at_t1)
+    monkeypatch.setattr(cluster, "_estimate_timepoint_job", crash_at_t1)
+    monkeypatch.setattr(cluster, "_repair_timepoint_job", repair_crashes_at_t1)
     # submitit's in-process (debug) executor opens pdb on a failed job; no debugger here.
     monkeypatch.setattr("pdb.post_mortem", lambda *args, **kwargs: None)
     plate = beads_plate_with_a_blank_timepoint
@@ -274,11 +273,11 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
 
     # The crashing step exits 3 (recorded, but not a success: a workflow retries it).
     common = ["-m", plate, "-r", plate, "-c", config, "-o", by_steps]
-    monkeypatch.setattr(engine, "_estimate_timepoint_job", crash_at_t1)
+    monkeypatch.setattr(cluster, "_estimate_timepoint_job", crash_at_t1)
     assert _cli("--step", "estimate", "--timepoints", "1", *common).exit_code == 3
 
     # A failed timepoint is not "finished": a retry with --resume does it again.
-    monkeypatch.setattr(engine, "_estimate_timepoint_job", real)
+    monkeypatch.setattr(cluster, "_estimate_timepoint_job", real)
     common = ["-m", plate, "-r", plate, "-c", config, "-o", by_steps]
     _ok("--step", "estimate", "--timepoints", "1", "--resume", *common)
     record = json.loads((by_steps.with_suffix("") / "timepoints" / "1.json").read_text())
@@ -288,7 +287,6 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
 def test_a_crashed_propagated_step_is_redone_on_resume(tmp_path, monkeypatch):
     # The sequential job raising records every unreached timepoint as failed; a retry with
     # --resume must estimate them again, not keep the stand-ins.
-    import biahub.registration.engine.core as engine
 
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, SHAPE)
@@ -305,17 +303,17 @@ def test_a_crashed_propagated_step_is_redone_on_resume(tmp_path, monkeypatch):
     common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
     _ok("--init", *common)
 
-    real = engine.estimate_propagated
+    real = cluster.estimate_propagated
 
     def crash(*args, **kwargs):
         raise RuntimeError("blosc encoded value is invalid")
 
-    monkeypatch.setattr(engine, "estimate_propagated", crash)
+    monkeypatch.setattr(cluster, "estimate_propagated", crash)
     _cli("--step", "estimate", *common)
     records = output.with_suffix("") / "timepoints"
     assert all(json.loads((records / f"{t}.json").read_text()).get("failed") for t in range(3))
 
-    monkeypatch.setattr(engine, "estimate_propagated", real)
+    monkeypatch.setattr(cluster, "estimate_propagated", real)
     _ok("--step", "estimate", "--resume", *common)
     for t in range(3):
         record = json.loads((records / f"{t}.json").read_text())
