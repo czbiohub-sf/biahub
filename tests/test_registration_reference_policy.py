@@ -104,3 +104,32 @@ def test_a_neighbour_median_holds_its_frames_once():
     tracemalloc.stop()
     assert peak <= (2 * 6 + 2) * frame_bytes * 1.05
     policy.neighbour_indices(frames, 6)  # the same timepoint: no second read
+
+
+def test_each_reference_policy_says_whether_t_is_its_own_reference_and_spans_a_gap():
+    from biahub.registration.engine.policies import (
+        CrossChannel,
+        FixedFrame,
+        NeighbourMedian,
+        PreviousFrame,
+        ReferencePolicy,
+    )
+
+    mov = np.ones((5, 2, 4, 4), np.float32)
+    mov[0] = 0  # leading empty frame
+    mov[2] = 0  # a gap
+    fixed, previous = FixedFrame(t_ref=0), PreviousFrame(first=0)
+    neighbours, cross = NeighbourMedian(window=1), CrossChannel(mov)
+    for policy in (fixed, previous, neighbours, cross):
+        assert isinstance(policy, ReferencePolicy)
+
+    # the frame that starts the chain is compared with itself
+    assert [fixed.compares_with_itself(mov, t) for t in range(5)] == [0, 1, 0, 0, 0]
+    assert [previous.compares_with_itself(mov, t) for t in range(5)] == [1, 1, 0, 0, 0]
+    # t=1's neighbours (t=0, t=2) are both empty; t=3 has t=4
+    assert [neighbours.compares_with_itself(mov, t) for t in (1, 3)] == [True, False]
+    assert not any(cross.compares_with_itself(mov, t) for t in range(5))
+
+    # only "previous" reaches back over empty frames
+    assert [previous.spans_gap(mov, t) for t in range(5)] == [0, 0, 0, 1, 0]
+    assert not any(p.spans_gap(mov, t) for p in (fixed, neighbours, cross) for t in range(5))

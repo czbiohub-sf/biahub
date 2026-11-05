@@ -24,9 +24,18 @@ from biahub.registration.estimators import CandidateUnavailableError
 
 @runtime_checkable
 class ReferencePolicy(Protocol):
-    """Returns the reference array for timepoint `t`, given the full moving series."""
+    """Returns the reference array for timepoint `t`, given the full moving series.
+
+    `compares_with_itself`: t is its own reference, so it starts the stabilization chain
+    (identity, not estimated, when propagating). `spans_gap`: t's reference reaches back
+    over empty frames (where focus finding holds yx).
+    """
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike: ...
+
+    def compares_with_itself(self, mov: ArrayLike, t: int) -> bool: ...
+
+    def spans_gap(self, mov: ArrayLike, t: int) -> bool: ...
 
 
 class CrossChannel:
@@ -37,6 +46,12 @@ class CrossChannel:
 
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
         return np.asarray(self.ref[t])
+
+    def compares_with_itself(self, mov: ArrayLike, t: int) -> bool:
+        return False
+
+    def spans_gap(self, mov: ArrayLike, t: int) -> bool:
+        return False
 
 
 class FixedFrame:
@@ -75,6 +90,12 @@ class FixedFrame:
         index = self.reference_index(mov)
         return self._frame if self._frame is not None else np.asarray(mov[index])
 
+    def compares_with_itself(self, mov: ArrayLike, t: int) -> bool:
+        return t == self.reference_index(mov)
+
+    def spans_gap(self, mov: ArrayLike, t: int) -> bool:
+        return False
+
 
 def is_empty(volume: ArrayLike) -> bool:
     """Return whether a frame has no data (all zeros or all NaN)."""
@@ -106,6 +127,14 @@ class PreviousFrame:
             if not is_empty(frame):
                 return frame
         return np.asarray(mov[t])
+
+    def compares_with_itself(self, mov: ArrayLike, t: int) -> bool:
+        return self.reference_index(mov, t) is None
+
+    def spans_gap(self, mov: ArrayLike, t: int) -> bool:
+        """Whether t's previous frame with data is before t-1 (t-1 has no data)."""
+        index = self.reference_index(mov, t)
+        return index is not None and index != t - 1
 
 
 class NeighbourMedian:
@@ -163,6 +192,12 @@ class NeighbourMedian:
     def reference_for(self, mov: ArrayLike, t: int) -> ArrayLike:
         self._gather(mov, t)
         return self._median if self._median is not None else np.asarray(mov[t])
+
+    def compares_with_itself(self, mov: ArrayLike, t: int) -> bool:
+        return not self.neighbour_indices(mov, t)
+
+    def spans_gap(self, mov: ArrayLike, t: int) -> bool:
+        return False
 
 
 @runtime_checkable

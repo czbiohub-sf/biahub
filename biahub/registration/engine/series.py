@@ -16,10 +16,7 @@ import numpy as np
 
 from biahub.core.transform import Transform
 from biahub.registration.engine.policies import (
-    FixedFrame,
     InitialTransformPolicy,
-    NeighbourMedian,
-    PreviousFrame,
     ReferencePolicy,
     is_empty,
 )
@@ -216,14 +213,6 @@ def _keep_trace(result: SeriesResult, t: int, trace: dict | None) -> None:
         result.best_candidate[t] = trace["best_candidate"]
 
 
-def _across_gap(reference_policy: ReferencePolicy, mov, t: int) -> bool:
-    """Whether t's 'previous' reference reaches back over empty frames (t-1 has no data)."""
-    if not isinstance(reference_policy, PreviousFrame):
-        return False
-    index = reference_policy.reference_index(mov, t)
-    return index is not None and index != t - 1
-
-
 def _hold_xy(transform: Transform) -> Transform:
     """Keep the z part of a step; the yx part becomes identity."""
     matrix = np.array(transform.matrix)
@@ -233,20 +222,9 @@ def _hold_xy(transform: Transform) -> Transform:
 
 def _gap_rule(estimator, reference_policy, mov, t: int, transform: Transform) -> Transform:
     """Legacy focus-finding across a gap: z measured, yx held (see FocusEstimator)."""
-    if estimator.holds_xy_across_gaps and _across_gap(reference_policy, mov, t):
+    if estimator.holds_xy_across_gaps and reference_policy.spans_gap(mov, t):
         return _hold_xy(transform)
     return transform
-
-
-def _compares_with_itself(reference_policy: ReferencePolicy, mov, t: int) -> bool:
-    """Whether timepoint t is its own reference (it starts the stabilization chain)."""
-    if isinstance(reference_policy, FixedFrame):
-        return t == reference_policy.reference_index(mov)
-    if isinstance(reference_policy, PreviousFrame):
-        return reference_policy.reference_index(mov, t) is None
-    if isinstance(reference_policy, NeighbourMedian):
-        return not reference_policy.neighbour_indices(mov, t)
-    return False
 
 
 def _estimate_competing(
@@ -318,7 +296,7 @@ def estimate_propagated(
             # Carry the chain on as the fresh run did: the reference frame restarts it, an
             # empty frame (no transform, no stand-in) leaves it alone.
             carried = TimepointRecord.from_dict(done[t]).fold_into(result, transform_type)
-            if _compares_with_itself(reference_policy, mov, t):
+            if reference_policy.compares_with_itself(mov, t):
                 previous = None
             elif carried is not None:
                 previous, previous_t = carried, t
@@ -329,7 +307,7 @@ def estimate_propagated(
                 # Legacy skipped empty frames without touching the propagated transform.
                 result.scores[t] = float("nan")
                 result.errors[t] = "empty frame (no data)"
-            elif _compares_with_itself(reference_policy, mov, t):
+            elif reference_policy.compares_with_itself(mov, t):
                 identity = Transform.identity(mov_t.ndim)
                 result.transforms[t] = identity
                 result.scores[t] = float(score_fn(identity, mov_t, ref_t))
