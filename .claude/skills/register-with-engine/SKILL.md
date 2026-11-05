@@ -81,7 +81,7 @@ Use `--well` if given; otherwise `references/datasets.md`. Verify rather than as
 previous `1-register/estimate-registration*.sh` names it, or run bead detection on one
 timepoint of the candidate with the template's `source_peaks_settings` and confirm tens of
 peaks (a sample well gives none or a few). Without beads, pick one FOV with clear structure
-in both channels for `ants`, and plan the seed (`references/methods.md`, "ANTs").
+in both channels for `ants`, and plan the initial transform (`references/methods.md`, "ANTs").
 
 ## 4. Build the config
 
@@ -95,7 +95,7 @@ so):
 - `estimate-transform-focus-finding.yml`, `estimate-transform-pcc.yml`: stabilization.
 
 If the project has an old `estimate-registration` / `estimate-stabilization` config,
-convert it instead: `biahub convert-settings -c <old>.yml -o <new>.yml` (it keeps the seed,
+convert it instead: `biahub convert-settings -c <old>.yml -o <new>.yml` (it keeps the initial transform,
 the detection settings and, for beads, propagation; old ANTs fields become blocks). Then
 set:
 
@@ -288,7 +288,7 @@ When asked to move an old `estimate-registration` / `estimate-stabilization` / `
 
 Follow `references/recovery.md`. Do not delete records or outputs to "clean up" without
 asking: `--resume` depends on them. The plain CLI exits 3 when a job crashed (e.g. out of
-memory): the file is written, but those timepoints hold the seed -- do not apply it.
+memory): the file is written, but those timepoints hold the initial transform -- do not apply it.
 
 ## 12. Wrap up
 

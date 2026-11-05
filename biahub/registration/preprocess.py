@@ -181,7 +181,7 @@ class PreprocessedEstimator(EstimatorBase):
         self.raw_score = raw_score
 
         @functools.wraps(method.estimate)
-        def estimate(mov, ref, seed=None, **kwargs):
+        def estimate(mov, ref, initial_transform=None, **kwargs):
             masks = {
                 "ref_mask": build_mask(np.shape(ref), self.blocks, "reference"),
                 "mov_mask": build_mask(np.shape(mov), self.blocks, "moving"),
@@ -192,7 +192,7 @@ class PreprocessedEstimator(EstimatorBase):
                 return self.method.estimate(
                     apply_image_blocks(mov, self.blocks, "moving"),
                     apply_image_blocks(ref, self.blocks, "reference"),
-                    seed=seed,
+                    initial_transform=initial_transform,
                     **{k: m for k, m in masks.items() if m is not None},
                     **kwargs,
                 )
@@ -203,8 +203,8 @@ class PreprocessedEstimator(EstimatorBase):
         self.estimate = estimate
 
     @property
-    def uses_seed(self) -> bool:
-        return self.method.uses_seed
+    def uses_initial_transform(self) -> bool:
+        return self.method.uses_initial_transform
 
     @property
     def holds_xy_across_gaps(self) -> bool:

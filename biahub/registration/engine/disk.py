@@ -34,7 +34,7 @@ from biahub.utils.config import yaml_to_model
 ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
 
 
-# A seed file's transform for each timepoint of the run's position, read by every job.
+# `transform.initial: {from: file}`: the file's transform for each timepoint of the run's position, read by every job.
 INITIAL_FILENAME = "initial_transforms.json"
 
 
@@ -256,14 +256,16 @@ def _record_dirs(output_dir: Path) -> tuple[Path, Path, Path]:
     return output_dir / "timepoints", output_dir / "repairs", output_dir / "sweeps"
 
 
-def _seeds_from_file(seed_file, key: str, time_indices: list[int]) -> dict[str, list]:
-    """Return a seed file's forward transform at each timepoint of position `key`."""
+def _initial_transforms_from_file(
+    initial_transform_file, key: str, time_indices: list[int]
+) -> dict[str, list]:
+    """Return a `from: file` transforms file's forward transform at each timepoint of position `key`."""
     from biahub.settings import load_transform_settings
 
-    transforms = load_transform_settings(seed_file)
+    transforms = load_transform_settings(initial_transform_file)
     if transforms.per_position and key not in transforms.positions:
         raise click.UsageError(
-            f"transform.initial.file {seed_file} has no transforms for position {key} (it has "
+            f"transform.initial.file {initial_transform_file} has no transforms for position {key} (it has "
             f"{sorted(transforms.positions)})"
         )
     return {str(t): transforms.transform_for(t, key).to_list() for t in time_indices}

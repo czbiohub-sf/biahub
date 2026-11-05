@@ -133,10 +133,10 @@ class _FixedEstimator(EstimatorBase):
     def __init__(self, transform, fail=False):
         self.transform = transform
         self.fail = fail
-        self.seeds = []
+        self.initial_transforms = []
 
-    def estimate(self, mov, ref, seed=None):
-        self.seeds.append(seed)
+    def estimate(self, mov, ref, initial_transform=None):
+        self.initial_transforms.append(initial_transform)
         if self.fail:
             raise EstimationError("stage failed")
         return self.transform
@@ -149,18 +149,20 @@ def _closeness_to(target):
     return score_fn
 
 
-def test_chained_estimator_seeds_each_stage_from_the_previous_and_keeps_the_best_stage():
+def test_chained_estimator_starts_each_stage_from_the_previous_and_keeps_the_best_stage():
     coarse = _FixedEstimator(Transform.from_translation([9.0, 0.0, 0.0]))
     worse_refine = _FixedEstimator(Transform.from_translation([4.0, 0.0, 0.0]))
     chain = ChainedEstimator(
         [coarse, worse_refine], score_fn=_closeness_to(np.array([10.0, 0, 0]))
     )
-    seed = Transform.from_translation([1.0, 1.0, 1.0])
+    initial_transform = Transform.from_translation([1.0, 1.0, 1.0])
 
-    result = chain.estimate(np.zeros((2, 2, 2)), np.zeros((2, 2, 2)), seed=seed)
+    result = chain.estimate(
+        np.zeros((2, 2, 2)), np.zeros((2, 2, 2)), initial_transform=initial_transform
+    )
 
-    assert coarse.seeds == [seed]
-    assert worse_refine.seeds == [coarse.transform]
+    assert coarse.initial_transforms == [initial_transform]
+    assert worse_refine.initial_transforms == [coarse.transform]
     assert result is coarse.transform, "a refinement that scores worse must be dropped"
     assert isinstance(chain, TransformEstimator)
 
@@ -189,7 +191,7 @@ def test_competing_estimator_escalates_only_below_the_threshold():
         escalate_below=-1.0,
     )
     competing.estimate(np.zeros((2, 2, 2)), np.zeros((2, 2, 2)))
-    assert second.seeds == [], (
+    assert second.initial_transforms == [], (
         "the first candidate scored 0.0 >= -1.0, so the second must not run"
     )
 
@@ -246,7 +248,7 @@ def test_build_beads_estimator_builds_the_competing_cascade_when_spectral_is_on(
 
 
 def test_spectral_recovers_an_offset_beyond_the_hungarian_capture_range():
-    """An offset the Hungarian matcher alone cannot match from an identity seed is
+    """An offset the Hungarian matcher alone cannot match from an identity initial transform is
     recovered once spectral matching acquires the correspondence first."""
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)

@@ -392,17 +392,17 @@ class SpectralMatchSettings(MyBaseModel):
     max_iter: int = Field(60, ge=1)
 
 
-class SeedCorrectionSettings(MyBaseModel):
-    """Correct a per-timepoint seed by bead displacement voting before estimating.
+class InitialTransformCorrectionSettings(MyBaseModel):
+    """Correct a per-timepoint initial transform by bead displacement voting before estimating.
 
-    For a series whose geometry drifts beyond the static seed's capture range while the
+    For a series whose geometry drifts beyond the static initial transform's capture range while the
     bead field is too thin for the matchers to re-acquire from scratch. The moving volume
-    is warped with the seed, beads are detected densely (`vote_peaks_settings`) and each
+    is warped with the initial transform, beads are detected densely (`vote_peaks_settings`) and each
     votes for its displacement to every reference bead within `capture_radius`; the mean
     of the densest `cluster_radius`-ball of votes is the residual drift. "voteseed"
-    composes that translation into the seed; "votefit" additionally fits an affine on the
+    composes that translation into the initial transform; "votefit" additionally fits an affine on the
     cluster's members, kept only if it lowers the peaks' median nearest-neighbour distance.
-    Candidates only compete against the unchanged seed, so a bad vote cannot make it worse.
+    Candidates only compete against the unchanged initial transform, so a bad vote cannot make it worse.
     """
 
     mode: Literal["none", "voteseed", "votefit"] = "none"
@@ -417,7 +417,7 @@ class SeedCorrectionSettings(MyBaseModel):
 class VoteIcpSettings(MyBaseModel):
     """Tunables for `estimation_mode: vote_icp` (see `pointcloud.vote_icp_register`).
 
-    The capture radius starts wide enough to reach a badly drifted seed and shrinks
+    The capture radius starts wide enough to reach a badly drifted initial transform and shrinks
     geometrically each iteration (default 80 -> 40 -> 20 -> 10, then held), so early
     rounds recover the bulk misalignment and late rounds only see unambiguous neighbours.
     `vote_peaks_settings` is the dense detection on the raw moving volume for the reach
@@ -469,7 +469,9 @@ class BeadsMatchSettings(MyBaseModel):
     # "vote_icp": correspond-by-voting ICP over the peak clouds (pointcloud.vote_icp_register).
     estimation_mode: Literal["matching", "vote_icp"] = "matching"
     vote_icp_settings: VoteIcpSettings = VoteIcpSettings()
-    seed_correction_settings: SeedCorrectionSettings = SeedCorrectionSettings()
+    initial_transform_correction_settings: InitialTransformCorrectionSettings = (
+        InitialTransformCorrectionSettings()
+    )
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
 
@@ -501,7 +503,7 @@ class PhaseCrossCorrSettings(MyBaseModel):
     X_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
-    # Local: a shift per tile, fitted in yx (z stays the seed's), instead of one
+    # Local: a shift per tile, fitted in yx (z stays the initial transform's), instead of one
     # translation for the whole volume.
     local: LocalPhaseCrossCorrSettings | None = None
     # 1: whole-pixel shifts. Above 1: refined to 1/upsample_factor of a pixel (an upsampled
@@ -1515,7 +1517,7 @@ class RepairSettings(MyBaseModel):
 
     `t-1` / `t+1`: a non-flagged neighbour's transform; `consensus`: the run's median over
     well-scoring timepoints; `initial`: the run's `transform.initial`. `polish_rounds`:
-    after a candidate is accepted, re-estimate seeded from it up to this many times,
+    after a candidate is accepted, re-estimate started from it up to this many times,
     keeping a round only on a strict score gain (0 disables).
     """
 
@@ -1846,7 +1848,7 @@ class EstimateTransformSettings(MyBaseModel):
     reference: ReferenceSettings
     # Applied, in order, before the method (see the preprocessing blocks above).
     preprocess: PreprocessBlocks = []
-    # One method by name, or a stack of blocks run coarse to fine (each seeded by the one
+    # One method by name, or a stack of blocks run coarse to fine (each started from the one
     # before; the run's score judges every block's result).
     method: EstimationMethod | MethodStack
     bead_matching: BeadsMatchSettings | None = None
@@ -2018,7 +2020,7 @@ class EstimateTransformSettings(MyBaseModel):
     def check_sweep_paths(self) -> "EstimateTransformSettings":
         if self.fallback.sweep is None or self.is_stack:  # (a stack refuses sweeps)
             return self
-        # A sweep trial only rebuilds the estimator: the score, seed and reference come
+        # A sweep trial only rebuilds the estimator: the score, initial transform and reference come
         # from these settings, so only the method's own block and the fit type can change.
         block = METHOD_BLOCKS[self.method]
         for overrides in self.fallback.sweep.trials():
@@ -2069,7 +2071,7 @@ class EstimateTransformSettings(MyBaseModel):
     def stack_settings(self) -> list["EstimateTransformSettings"]:
         """Return one single-method config per block (these settings alone if not a stack).
 
-        Each block's method, settings, preprocess and transform type; the reference, seed,
+        Each block's method, settings, preprocess and transform type; the reference, initial transform,
         score, fallback and time indices are the run's.
         """
         if not self.is_stack:

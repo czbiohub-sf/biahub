@@ -77,7 +77,7 @@ bead_matching:
     min_votes: 3
     max_iterations: 20
     convergence_translation: 0.5
-  seed_correction_settings:
+  initial_transform_correction_settings:
     mode: none
     vote_peaks_settings:
       threshold_abs: 200.0

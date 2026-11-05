@@ -214,11 +214,11 @@ class InitialTransformPolicy(Protocol):
 
 
 class FixedInitialTransform:
-    """A fixed seed for every t -- today's default.
+    """A fixed initial transform for every t -- today's default.
 
     Also what `optimize-registration`'s "refine an existing transform" case is: pass the
-    existing transform as this seed instead of a fresh default. No separate "optimize"
-    concept is needed once seed policies exist.
+    existing transform as this initial transform instead of a fresh default. No separate "optimize"
+    concept is needed once initial transform policies exist.
     """
 
     keep_unless_beaten = False
@@ -290,7 +290,7 @@ class FileInitialTransform:
 
 
 class ConsensusInitialTransform:
-    """Repair seed from the run's own well-scoring timepoints.
+    """Repair initial transform from the run's own well-scoring timepoints.
 
     Element-wise median transform over every timepoint (other than `t` itself) whose
     score is >= `score_threshold`. Recomputed fresh on every call from a caller-owned
@@ -329,7 +329,7 @@ class ConsensusInitialTransform:
         ]
         if len(good) < self.min_good:
             raise CandidateUnavailableError(
-                f"Consensus seed: only {len(good)} timepoints score >= "
+                f"Consensus initial transform: only {len(good)} timepoints score >= "
                 f"{self.score_threshold}; need at least {self.min_good}."
             )
         stack = np.stack([self.history[t2].matrix for t2 in good])

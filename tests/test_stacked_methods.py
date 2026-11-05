@@ -133,7 +133,7 @@ def test_a_stack_runs_its_blocks_in_order_each_from_the_one_before(monkeypatch):
     from biahub.registration.estimators import ChainedEstimator
 
     settings = _settings(PCC_THEN_ANTS)
-    estimator, score_fn, seed = build_estimator(settings, (16, 64, 64))
+    estimator, score_fn, initial_transform = build_estimator(settings, (16, 64, 64))
     assert isinstance(estimator, ChainedEstimator) and len(estimator.stages) == 2
     pcc, ants = estimator.stages
     assert type(pcc.method).__name__ == "PCCEstimator"  # wrapped by its block's preprocess
@@ -142,19 +142,31 @@ def test_a_stack_runs_its_blocks_in_order_each_from_the_one_before(monkeypatch):
     first = Transform.from_translation([1.0, 2.0, 3.0])
     second = Transform.from_translation([1.0, 2.5, 3.0])
     seen = []
-    monkeypatch.setattr(pcc, "estimate", lambda m, r, seed=None: seen.append(seed) or first)
-    monkeypatch.setattr(ants, "estimate", lambda m, r, seed=None: seen.append(seed) or second)
+    monkeypatch.setattr(
+        pcc,
+        "estimate",
+        lambda m, r, initial_transform=None: seen.append(initial_transform) or first,
+    )
+    monkeypatch.setattr(
+        ants,
+        "estimate",
+        lambda m, r, initial_transform=None: seen.append(initial_transform) or second,
+    )
     monkeypatch.setattr(estimator, "score_fn", lambda t, m, r: 0.9 if t is second else 0.5)
     vol = np.zeros((16, 64, 64), np.float32)
-    assert estimator.estimate(vol, vol, seed=seed) is second
-    assert seen[0] is seed and seen[1] is first
+    assert estimator.estimate(vol, vol, initial_transform=initial_transform) is second
+    assert seen[0] is initial_transform and seen[1] is first
 
 
-def test_the_stack_uses_the_seed_when_its_first_block_does():
+def test_the_stack_uses_the_initial_transform_when_its_first_block_does():
     from biahub.registration.engine import build_estimator
 
-    assert not build_estimator(_settings(PCC_THEN_ANTS), (16, 64, 64))[0].uses_seed
-    assert build_estimator(_settings([{"ants": {}}, BEADS_BLOCK]), (16, 64, 64))[0].uses_seed
+    assert not build_estimator(_settings(PCC_THEN_ANTS), (16, 64, 64))[
+        0
+    ].uses_initial_transform
+    assert build_estimator(_settings([{"ants": {}}, BEADS_BLOCK]), (16, 64, 64))[
+        0
+    ].uses_initial_transform
 
 
 def test_a_stack_estimates_end_to_end_and_names_its_blocks(beads_plate, tmp_path):
@@ -210,7 +222,7 @@ class _Fixed(EstimatorBase):
     def __init__(self, transform=None, error=None):
         self.transform, self.error = transform, error
 
-    def estimate(self, mov, ref, seed=None):
+    def estimate(self, mov, ref, initial_transform=None):
         from biahub.registration.estimators import EstimationError
 
         if self.error:
@@ -288,16 +300,16 @@ class _Shift(EstimatorBase):
     def __init__(self, d):
         self.d = d
 
-    def estimate(self, mov, ref, seed=None):
+    def estimate(self, mov, ref, initial_transform=None):
         from biahub.core.transform import Transform
 
-        start = seed if seed is not None else Transform.identity(3)
+        start = initial_transform if initial_transform is not None else Transform.identity(3)
         return Transform.from_translation([0.0, 0.0, self.d]) @ start
 
 
 def test_propagated_blocks_are_the_winning_runs_and_empty_frames_have_none():
     # With transform.initial.propagate the chain runs twice per timepoint (from the
-    # previous result and from the input seed); the record keeps the winning run's
+    # previous result and from the run's initial transform); the record keeps the winning run's
     # blocks, and an empty frame has none.
     import numpy as np
 

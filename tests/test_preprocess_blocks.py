@@ -139,11 +139,13 @@ class _Recording(EstimatorBase):
     def __init__(self):
         self.seen = {}
 
-    def estimate(self, mov, ref, seed=None, competitor=None, ref_mask=None, mov_mask=None):
+    def estimate(
+        self, mov, ref, initial_transform=None, competitor=None, ref_mask=None, mov_mask=None
+    ):
         self.seen = dict(
             mov=mov,
             ref=ref,
-            seed=seed,
+            initial_transform=initial_transform,
             competitor=competitor,
             ref_mask=ref_mask,
             mov_mask=mov_mask,
@@ -166,14 +168,14 @@ def test_the_method_gets_prepared_volumes_and_masks_and_keeps_its_interface():
     mov = np.arange(4 * 16 * 16, dtype=np.float32).reshape(4, 16, 16)
     ref = mov.copy()
 
-    wrapped.estimate(mov, ref, seed="s", competitor="c")
+    wrapped.estimate(mov, ref, initial_transform="s", competitor="c")
     assert inner.seen["mov"].max() == pytest.approx(np.percentile(mov, 50))
     np.testing.assert_array_equal(inner.seen["ref"], ref)  # no image block on the reference
     assert inner.seen["ref_mask"][:, :8].all() and not inner.seen["ref_mask"][:, 8:].any()
     assert inner.seen["mov_mask"] is None
-    assert (inner.seen["seed"], inner.seen["competitor"]) == ("s", "c")
+    assert (inner.seen["initial_transform"], inner.seen["competitor"]) == ("s", "c")
     # the engine reads the method's members through the wrapper
-    assert (wrapped.uses_seed, wrapped.accepts_competitor) == (True, True)
+    assert (wrapped.uses_initial_transform, wrapped.accepts_competitor) == (True, True)
     assert wrapped.trace()["best_candidate"] == "hungarian"
 
 
@@ -246,7 +248,7 @@ def test_a_methods_own_score_judges_the_raw_volumes(monkeypatch):
         ),
         preprocess=[{"clip_percentiles": {"low": 0, "high": 99.9}}],
     )
-    estimator, _score, _seed = engine.build_estimator(settings, (32, 48, 48))
+    estimator, _score, _initial_transform = engine.build_estimator(settings, (32, 48, 48))
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, (32, 48, 48))
     mov = np.roll(ref, 2, axis=2)

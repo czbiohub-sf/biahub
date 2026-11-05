@@ -1,4 +1,4 @@
-"""Local phase cross-correlation: tile shifts on max projections, fitted in yx; z stays the seed's."""
+"""Local phase cross-correlation: tile shifts on max projections, fitted in yx; z stays the initial transform's."""
 
 import numpy as np
 import pytest
@@ -50,19 +50,21 @@ PROBE = np.array([[12, 50, 50], [12, 50, 330], [12, 330, 50], [12, 330, 330], [1
 def test_tiles_recover_a_yx_scale_rotation_and_shift():
     truth = _yx_similarity()
     mov, ref = _pair(truth)
-    found = _estimator().estimate(mov, ref, seed=Transform.identity(3))
+    found = _estimator().estimate(mov, ref, initial_transform=Transform.identity(3))
     err_um = (found.apply_points(PROBE) - truth.apply_points(PROBE))[:, 1:] * np.asarray(
         UM[1:]
     )
     assert np.abs(err_um).max() < 0.1
 
 
-def test_z_stays_the_seeds():
-    # the block measures yx only: whatever z the seed brings, it keeps
+def test_z_stays_the_initial_transforms_z():
+    # the block measures yx only: whatever z the initial transform brings, it keeps
     mov, ref = _pair(_yx_similarity())
-    seed = Transform.from_translation([1.5, 0.0, 0.0])
-    found = _estimator().estimate(mov, ref, seed=seed)
-    np.testing.assert_allclose(np.asarray(found.matrix)[0], np.asarray(seed.matrix)[0])
+    initial_transform = Transform.from_translation([1.5, 0.0, 0.0])
+    found = _estimator().estimate(mov, ref, initial_transform=initial_transform)
+    np.testing.assert_allclose(
+        np.asarray(found.matrix)[0], np.asarray(initial_transform.matrix)[0]
+    )
 
 
 def test_too_few_tiles_fail_and_say_why():
@@ -72,7 +74,7 @@ def test_too_few_tiles_fail_and_say_why():
     # independent noise in each channel: no structure in common
     mov, ref = (rng.normal(100, 1, (24, 384, 384)).astype(np.float32) for _ in range(2))
     with pytest.raises(EstimationError, match="tiles correlated"):
-        _estimator().estimate(mov, ref, seed=Transform.identity(3))
+        _estimator().estimate(mov, ref, initial_transform=Transform.identity(3))
 
 
 def test_local_is_an_option_of_phase_cross_corr():

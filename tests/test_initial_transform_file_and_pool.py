@@ -1,4 +1,4 @@
-"""A seed from a transforms file (an earlier result) and pooling positions into one transform.
+"""An initial transform from a transforms file (an earlier result) and pooling positions into one transform.
 
 Together they give the plate-then-position flow: estimate on a few positions with
 `pool:` (one shared transform), then on every position with `transform.initial` from
@@ -105,13 +105,13 @@ def _plate_file(tmp_path, inverse_shift):
     return path
 
 
-def test_each_position_refines_from_the_seed_file(three_positions, tmp_path):
-    seed_file = _plate_file(tmp_path, (3.0, -3.0, 4.0))
+def test_each_position_refines_from_the_initial_transform_file(three_positions, tmp_path):
+    initial_transform_file = _plate_file(tmp_path, (3.0, -3.0, 4.0))
     # the residual score, continuous: the overlap score (6-voxel radius) ties a 1-slice
-    # refinement with the seed, and a tie keeps the seed
+    # refinement with the initial transform, and a tie keeps the initial transform
     config = _config(
         tmp_path,
-        transform__initial={"from": "file", "file": str(seed_file)},
+        transform__initial={"from": "file", "file": str(initial_transform_file)},
         score={"metric": "residual"},
     )
     output = tmp_path / "fovs" / "transforms.yml"
@@ -128,16 +128,18 @@ def test_each_position_refines_from_the_seed_file(three_positions, tmp_path):
         assert entry.status == "accepted"
 
 
-def test_a_failed_estimate_keeps_the_seed_files_transform(three_positions, tmp_path):
-    # no beads detected (threshold above every peak): the estimate fails, the seed file's
+def test_a_failed_estimate_keeps_the_initial_transform_files_transform(
+    three_positions, tmp_path
+):
+    # no beads detected (threshold above every peak): the estimate fails, the initial transform file's
     # transform is kept as it is, scored, and says so
-    seed_file = _plate_file(tmp_path, SHIFTS["0"])
+    initial_transform_file = _plate_file(tmp_path, SHIFTS["0"])
     peaks = DetectPeaksSettings(
         threshold_abs=1e9, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
     config = _config(
         tmp_path,
-        transform__initial={"from": "file", "file": str(seed_file)},
+        transform__initial={"from": "file", "file": str(initial_transform_file)},
         bead_matching={"source_peaks_settings": peaks, "target_peaks_settings": peaks},
     )
     output = tmp_path / "fov0" / "transforms.yml"
@@ -168,11 +170,13 @@ def test_an_initial_file_refuses_another_source(extra, message):
         TransformFitSettings(initial={"from": "file", "file": "p.yml", **extra})
 
 
-def test_a_changed_seed_file_is_a_different_run(three_positions, tmp_path):
+def test_a_changed_initial_transform_file_is_a_different_run(three_positions, tmp_path):
     import click
 
-    seed_file = _plate_file(tmp_path, SHIFTS["0"])
-    config = _config(tmp_path, transform__initial={"from": "file", "file": str(seed_file)})
+    initial_transform_file = _plate_file(tmp_path, SHIFTS["0"])
+    config = _config(
+        tmp_path, transform__initial={"from": "file", "file": str(initial_transform_file)}
+    )
     output = tmp_path / "fov0" / "transforms.yml"
     run = dict(reference_position_dirpaths=three_positions[:1], cluster="debug")
     estimate_transform(three_positions[:1], config, output, **run)
@@ -193,8 +197,10 @@ def test_pool_refuses_a_chained_stabilization():
         )
 
 
-def test_a_timepoint_without_an_estimate_falls_back_to_its_seed_from_the_file(tmp_path):
-    # An empty frame (or a crashed job) has no estimate: its stand-in must be the seed
+def test_a_timepoint_without_an_estimate_falls_back_to_its_initial_transform_from_the_file(
+    tmp_path,
+):
+    # An empty frame (or a crashed job) has no estimate: its stand-in must be the initial transform
     # file's transform for that timepoint, not the config seed (identity with seed_file).
     from tests.test_estimate_transform import _write_plate
 
@@ -203,10 +209,10 @@ def test_a_timepoint_without_an_estimate_falls_back_to_its_seed_from_the_file(tm
     mov = ndi_shift(ref, shift=SHIFTS["0"], order=1, mode="constant", cval=0.0)
     empty = np.zeros_like(ref)
     plate = _write_plate(tmp_path / "gap.zarr", [(ref, mov), (empty, empty)])
-    seed_file = _plate_file(tmp_path, SHIFTS["0"])
+    initial_transform_file = _plate_file(tmp_path, SHIFTS["0"])
     config = _config(
         tmp_path,
-        transform__initial={"from": "file", "file": str(seed_file)},
+        transform__initial={"from": "file", "file": str(initial_transform_file)},
         time_indices="all",
     )
     output = tmp_path / "gap" / "transforms.yml"

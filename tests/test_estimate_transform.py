@@ -340,7 +340,7 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     failures = repair["candidate_failures"]
     assert "EstimationError" in failures["t-1"] and "EstimationError" in failures["initial"]
     assert failures["consensus_full"].startswith(
-        "CandidateUnavailableError: Consensus seed: only 2 timepoints"
+        "CandidateUnavailableError: Consensus initial transform: only 2 timepoints"
     )
     assert report["stand_ins"] == {"2": "initial"}
     assert (output.with_suffix("") / "repairs" / "2.json").exists()
@@ -351,7 +351,9 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
 
     entries = load_transform_settings(output).transforms
     assert [e.t for e in entries] == [0, 1, 2]
-    np.testing.assert_allclose(entries[2].matrix, np.eye(4))  # the input seed (identity here)
+    np.testing.assert_allclose(
+        entries[2].matrix, np.eye(4)
+    )  # the run's initial transform (identity here)
     assert entries[2].score is None and entries[0].score > 0.5
     # ... and the file says so, with the failure, instead of passing as an estimate
     assert entries[2].status == "unreliable" and entries[2].filled_from == "initial"
@@ -515,7 +517,7 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
     assert {"stand_in", "stand_in_from"} <= set(record)
 
 
-def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
+def test_repair_is_skipped_for_a_method_that_ignores_initial_transforms(tmp_path, capsys):
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, SHAPE)
     blank = rng.normal(0, 5.0, size=SHAPE).astype(np.float32)
@@ -536,7 +538,7 @@ def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
         (output.with_suffix("") / "estimate_transform_report.json").read_text()
     )
     assert report["flagged"]  # the noise frame is still flagged ...
-    assert report["repairs"] == {}  # ... but PCC is not re-run from other seeds
+    assert report["repairs"] == {}  # ... but PCC is not re-run from other initial transforms
     assert "repair skipped" in capsys.readouterr().out
 
 

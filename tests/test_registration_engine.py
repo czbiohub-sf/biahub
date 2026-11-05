@@ -37,18 +37,24 @@ class _MeanShiftEstimator(EstimatorBase):
         self.fail_for_mov_means = set(fail_for_mov_means)
         self.calls = []
 
-    def estimate(self, mov, ref, seed=None):
-        self.calls.append({"mov": float(mov.mean()), "ref": float(ref.mean()), "seed": seed})
+    def estimate(self, mov, ref, initial_transform=None):
+        self.calls.append(
+            {
+                "mov": float(mov.mean()),
+                "ref": float(ref.mean()),
+                "initial_transform": initial_transform,
+            }
+        )
         if round(float(mov.mean())) in self.fail_for_mov_means:
             raise EstimationError("too few nodes")
         return Transform.from_translation([float(ref.mean() - mov.mean()), 0.0, 0.0])
 
 
 class _EchoEstimator(EstimatorBase):
-    """Returns the seed it is given (identity when none)."""
+    """Returns the initial transform it is given (identity when none)."""
 
-    def estimate(self, mov, ref, seed=None):
-        return seed if seed is not None else IDENTITY
+    def estimate(self, mov, ref, initial_transform=None):
+        return initial_transform if initial_transform is not None else IDENTITY
 
 
 def _finite_score(transform, mov, ref):
@@ -178,17 +184,17 @@ def test_repair_touches_only_flagged_timepoints_and_journals_them():
 
 
 def test_repair_rescues_a_timepoint_whose_estimate_failed():
-    class _FailsUnseeded(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
-            if round(float(mov.mean())) == 2 and seed.is_identity:
+    class _FailsWithoutInitialTransform(EstimatorBase):
+        def estimate(self, mov, ref, initial_transform=None):
+            if round(float(mov.mean())) == 2 and initial_transform.is_identity:
                 raise EstimationError("too few matches")
-            return seed
+            return initial_transform
 
     mov = _constant_frames(4)
     result = estimate_series(
         mov,
         FixedFrame(0),
-        _FailsUnseeded(),
+        _FailsWithoutInitialTransform(),
         FixedInitialTransform(IDENTITY),
         _finite_score,
         range(4),
@@ -199,7 +205,7 @@ def test_repair_rescues_a_timepoint_whose_estimate_failed():
     result = _repair_flagged(
         mov,
         FixedFrame(0),
-        _FailsUnseeded(),
+        _FailsWithoutInitialTransform(),
         _finite_score,
         result,
         candidates=lambda t, history, scores, flagged: {"fix": FixedInitialTransform(fix)},
@@ -221,20 +227,25 @@ def test_repair_replaces_a_transform_whose_score_is_nan():
             return 0.7
         return float("nan") if round(float(mov.mean())) == 1 else 0.9
 
-    class _EchoSeed(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
-            return seed
+    class _EchoInitialTransform(EstimatorBase):
+        def estimate(self, mov, ref, initial_transform=None):
+            return initial_transform
 
     mov = _constant_frames(3)
     result = estimate_series(
-        mov, FixedFrame(0), _EchoSeed(), FixedInitialTransform(IDENTITY), score, range(3)
+        mov,
+        FixedFrame(0),
+        _EchoInitialTransform(),
+        FixedInitialTransform(IDENTITY),
+        score,
+        range(3),
     )
     assert np.isnan(result.scores[1]) and 1 in result.transforms
 
     result = _repair_flagged(
         mov,
         FixedFrame(0),
-        _EchoSeed(),
+        _EchoInitialTransform(),
         score,
         result,
         candidates=lambda t, history, scores, flagged: {"fix": FixedInitialTransform(fix)},
@@ -248,7 +259,7 @@ def test_polish_improves_on_a_nan_score():
     better = Transform.from_translation([2.0, 0.0, 0.0])
 
     class _Refines(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
+        def estimate(self, mov, ref, initial_transform=None):
             return better
 
     transform, score, rounds = polish(
@@ -267,29 +278,29 @@ def test_polish_improves_on_a_nan_score():
 def test_neighbour_consensus_initial_candidates_skips_flagged_neighbours():
     history = {t: Transform.from_translation([float(t), 0.0, 0.0]) for t in range(7)}
     scores = {t: 0.9 for t in range(7)}
-    config_seed = Transform.from_translation([-1.0, 0.0, 0.0])
-    factory = neighbour_consensus_initial_candidates(config_seed)
+    config_initial_transform = Transform.from_translation([-1.0, 0.0, 0.0])
+    factory = neighbour_consensus_initial_candidates(config_initial_transform)
 
     middle = factory(4, history, scores, flagged={3, 4})
     assert list(middle) == ["t+1", "consensus_full", "initial"]
     assert middle["t+1"].initial_for(4) is history[5]
     assert isinstance(middle["consensus_full"], ConsensusInitialTransform)
-    assert middle["initial"].initial_for(4) is config_seed
+    assert middle["initial"].initial_for(4) is config_initial_transform
 
     first = factory(0, history, scores, flagged={0})
     assert list(first) == ["t+1", "consensus_full", "initial"]
 
 
 class _StepEstimator(EstimatorBase):
-    """Moves the seed's x translation one step towards `target` per call."""
+    """Moves the initial transform's x translation one step towards `target` per call."""
 
     def __init__(self, target: float):
         self.target = target
         self.calls = 0
 
-    def estimate(self, mov, ref, seed=None):
+    def estimate(self, mov, ref, initial_transform=None):
         self.calls += 1
-        x = seed.translation[0]
+        x = initial_transform.translation[0]
         return Transform.from_translation([min(x + 1.0, self.target), 0.0, 0.0])
 
 
@@ -316,7 +327,7 @@ def test_polish_is_capped_and_a_raising_round_keeps_the_accepted_transform():
     assert capped[1:] == (1.0, 1)
 
     class _Raises(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
+        def estimate(self, mov, ref, initial_transform=None):
             raise EstimationError("too few matches")
 
     transform, score, rounds = polish(0, None, None, _Raises(), start, 0.5, _score_by_x, 3)
@@ -365,7 +376,7 @@ class _FixedEstimator(EstimatorBase):
     def __init__(self, x: float):
         self.x = x
 
-    def estimate(self, mov, ref, seed=None):
+    def estimate(self, mov, ref, initial_transform=None):
         return Transform.from_translation([self.x, 0.0, 0.0])
 
 
@@ -424,7 +435,7 @@ def test_sweep_competes_with_repair_from_the_pre_fallback_score():
 
 def test_sweep_skips_a_raising_trial_and_names_it():
     class _Raises(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
+        def estimate(self, mov, ref, initial_transform=None):
             raise EstimationError("too few matches")
 
     mov, result = _series_with_one_poor_timepoint()
@@ -451,8 +462,8 @@ def test_transforms_for_file_previous_treats_a_missing_step_as_identity():
     assert result.filled_from == {2: "identity"}
 
 
-def test_transforms_for_file_absolute_frames_fill_with_the_input_seed():
-    # As the legacy pipeline did when refinement failed: the input seed (e.g. the
+def test_transforms_for_file_absolute_frames_fill_with_the_input_initial_transform():
+    # As the legacy pipeline did when refinement failed: the run's initial transform (e.g. the
     # approximate transform), not a neighbour's transform.
     from biahub.registration.engine import SeriesResult
 
@@ -463,17 +474,17 @@ def test_transforms_for_file_absolute_frames_fill_with_the_input_seed():
 
 
 class _StepX(EstimatorBase):
-    """Moves its seed by +1 in x; fails on frames whose value is in `fail_on`."""
+    """Moves its initial transform by +1 in x; fails on frames whose value is in `fail_on`."""
 
     def __init__(self, fail_on=()):
         self.fail_on = set(fail_on)
-        self.seeds = []
+        self.initial_transforms = []
 
-    def estimate(self, mov, ref, seed=None):
-        self.seeds.append(seed)
+    def estimate(self, mov, ref, initial_transform=None):
+        self.initial_transforms.append(initial_transform)
         if round(float(np.asarray(mov).mean())) in self.fail_on:
             raise EstimationError("too few matches")
-        return (seed or IDENTITY) @ _shift_x(1)
+        return (initial_transform or IDENTITY) @ _shift_x(1)
 
 
 def _frames(values):
@@ -489,9 +500,9 @@ def test_estimate_propagated_follows_the_legacy_rules():
         mov, CrossChannel(mov), _StepX(fail_on={3}), IDENTITY, _finite_score, range(6)
     )
     x = {t: tr.translation[2] for t, tr in result.transforms.items()}
-    # t0 from the input seed (+1); t1 from t0 (+1) -> 2
+    # t0 from the run's initial transform (+1); t1 from t0 (+1) -> 2
     assert x[0] == 1.0 and x[1] == 2.0
-    # t2 fails: it returns the seed it started from (t1's result), recorded as a stand-in
+    # t2 fails: it returns the initial transform it started from (t1's result), recorded as a stand-in
     assert 2 not in result.transforms and "too few matches" in result.errors[2]
     stand_in, source = result.stand_ins[2]
     assert stand_in.translation[2] == 2.0 and source == "t=1"
@@ -528,13 +539,13 @@ def test_an_ants_failure_is_a_failed_estimate_not_a_crash(monkeypatch):
         ants_method.estimate(vol, vol, IDENTITY)
 
 
-def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain():
+def test_estimate_propagated_lets_the_input_initial_transform_compete_and_resumes_the_chain():
     from biahub.registration.engine import estimate_propagated
 
     mov = _frames([1, 2, 3])
 
-    # The input seed is at x=10; scores favour transforms near x=11, so from t=1 the
-    # estimate started from the input seed beats the one from the previous result.
+    # The input initial transform is at x=10; scores favour transforms near x=11, so from t=1 the
+    # estimate started from the run's initial transform beats the one from the previous result.
     def score(transform, m, r):
         return -abs(transform.translation[2] - 11.0)
 
@@ -552,9 +563,11 @@ def test_estimate_propagated_lets_the_input_seed_compete_and_resumes_the_chain()
     resumed = estimate_propagated(
         mov, CrossChannel(mov), estimator, IDENTITY, _finite_score, range(3), done=done
     )
-    assert len(estimator.seeds) == 2  # only t2 estimated: from t1 (x=5), then the input seed
     assert (
-        estimator.seeds[0].translation[2] == 5.0
+        len(estimator.initial_transforms) == 2
+    )  # only t2 estimated: from t1 (x=5), then the run's initial transform
+    assert (
+        estimator.initial_transforms[0].translation[2] == 5.0
         and resumed.transforms[2].translation[2] == 6.0
     )
 
@@ -612,10 +625,12 @@ def test_estimate_propagated_does_not_estimate_the_stabilization_reference_frame
         _frames([1, 2, 3]), reference_policy, estimator, _shift_x(10), _finite_score, range(3)
     )
     assert result.transforms[0].is_identity  # t=0 is the reference itself
-    # t=0 never estimated: t=1 from the input seed; t=2 from t=1's result, with the input
-    # seed competing (a generic estimator is run from both)
-    assert [seed.translation[2] for seed in estimator.seeds] == [10.0, 11.0, 10.0]
-    # the chain starts after the reference from the input seed (x=10), as legacy did
+    # t=0 never estimated: t=1 from the run's initial transform; t=2 from t=1's result, with the input
+    # initial transform competing (a generic estimator is run from both)
+    assert [
+        initial_transform.translation[2] for initial_transform in estimator.initial_transforms
+    ] == [10.0, 11.0, 10.0]
+    # the chain starts after the reference from the run's initial transform (x=10), as legacy did
     assert result.transforms[1].translation[2] == 11.0
     assert result.transforms[2].translation[2] == 12.0
 
@@ -660,7 +675,7 @@ class _FocusLike(EstimatorBase):
     def __init__(self, holds=True):
         self.holds_xy_across_gaps = holds
 
-    def estimate(self, mov, ref, seed=None):
+    def estimate(self, mov, ref, initial_transform=None):
         if not np.any(mov):
             raise EstimationError("empty field of view")
         return Transform.from_translation([float(ref.mean() - mov.mean()), 5.0, 7.0])

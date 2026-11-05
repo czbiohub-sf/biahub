@@ -12,12 +12,16 @@ from biahub.registration.estimators import (
 
 
 class _EchoEstimator(EstimatorBase):
-    """Test double: estimate() just returns whatever seed it was given (or identity
+    """Test double: estimate() just returns whatever initial transform it was given (or identity
     if none), so repair's candidate-selection logic can be tested without a real
     estimator or real image data."""
 
-    def estimate(self, mov, ref, seed=None):
-        return seed if seed is not None else Transform.from_translation([0.0, 0.0, 0.0])
+    def estimate(self, mov, ref, initial_transform=None):
+        return (
+            initial_transform
+            if initial_transform is not None
+            else Transform.from_translation([0.0, 0.0, 0.0])
+        )
 
 
 def _score_by_closeness(transform: Transform, target: np.ndarray) -> float:
@@ -78,10 +82,10 @@ def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
     target = np.array([10.0, 10.0, 10.0])
 
     class _RaisingEstimator(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
-            if seed is not None and seed.matrix[0, 3] == 999.0:
+        def estimate(self, mov, ref, initial_transform=None):
+            if initial_transform is not None and initial_transform.matrix[0, 3] == 999.0:
                 raise EstimationError("simulated candidate failure")
-            return seed
+            return initial_transform
 
     candidates = {
         "broken": FixedInitialTransform(Transform.from_translation([999.0, 0.0, 0.0])),
@@ -108,7 +112,7 @@ def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
 def test_repair_names_each_failed_candidate():
     target = np.array([10.0, 10.0, 10.0])
 
-    class _RaisingSeedPolicy:
+    class _RaisingInitialTransformPolicy:
         keep_unless_beaten = False
 
         def initial_for(self, t):
@@ -121,7 +125,7 @@ def test_repair_names_each_failed_candidate():
         estimator=_EchoEstimator(),
         current_transform=Transform.from_translation([0.0, 0.0, 0.0]),
         current_score=_score_by_closeness(Transform.from_translation([0.0, 0.0, 0.0]), target),
-        candidates={"consensus": _RaisingSeedPolicy()},
+        candidates={"consensus": _RaisingInitialTransformPolicy()},
         score_fn=lambda t: _score_by_closeness(t, target),
     )
 
@@ -131,19 +135,19 @@ def test_repair_names_each_failed_candidate():
     }
 
 
-def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whole_pass():
+def test_repair_skips_a_candidate_whose_initial_transform_for_raises_without_failing_the_whole_pass():
     """E.g. `ConsensusInitialTransform` raises `CandidateUnavailableError` when too few timepoints
     score well enough yet -- skipped like any other candidate failure, not crash `repair`."""
     target = np.array([10.0, 10.0, 10.0])
 
-    class _RaisingSeedPolicy:
+    class _RaisingInitialTransformPolicy:
         keep_unless_beaten = False
 
         def initial_for(self, t):
             raise CandidateUnavailableError("not enough good timepoints yet")
 
     candidates = {
-        "not_ready": _RaisingSeedPolicy(),
+        "not_ready": _RaisingInitialTransformPolicy(),
         "good": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0])),
     }
 

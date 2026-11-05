@@ -12,7 +12,7 @@
 **DragonFly.** The two cameras differ in magnification by a few percent in y/x, although both
 stores claim the same pixel size, and the ratio changes between setups: measure it for each
 dataset rather than reuse one. So the transform is a camera-to-camera geometry and needs a
-seed that carries that scale (measured, or an earlier registration of the same setup:
+initial transform that carries that scale (measured, or an earlier registration of the same setup:
 `references/methods.md`, "ANTs"). Expect a z offset of several slices between the cameras,
 which can differ between wells by a couple of slices -- and between fluorescence channels:
 beads in one colour register that colour only, so check other channels' z (e.g. their z
@@ -22,7 +22,7 @@ channel, which is already on the reference camera.
 
 Previous registrations live in `1-preprocess/light-sheet/raw/1-register/` (the
 `estimate-registration*.sh` script names the beads well; the
-`estimate-registration-beads.yml` holds the seed and detection settings). Configs from
+`estimate-registration-beads.yml` holds the initial transform and detection settings). Configs from
 before 2026-03 use retired field names; `convert-settings` handles the current legacy
 schema, older ones need the renames first (`beads_match_settings.t_reference` ->
 `affine_transform_settings.t_reference`, `filter_*_distance_threshold` ->

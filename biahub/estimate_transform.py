@@ -63,7 +63,7 @@ def transform_entries(
     """One entry per estimated timepoint with its score, repair provenance and status.
 
     A timepoint is `unreliable` when the pipeline found no good transform for it: none
-    at all (the entry is a stand-in -- the input seed -- and `note` says why), no score,
+    at all (the entry is a stand-in -- the run's initial transform -- and `note` says why), no score,
     a stack block that failed (`note` names it and the block kept instead), or flagged and
     still below `hard_fail` after repair and sweep. Otherwise `accepted`.
 
@@ -353,12 +353,18 @@ class _Run:
         # reg/transforms/), so estimates written to one folder never share or clear them.
         self.output_dir = self.output_filepath.with_suffix("")
         self.settings = load_estimate_transform_settings(config_filepath)
-        seed_file = self.settings.transform.initial_file
-        if seed_file is not None:  # relative to the config, wherever the run starts from
-            seed_file = (Path(config_filepath).parent / seed_file).resolve()
-            if not seed_file.is_file():
-                raise click.UsageError(f"transform.initial.file {seed_file} does not exist")
-            self.settings.transform.initial.file = str(seed_file)
+        initial_transform_file = self.settings.transform.initial_file
+        if (
+            initial_transform_file is not None
+        ):  # relative to the config, wherever the run starts from
+            initial_transform_file = (
+                Path(config_filepath).parent / initial_transform_file
+            ).resolve()
+            if not initial_transform_file.is_file():
+                raise click.UsageError(
+                    f"transform.initial.file {initial_transform_file} does not exist"
+                )
+            self.settings.transform.initial.file = str(initial_transform_file)
         self.config = config_fingerprint(self.settings)
         self.folder = RunFolder(self.output_dir)
         self.movings = [Path(p) for p in moving_position_dirpaths]

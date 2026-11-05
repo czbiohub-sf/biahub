@@ -30,12 +30,12 @@ from biahub.registration.engine.disk import (
     RUN_PLAN_FILENAME,
     RunJournal,
     _flags,
+    _initial_transforms_from_file,
     _load_series,
     _read_record,
     _record_dirs,
     _run_plan,
     _run_settings,
-    _seeds_from_file,
     _start_run,
     _write_json,
 )
@@ -179,10 +179,10 @@ def build_estimator(
     mov_voxel_size: tuple[float, float, float] | None = None,
     ref_voxel_size: tuple[float, float, float] | None = None,
 ) -> tuple[TransformEstimator, ScoreFn, Transform]:
-    """Estimator, score function and forward seed for the settings' method."""
+    """Estimator, score function and forward initial transform for the settings' method."""
     if settings.is_stack:
         # each block is the estimator its own config builds (its preprocess, transform
-        # type, settings), seeded by the block before; the run's score keeps the best
+        # type, settings), started from the block before; the run's score keeps the best
         blocks = [
             build_estimator(block, shape_zyx, mov_voxel_size, ref_voxel_size)[0]
             for block in settings.stack_settings()
@@ -194,7 +194,7 @@ def build_estimator(
     score_fn = _score_fn(settings)
     # the bead estimators' own choices score the raw volumes, not the prepared ones
     method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn
-    seed = _static_initial(settings)
+    initial_transform = _static_initial(settings)
     if settings.method == "bead_matching":
         estimator: TransformEstimator = build_beads_estimator(
             settings.bead_matching, settings.transform.type, score_fn=method_score
@@ -237,7 +237,7 @@ def build_estimator(
         raise click.UsageError(f"unknown method '{settings.method}'")
     if settings.preprocess:
         estimator = PreprocessedEstimator(estimator, settings.preprocess, method_score)
-    return estimator, score_fn, seed
+    return estimator, score_fn, initial_transform
 
 
 def _finite_or_none(value: float | None) -> float | None:
@@ -248,7 +248,7 @@ def _finite_or_none(value: float | None) -> float | None:
 ESTIMATE_MINUTES = 30
 REPAIR_MINUTES = 60
 # Wall-clock budget per timepoint for the sequential (propagation) job, in minutes:
-# 2024_11_07 A549 beads took 7-8 min per timepoint (two passes from two seeds), so ~1.3x.
+# 2024_11_07 A549 beads took 7-8 min per timepoint (two passes from two initial transforms), so ~1.3x.
 PROPAGATION_MINUTES_PER_TIMEPOINT = 10
 # The `preempted` partition's limit: sbatch rejects a longer request outright.
 MAX_MINUTES = 2880
@@ -417,10 +417,10 @@ def init_run(
 ) -> dict:
     """Start a run in `output_dir` and return its plan (also written as `run_plan.json`).
 
-    Resolves the settings the jobs read (a seed from the store shapes is computed once,
+    Resolves the settings the jobs read (an initial transform from the store shapes is computed once,
     here), writes them with the run manifest -- clearing an earlier run's records unless
     `resume` -- and plans the run: the timepoints, whether they are estimated in one
-    sequential job (`transform.initial.propagate`), whether the method uses a seed
+    sequential job (`transform.initial.propagate`), whether the method uses an initial transform
     (repair needs one), and each phase's resources. Reads only store metadata.
     """
     output_dir = Path(output_dir)
@@ -462,21 +462,23 @@ def init_run(
             direction="inverse",
             propagate=init.propagate,
         )
-        click.echo(f"Computed seed from the store shapes:\n{shapes.inverse_matrix}")
-    estimator, _score_fn, _seed_transform = build_estimator(
+        click.echo(
+            f"Computed initial transform from the store shapes:\n{shapes.inverse_matrix}"
+        )
+    estimator, _score_fn, _initial_transform = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
     )
-    seeds = (
+    initial_transforms = (
         None
         if settings.transform.initial_file is None
-        else _seeds_from_file(
+        else _initial_transforms_from_file(
             settings.transform.initial_file, position_key(source), time_indices
         )
     )
     _start_run(output_dir, settings, source, target, resume)
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
-    if seeds is not None:
-        _write_json(output_dir / INITIAL_FILENAME, seeds, indent=2)
+    if initial_transforms is not None:
+        _write_json(output_dir / INITIAL_FILENAME, initial_transforms, indent=2)
 
     propagated = settings.transform.propagates
     # a stack's jobs run every block: plan for the heaviest
@@ -516,7 +518,7 @@ def init_run(
         "frame_shape": [Z, Y, X],
         "voxel_um": list(mov_voxel_size),
         "propagated": propagated,
-        "uses_seed": estimator.uses_seed,
+        "uses_initial_transform": estimator.uses_initial_transform,
         "interactive": "manual" in settings.method_names,
         "resources": {
             "estimate": resources(estimate_minutes),
@@ -571,10 +573,10 @@ def flag_run(
         if repair_settings is not None
         else []
     )
-    if repair_ts and not plan["uses_seed"]:
+    if repair_ts and not plan["uses_initial_transform"]:
         click.echo(
-            f"repair skipped: method {settings.method_label!r} ignores seeds, so re-seeding "
-            f"would return the same transforms ({len(repair_ts)} flagged timepoint(s) stay flagged)"
+            f"repair skipped: method {settings.method_label!r} ignores the initial transform, so starting "
+            f"from another would return the same transforms ({len(repair_ts)} flagged timepoint(s) stay flagged)"
         )
         repair_ts = []
     sweep_ts = (
@@ -618,8 +620,8 @@ def finalize_run(
     settings, plan = _run_settings(output_dir), _run_plan(output_dir)
     time_indices = plan["time_indices"]
     transform_type = settings.transform.type
-    # a timepoint without a transform of its own falls back to where it started: the seed
-    # file's transform for it, else the config seed
+    # a timepoint without a transform of its own falls back to where it started: the initial transform
+    # file's transform for it, else the config initial transform
     initial = _initial_policy(settings, output_dir)
     _, repairs_dir, sweeps_dir = _record_dirs(output_dir)
     if flags is None:
@@ -725,7 +727,7 @@ def transforms_for_file(
     """One transform per timepoint, onto the reference grid, for the transforms file.
 
     `cross` / `first` transforms are absolute, so a timepoint with none takes the input
-    seed. `previous` transforms are relative steps (t -> t-1): a
+    initial transform. `previous` transforms are relative steps (t -> t-1): a
     missing step is identity -- reusing a neighbour's step would add its drift again to
     every later timepoint -- and the steps are chained onto the first frame.
     """

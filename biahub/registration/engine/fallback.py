@@ -312,7 +312,7 @@ def repair(
     candidates: dict[str, InitialTransformPolicy],
     score_fn: Callable[[Transform], float],
 ) -> PassResult:
-    """Re-estimate timepoint `t` from each candidate seed; keep whichever scores best.
+    """Re-estimate timepoint `t` from each candidate initial transform; keep whichever scores best.
 
     A candidate whose `initial_for()` raises -- e.g. `ConsensusInitialTransform` when too few timepoints
     score well enough yet -- is skipped like one whose `estimate()` raises.
@@ -322,7 +322,9 @@ def repair(
         "repair",
         {
             name: (
-                lambda policy=policy: estimator.estimate(mov, ref, seed=policy.initial_for(t))
+                lambda policy=policy: estimator.estimate(
+                    mov, ref, initial_transform=policy.initial_for(t)
+                )
             )
             for name, policy in candidates.items()
         },
@@ -337,14 +339,14 @@ def sweep(
     mov: ArrayLike,
     ref: ArrayLike,
     trials: dict[str, TransformEstimator],
-    seed: Transform,
+    initial_transform: Transform,
     current_transform: Transform,
     current_score: float,
     score_fn: Callable[[Transform], float],
 ) -> PassResult:
-    """Re-estimate timepoint `t` with each trial's estimator from `seed`; keep the best.
+    """Re-estimate timepoint `t` with each trial's estimator from `initial_transform`; keep the best.
 
-    Repair changes the seed and keeps the method; the sweep keeps the seed and changes the
+    Repair changes the initial transform and keeps the method; the sweep keeps the initial transform and changes the
     method's settings, for the timepoints the run's one parameter set does not serve.
     `score_fn` is the run's own, so every trial is judged on the same scale.
     """
@@ -352,7 +354,11 @@ def sweep(
         t,
         "sweep",
         {
-            name: (lambda estimator=estimator: estimator.estimate(mov, ref, seed=seed))
+            name: (
+                lambda estimator=estimator: estimator.estimate(
+                    mov, ref, initial_transform=initial_transform
+                )
+            )
             for name, estimator in trials.items()
         },
         current_transform,
@@ -371,17 +377,17 @@ def polish(
     score_fn: Callable[[Transform], float],
     rounds: int,
 ) -> tuple[Transform, float, int]:
-    """Re-seed the estimator from `transform` and refine again, up to `rounds` times.
+    """Restart the estimator from `transform` and refine again, up to `rounds` times.
 
-    Repair candidates are coarse seeds and detection runs in the seed-warped space, so an
-    estimate seeded from the accepted transform sees better nodes than the one that
+    Repair candidates are coarse initial transforms and detection runs in the initial-transform-warped space, so an
+    estimate started from the accepted transform sees better nodes than the one that
     produced it. A round is kept only on a strict score gain; the first round that fails
     to improve (or raises) ends the pass. Returns (transform, score, improving rounds).
     """
     improved = 0
     for _ in range(rounds):
         try:
-            candidate = estimator.estimate(mov, ref, seed=transform)
+            candidate = estimator.estimate(mov, ref, initial_transform=transform)
             candidate_score = score_fn(candidate)
         except CANDIDATE_FAILURES:  # a failed round keeps the accepted transform
             break
@@ -490,7 +496,7 @@ def sweep_timepoint(
     mov,
     reference_policy: ReferencePolicy,
     trials: dict[str, TransformEstimator],
-    seed: Transform,
+    initial_transform: Transform,
     score_fn: ScoreFn,
     result: SeriesResult,
     baseline_score: float | None = None,
@@ -511,7 +517,7 @@ def sweep_timepoint(
         mov=mov_t,
         ref=ref_t,
         trials=trials,
-        seed=seed,
+        initial_transform=initial_transform,
         current_transform=current if current is not None else Transform.identity(mov_t.ndim),
         current_score=-np.inf if not np.isfinite(baseline_score) else baseline_score,
         score_fn=lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),

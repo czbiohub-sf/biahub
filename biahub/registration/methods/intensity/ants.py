@@ -37,7 +37,7 @@ DEFAULT_ANTS_KWARGS = {
 
 
 # ANTs samples voxels at random in its affine stage (aff_random_sampling_rate): a
-# fixed seed makes a run repeatable for a given thread count.
+# fixed random seed makes a run repeatable for a given thread count.
 ANTS_RANDOM_SEED = 1  # as ANTsPy's reproducible mode; 0 would mean a random seed
 
 
@@ -61,7 +61,7 @@ def use_task_threads() -> None:
     """Give ITK this task's CPUs (`_itk_threads`). Call before any ITK operation in the process.
 
     ITK reads the thread count once, at its first threaded operation (e.g. warping the
-    moving volume onto the seed), and keeps it.
+    moving volume onto the initial transform), and keeps it.
     """
     os.environ["ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS"] = _itk_threads()
 
@@ -133,9 +133,9 @@ _ANTS_TRANSFORM_TYPE = {
 class AntsEstimator(EstimatorBase):
     """TransformEstimator using ANTs intensity-based optimization.
 
-    One pass: ANTs registers `mov` onto `ref` starting from the seed (passed as its
+    One pass: ANTs registers `mov` onto `ref` starting from the initial transform (passed as its
     initial transform, so the moving volume is never warped first) and returns the full
-    forward transform, seed included. Preparation -- Sobel, clipping, masks -- is the
+    forward transform, initial transform included. Preparation -- Sobel, clipping, masks -- is the
     config's preprocess blocks, applied before this; `ref_mask` / `mov_mask` restrict the
     comparison.
     """
@@ -160,7 +160,7 @@ class AntsEstimator(EstimatorBase):
         self,
         mov: ArrayLike,
         ref: ArrayLike,
-        seed: Transform | None = None,
+        initial_transform: Transform | None = None,
         ref_mask: np.ndarray | None = None,
         mov_mask: np.ndarray | None = None,
     ) -> Transform:
@@ -168,7 +168,9 @@ class AntsEstimator(EstimatorBase):
         return estimate(
             ref=ref,
             mov=np.asarray(mov, dtype=np.float32),
-            initial=seed if seed is not None else Transform.identity(ref.ndim),
+            initial=initial_transform
+            if initial_transform is not None
+            else Transform.identity(ref.ndim),
             ref_mask=ref_mask,
             mov_mask=mov_mask,
             verbose=self.verbose,

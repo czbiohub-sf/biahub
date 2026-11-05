@@ -147,8 +147,8 @@ searches near where it starts, so **the initial transform decides which answer i
 - `fallback.repair: null` for a single timepoint: there is nothing to repair from, and each
   repair is another full ANTs run.
 
-**The seed.** A similarity transform has one scale for all axes, so an anisotropic
-difference (two cameras: y/x scaled, z not) must come from the seed, with ANTs refining on
+**The initial transform.** A similarity transform has one scale for all axes, so an anisotropic
+difference (two cameras: y/x scaled, z not) must come from the initial transform, with ANTs refining on
 top. Identity is right when both channels share a camera grid. Otherwise estimate the shift
 and scale first: an earlier run's matrix of the same instrument, or a quick measurement --
 phase cross-correlation of max projections on a grid of tiles, an affine fit of the tile
@@ -159,7 +159,7 @@ builds one from the store shapes with the mantis light-sheet rotation: mantis on
 **Judging the result.** The score is a correlation; a correct cross-modal transform often
 scores 0.1-0.3 and comes out `unreliable` against the bead-tuned thresholds (read it as
 "check"), and on DragonFly the Sobel correlation even ranked the unregistered pair above a
-good seed. Judge with overlays -- an XY max projection and an XZ section, on FOVs not used
+good initial transform. Judge with overlays -- an XY max projection and an XZ section, on FOVs not used
 for the estimate -- and with the report metrics against the unregistered pair.
 
 **Resources.** A job is sized at ~30 volumes of memory (32 GB for a 66 x 2048 x 2048 pair;

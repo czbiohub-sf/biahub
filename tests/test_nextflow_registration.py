@@ -400,9 +400,11 @@ def test_registration_nf_applies_a_channel_whose_name_has_an_apostrophe(tmp_path
         assert "5'EU" in position.channel_names
 
 
-def test_registration_nf_reruns_the_estimate_when_its_seed_file_is_edited(tmp_path):
+def test_registration_nf_reruns_the_estimate_when_its_initial_transform_file_is_edited(
+    tmp_path,
+):
     # transform.initial.file is named by the config; the file itself is staged too, so
-    # rewriting it in place reruns the estimate instead of reusing the old seed's results.
+    # rewriting it in place reruns the estimate instead of reusing the old initial transform's results.
     import json
 
     from biahub.core.transform import Transform
@@ -411,9 +413,9 @@ def test_registration_nf_reruns_the_estimate_when_its_seed_file_is_edited(tmp_pa
 
     plate = _beads_plate(tmp_path)
     store = plate.parents[2]
-    seed_file = tmp_path / "plate.yml"
+    initial_transform_file = tmp_path / "plate.yml"
 
-    def write_seed(inverse_shift):
+    def write_initial_transform(inverse_shift):
         model_to_yaml(
             TransformSettings(
                 direction="inverse",
@@ -423,10 +425,10 @@ def test_registration_nf_reruns_the_estimate_when_its_seed_file_is_edited(tmp_pa
                     TransformEntry(matrix=Transform.from_translation(inverse_shift).to_list())
                 ],
             ),
-            seed_file,
+            initial_transform_file,
         )
 
-    write_seed(APPLIED_SHIFT_ZYX)
+    write_initial_transform(APPLIED_SHIFT_ZYX)
     config = _write_config(tmp_path)
     settings = yaml_to_model(config, EstimateTransformSettings)
     settings.transform.initial = InitialTransformSettings(from_="file", file="plate.yml")
@@ -436,17 +438,17 @@ def test_registration_nf_reruns_the_estimate_when_its_seed_file_is_edited(tmp_pa
         "--estimate_positions", "A/1/0", "--output", tmp_path / "run", "-resume",
     )  # fmt: skip
 
-    def seed_x():
-        seeds = json.loads(
+    def initial_transform_x():
+        initial_transforms = json.loads(
             (tmp_path / "run" / "transforms" / "initial_transforms.json").read_text()
         )
-        return seeds["0"][2][3]  # forward x translation the run started from
+        return initial_transforms["0"][2][3]  # forward x translation the run started from
 
     _nextflow(tmp_path, *params)
-    assert seed_x() == pytest.approx(-APPLIED_SHIFT_ZYX[2])
+    assert initial_transform_x() == pytest.approx(-APPLIED_SHIFT_ZYX[2])
     entries = load_transform_settings(tmp_path / "run" / "transforms.yml").transforms
     assert {e.initialized_from for e in entries} <= {"file", "file+refined"}
 
-    write_seed((0.0, 0.0, 0.0))  # same path, new contents
+    write_initial_transform((0.0, 0.0, 0.0))  # same path, new contents
     _nextflow(tmp_path, *params)
-    assert seed_x() == pytest.approx(0.0)
+    assert initial_transform_x() == pytest.approx(0.0)

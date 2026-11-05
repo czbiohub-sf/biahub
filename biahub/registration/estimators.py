@@ -1,6 +1,6 @@
 """Transform estimators: the protocol, its errors, and the compositions.
 
-A `TransformEstimator` promises `estimate(mov, ref, seed=None) -> Transform` in the
+A `TransformEstimator` promises `estimate(mov, ref, initial_transform=None) -> Transform` in the
 forward (moving -> reference) direction, plus the few members the engine reads
 (`EstimatorBase` gives their defaults). Vocabulary, fixed across the package: at the
 array level `mov` / `ref`; at the channel and CLI level `source` / `target`. `source` is
@@ -36,18 +36,18 @@ NodeMatcher = Callable[
 class TransformEstimator(Protocol):
     """Computes the Transform that maps `mov` onto `ref`.
 
-    `seed`, when given, is an initial guess in this same contract's direction (true
+    `initial_transform`, when given, is an initial guess in this same contract's direction (true
     forward, moving -> reference) -- e.g. a previous timepoint's accepted result via
     `InitialTransformPolicy`. The other members are what the engine reads; see
     `EstimatorBase`, which every estimator subclasses for their defaults.
     """
 
-    uses_seed: bool
+    uses_initial_transform: bool
     holds_xy_across_gaps: bool
     accepts_competitor: bool
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform: ...
 
     def trace(self) -> dict: ...
@@ -56,19 +56,19 @@ class TransformEstimator(Protocol):
 class EstimatorBase:
     """The members the engine reads from an estimator, with the defaults most keep.
 
-    - `uses_seed`: the estimate starts from `seed`. Correlation methods (PCC, stackreg)
-      ignore it and set False, so the engine skips re-seeding passes (repair, polish).
+    - `uses_initial_transform`: the estimate starts from `initial_transform`. Correlation methods (PCC, stackreg)
+      ignore it and set False, so the engine skips restarting passes (repair, polish).
     - `holds_xy_across_gaps`: across empty frames, z is measured and yx held (focus
       finding's legacy rule).
-    - `accepts_competitor`: `estimate` also takes `competitor`, a second seed it refines
-      alongside `seed` (beads). For the others the engine runs both starts and keeps the
+    - `accepts_competitor`: `estimate` also takes `competitor`, a second initial transform it refines
+      alongside `initial_transform` (beads). For the others the engine runs both starts and keeps the
       better score.
     - `trace()`: what the last `estimate` did, read right after it (failed or not) for
       the timepoint's record: `best_candidate`, the candidate a competition kept, and
       `blocks`, what each block of a stack did. None when it does not apply.
     """
 
-    uses_seed: bool = True
+    uses_initial_transform: bool = True
     holds_xy_across_gaps: bool = False
     accepts_competitor: bool = False
 
@@ -166,10 +166,10 @@ def fit_pairs(
 
 
 class ChainedEstimator(EstimatorBase):
-    """Run estimators in sequence, each seeded by the previous result.
+    """Run estimators in sequence, each started from the previous result.
 
     Acquire-then-refine: e.g. a spectral matcher that can find the correspondence from a
-    poor seed, followed by the Hungarian matcher that is more precise once close. With a
+    poor initial transform, followed by the Hungarian matcher that is more precise once close. With a
     `score_fn`, the best-scoring stage output is returned (a refinement that makes things
     worse is dropped); without one, the last stage's output.
 
@@ -193,9 +193,9 @@ class ChainedEstimator(EstimatorBase):
         self._blocks: list[dict] | None = None
 
     @property
-    def uses_seed(self) -> bool:
-        """Only the first stage starts from the seed; the others from the stage before."""
-        return self.stages[0].uses_seed
+    def uses_initial_transform(self) -> bool:
+        """Only the first stage starts from the initial transform; the others from the stage before."""
+        return self.stages[0].uses_initial_transform
 
     @property
     def holds_xy_across_gaps(self) -> bool:
@@ -209,12 +209,12 @@ class ChainedEstimator(EstimatorBase):
         return {"best_candidate": None, "blocks": self._blocks}
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
         self._blocks = None  # a failed estimate leaves no earlier one's blocks
-        current = seed
+        current = initial_transform
         best: Transform | None = None
         best_score = -np.inf
         stages = [
@@ -224,7 +224,7 @@ class ChainedEstimator(EstimatorBase):
         winner = None
         for k, stage in enumerate(self.stages):
             try:
-                current = stage.estimate(mov, ref, seed=current)
+                current = stage.estimate(mov, ref, initial_transform=current)
             except EstimationError as error:
                 stages[k]["error"] = str(error)
                 if best is not None:
@@ -281,14 +281,14 @@ class CompetingEstimator(EstimatorBase):
         return {"best_candidate": self._best_candidate, "blocks": None}
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
 
         def run(candidate):
             def attempt():
-                transform = candidate.estimate(mov, ref, seed=seed)
+                transform = candidate.estimate(mov, ref, initial_transform=initial_transform)
                 return transform, self.score_fn(transform, mov, ref)
 
             return attempt

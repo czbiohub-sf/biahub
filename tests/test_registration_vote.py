@@ -15,14 +15,14 @@ from biahub.registration.methods.landmark.bead_matching import (
     BeadNodeDetector,
     NodeGraphEstimator,
     VoteIcpEstimator,
-    VoteSeedCorrection,
+    VoteInitialTransformCorrection,
     build_beads_estimator,
 )
 from biahub.registration.metrics import score_transform
 from biahub.settings import (
     BeadsMatchSettings,
     DetectPeaksSettings,
-    SeedCorrectionSettings,
+    InitialTransformCorrectionSettings,
     VoteIcpSettings,
 )
 
@@ -155,29 +155,33 @@ def test_vote_icp_estimator_recovers_an_offset_the_hungarian_matcher_cannot():
     assert np.abs(refined.translation - truth).max() < np.abs(coarse.translation - truth).max()
 
 
-def test_build_beads_estimator_wires_vote_icp_mode_and_seed_correction():
+def test_build_beads_estimator_wires_vote_icp_mode_and_initial_transform_correction():
     plain = build_beads_estimator(_beads_settings(), "euclidean")
     vote = build_beads_estimator(_beads_settings(estimation_mode="vote_icp"), "euclidean")
     corrected = build_beads_estimator(
-        _beads_settings(seed_correction_settings=SeedCorrectionSettings(mode="votefit")),
+        _beads_settings(
+            initial_transform_correction_settings=InitialTransformCorrectionSettings(
+                mode="votefit"
+            )
+        ),
         "euclidean",
     )
     assert isinstance(plain, NodeGraphEstimator)
     assert isinstance(vote, VoteIcpEstimator)
     assert isinstance(corrected, ChainedEstimator)
-    assert isinstance(corrected.stages[0], VoteSeedCorrection)
+    assert isinstance(corrected.stages[0], VoteInitialTransformCorrection)
     assert isinstance(corrected.stages[1], NodeGraphEstimator)
 
 
-def test_vote_seed_correction_moves_a_drifted_seed_toward_the_truth_and_never_worsens_it():
+def test_vote_initial_transform_correction_moves_a_drifted_initial_transform_toward_the_truth_and_never_worsens_it():
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)
     ref = _synthetic_bead_volume(rng, shape)
     applied_zyx = (8, -12, 16)
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
     truth = Transform.from_translation([-a for a in applied_zyx])
-    correction = VoteSeedCorrection(
-        SeedCorrectionSettings(
+    correction = VoteInitialTransformCorrection(
+        InitialTransformCorrectionSettings(
             mode="votefit", vote_peaks_settings=PEAKS, capture_radius=40.0, cluster_radius=3.0
         ),
         mov_detector=BeadNodeDetector(PEAKS),
@@ -185,14 +189,14 @@ def test_vote_seed_correction_moves_a_drifted_seed_toward_the_truth_and_never_wo
     )
 
     drifted = Transform.from_translation([0.0, 0.0, 0.0])
-    corrected = correction.estimate(mov, ref, seed=drifted)
+    corrected = correction.estimate(mov, ref, initial_transform=drifted)
     assert (
         np.abs(corrected.translation - truth.translation).max()
         < np.abs(drifted.translation - truth.translation).max()
     )
     assert "pick=" in correction.last_note
 
-    already_right = correction.estimate(mov, ref, seed=truth)
+    already_right = correction.estimate(mov, ref, initial_transform=truth)
     np.testing.assert_allclose(already_right.translation, truth.translation, atol=1.0)
 
 
@@ -201,7 +205,7 @@ def test_chained_estimator_keeps_an_earlier_scored_stage_when_a_later_stage_fail
         def __init__(self, transform, fail=False):
             self.transform, self.fail = transform, fail
 
-        def estimate(self, mov, ref, seed=None):
+        def estimate(self, mov, ref, initial_transform=None):
             if self.fail:
                 raise EstimationError("no nodes")
             return self.transform

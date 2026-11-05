@@ -34,5 +34,5 @@ args=(-m "$MOVING" -c "$CONFIG" -o "$OUTPUT" --cluster slurm)
 [[ -n "$SBATCH" ]] && args+=(-sb "$SBATCH")
 
 biahub estimate-transform "${args[@]}" "$@"
-# Exit 3: a job crashed (e.g. out of memory) and its timepoints hold the seed -- do not apply
+# Exit 3: a job crashed (e.g. out of memory) and its timepoints hold the initial transform -- do not apply
 # the file; see references/recovery.md.

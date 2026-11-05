@@ -4,7 +4,7 @@ The legacy `estimate-stabilization --method focus-finding` in the engine's shape
 volume's in-focus slice is found with waveorder's transverse-band criterion on a centre
 crop; the z drift is the difference of the two focus indices and the yx drift is a
 pystackreg translation between the two in-focus slices (same crop, clipped at zero, as
-the legacy code did). The seed is ignored: focus finding is absolute and stackreg is
+the legacy code did). The initial transform is ignored: focus finding is absolute and stackreg is
 correlation-based, like PCC.
 """
 
@@ -70,8 +70,8 @@ class FocusEstimator(EstimatorBase):
     is a pure translation in the forward (moving -> reference) direction.
     """
 
-    # Ignores the seed: repair from other seeds would return the same answer.
-    uses_seed = False
+    # Ignores the initial transform: repair from other initial transforms would return the same answer.
+    uses_initial_transform = False
     # With reference 'previous', across a gap of empty frames the legacy pipeline measured
     # z against the last frame with data but held yx (stackreg had nothing to compare with);
     # the engine reproduces that for estimators that set this.
@@ -113,7 +113,7 @@ class FocusEstimator(EstimatorBase):
         )
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform:
         mov = np.asarray(mov, dtype=np.float32)
         ref = np.asarray(ref, dtype=np.float32)

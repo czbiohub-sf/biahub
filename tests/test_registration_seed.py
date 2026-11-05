@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 
-def test_the_approximate_seed_takes_the_voxel_sizes_it_is_given():
+def test_the_approximate_initial_transform_takes_the_voxel_sizes_it_is_given():
     # No built-in voxel sizes: the caller reads them from each store's metadata. Same
     # grids and no rotation or flip leave the moving volume where it is.
     from biahub.registration.seed import get_aprox_transform

@@ -348,8 +348,8 @@ class ManualEstimator(EstimatorBase):
     Invert once more here to satisfy the TransformEstimator contract.
     """
 
-    # Ignores the seed: repair from other seeds would return the same answer.
-    uses_seed = False
+    # Ignores the initial transform: repair from other initial transforms would return the same answer.
+    uses_initial_transform = False
 
     def __init__(
         self,
@@ -370,9 +370,9 @@ class ManualEstimator(EstimatorBase):
         self.pre_affine_fliplr = pre_affine_fliplr
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform:
-        # No seed support -- napari display could pre-align with it, but that's not
+        # No initial transform support -- napari display could pre-align with it, but that's not
         # implemented, and the point-fit itself doesn't take an initial guess.
         (inverse_matrix,) = user_assisted_registration(
             source_channel_volume=np.asarray(mov),

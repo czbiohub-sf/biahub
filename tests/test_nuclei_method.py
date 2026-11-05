@@ -79,14 +79,14 @@ def test_nuclei_is_a_landmark_based_graph_matching_estimator():
 def test_nuclei_recover_a_camera_scale_rotation_and_shift():
     truth = _forward()
     mov, ref = _pair(truth)
-    found = _estimator().estimate(mov, ref, seed=Transform.identity(3))
+    found = _estimator().estimate(mov, ref, initial_transform=Transform.identity(3))
     err_um = (found.apply_points(PROBE) - truth.apply_points(PROBE)) * np.asarray(UM)
     assert np.abs(err_um).max() < 0.15
 
 
 def test_the_fit_holds_yx_and_a_z_offset_only():
     # a cell layer constrains no z scale or tilt: the fit leaves them alone
-    found = _estimator().estimate(*_pair(_forward()), seed=Transform.identity(3))
+    found = _estimator().estimate(*_pair(_forward()), initial_transform=Transform.identity(3))
     m = np.asarray(found.matrix)
     assert (
         m[0, 0] == pytest.approx(1.0)
@@ -106,7 +106,9 @@ def test_different_voxel_sizes_on_the_two_sides():
     found = nuclei_estimator(NucleiSettings(), "similarity", UM).estimate(
         mov,
         ref,
-        seed=Transform(np.diag([1.0, 2.0, 2.0, 1.0])),  # forward: moving -> reference
+        initial_transform=Transform(
+            np.diag([1.0, 2.0, 2.0, 1.0])
+        ),  # forward: moving -> reference
     )
     np.testing.assert_allclose(np.diag(np.asarray(found.matrix))[1:3], [2.0, 2.0], atol=0.01)
 
@@ -134,17 +136,17 @@ def test_nuclei_on_a_single_slice():
     truth = _forward(shift_vox=(0.0, 15.0, -10.0))
     mov, ref = _pair(truth)
     mov, ref = mov[12:13], ref[12:13]
-    found = _estimator().estimate(mov, ref, seed=Transform.identity(3))
+    found = _estimator().estimate(mov, ref, initial_transform=Transform.identity(3))
     probe = np.array([[0, 60, 60], [0, 450, 450], [0, 256, 256]])
     err = (found.apply_points(probe) - truth.apply_points(probe))[:, 1:] * np.asarray(UM[1:])
     assert np.abs(err).max() < 0.3
 
 
-def test_the_seeds_padding_does_not_hide_the_moving_nuclei():
-    # DragonFly DAPI sits on a camera offset (~250); warped by a seed that moves it ~40 px,
+def test_the_initial_transform_padding_does_not_hide_the_moving_nuclei():
+    # DragonFly DAPI sits on a camera offset (~250); warped by an initial transform that moves it ~40 px,
     # the zero padding pulled the detection threshold below the background, every nucleus
     # merged into one object, and 0 moving nuclei were found.
     truth = _forward(shift_vox=(2.0, 40.0, -35.0))
     mov, ref = _pair(truth)
-    found = _estimator().estimate(mov + 250.0, ref, seed=truth)
+    found = _estimator().estimate(mov + 250.0, ref, initial_transform=truth)
     np.testing.assert_allclose(found.apply_points(PROBE), truth.apply_points(PROBE), atol=1.0)

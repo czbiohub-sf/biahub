@@ -44,8 +44,8 @@ def test_propagation_resume_keeps_the_transform_type():
     from biahub.registration.engine.series import TimepointRecord, estimate_propagated
 
     class _Echo(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
-            return seed
+        def estimate(self, mov, ref, initial_transform=None):
+            return initial_transform
 
     done = {0: TimepointRecord(t=0, matrix=np.eye(4).tolist(), score=1.0).to_dict()}
     frames = np.ones((2, 2, 2, 2))
@@ -98,19 +98,19 @@ def test_the_config_fingerprint_is_the_resume_manifests_too(tmp_path):
     from biahub.registration.engine.disk import _run_fingerprint, config_fingerprint
     from biahub.settings import EstimateTransformSettings
 
-    seed = tmp_path / "plate.yml"
-    seed.write_text("transforms: []\n")
+    initial_transform = tmp_path / "plate.yml"
+    initial_transform.write_text("transforms: []\n")
     settings = EstimateTransformSettings(
         moving={"channel": "GFP"},
         reference={"frame": "first"},
         method="phase_cross_corr",
-        transform={"initial": {"from": "file", "file": str(seed)}},
+        transform={"initial": {"from": "file", "file": str(initial_transform)}},
     )
     config = config_fingerprint(settings)
     assert set(config) == {"settings_sha256", "initial_file_sha256"}
     manifest = _run_fingerprint(settings, tmp_path / "mov", tmp_path / "ref")
     assert {k: manifest[k] for k in config} == config
-    seed.write_text("transforms: [changed]\n")
+    initial_transform.write_text("transforms: [changed]\n")
     assert config_fingerprint(settings)["initial_file_sha256"] != config["initial_file_sha256"]
 
 
@@ -144,18 +144,18 @@ def test_bead_landmarks_find_the_estimates_settings_in_a_multi_position_run(tmp_
 
 
 class _Traced(EstimatorBase):
-    """Returns its seed shifted by `d` in x, scored by x; its trace names the call."""
+    """Returns its initial transform shifted by `d` in x, scored by x; its trace names the call."""
 
     def __init__(self, d=1.0, fail=False):
         self.d, self.fail, self.calls = d, fail, 0
 
-    def estimate(self, mov, ref, seed=None):
+    def estimate(self, mov, ref, initial_transform=None):
         from biahub.registration.estimators import EstimationError
 
         self.calls += 1
         if self.fail:
             raise EstimationError("no beads")
-        start = seed if seed is not None else Transform.identity(3)
+        start = initial_transform if initial_transform is not None else Transform.identity(3)
         return Transform.from_translation([0.0, 0.0, self.d]) @ start
 
     def trace(self):
@@ -200,7 +200,7 @@ def test_a_series_keeps_each_timepoints_trace_and_drops_it_where_nothing_was_est
 
 
 def test_propagation_keeps_the_trace_of_the_start_that_won():
-    # run from the previous result (x=1 -> 2) and from the input seed (x=0 -> 1): the
+    # run from the previous result (x=1 -> 2) and from the run's initial transform (x=0 -> 1): the
     # previous one wins, so t=1's trace is that first call's, not the later one's
     from biahub.registration.engine.policies import CrossChannel
     from biahub.registration.engine.series import estimate_propagated

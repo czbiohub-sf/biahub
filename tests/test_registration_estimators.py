@@ -124,17 +124,19 @@ def _drifting_estimator(translation, score_fn, iterations):
 
 
 def test_node_graph_estimator_keeps_its_input_when_the_refinement_scores_lower():
-    # The seed is already right; the pass's refinement drifts away and scores lower, so
+    # The initial transform is already right; the pass's refinement drifts away and scores lower, so
     # (as in the legacy pipeline) the pass keeps its input.
     translation = np.array([5.0, -3.0, 2.0])
-    seed = Transform.from_translation(translation)
+    initial_transform = Transform.from_translation(translation)
 
     def score_fn(transform, mov, ref):
         return -float(np.abs(transform.translation - translation).sum())
 
     estimator = _drifting_estimator(translation, score_fn, iterations=1)
-    transform = estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)), seed=seed)
-    np.testing.assert_allclose(transform.matrix, seed.matrix)
+    transform = estimator.estimate(
+        np.zeros((10, 10, 10)), np.zeros((10, 10, 10)), initial_transform=initial_transform
+    )
+    np.testing.assert_allclose(transform.matrix, initial_transform.matrix)
 
 
 def test_node_graph_estimator_stops_at_a_perfect_score():
@@ -227,10 +229,10 @@ def _bead_estimator():
     )
 
 
-def test_node_graph_estimator_seed_composition_is_self_consistent():
-    """Regression test for the seed composition math: pre-warping mov by the seed and
-    composing the residual correction with it (`correction @ seed`) must give the exact
-    same result as manually pre-warping mov, fitting the residual with no seed, and
+def test_node_graph_estimator_initial_transform_composition_is_self_consistent():
+    """Regression test for the initial transform composition math: pre-warping mov by the initial transform and
+    composing the residual correction with it (`correction @ initial transform`) must give the exact
+    same result as manually pre-warping mov, fitting the residual with no initial transform, and
     composing by hand -- confirms Transform.compose's "apply other first, then self"
     contract is used in the right order here.
     """
@@ -241,20 +243,20 @@ def test_node_graph_estimator_seed_composition_is_self_consistent():
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
 
     estimator = _bead_estimator()
-    seed = Transform.from_translation([-1.5, 2.5, -3.5])  # plausible, not exact
+    initial_transform = Transform.from_translation([-1.5, 2.5, -3.5])  # plausible, not exact
 
-    mov_warped = seed.apply(mov, reference=ref, order=1, backend="scipy")
+    mov_warped = initial_transform.apply(mov, reference=ref, order=1, backend="scipy")
     correction = estimator.estimate(mov_warped, ref)
-    expected_total = correction @ seed
+    expected_total = correction @ initial_transform
 
-    actual_total = estimator.estimate(mov, ref, seed=seed)
+    actual_total = estimator.estimate(mov, ref, initial_transform=initial_transform)
     np.testing.assert_allclose(actual_total.matrix, expected_total.matrix, atol=1e-6)
 
 
-def test_node_graph_estimator_seed_extends_matching_capture_range():
-    """A large offset that cannot be matched without a seed (too few valid
+def test_node_graph_estimator_initial_transform_extends_matching_capture_range():
+    """A large offset that cannot be matched without an initial transform (too few valid
     correspondences -> EstimationError, not a silent NaN matrix) succeeds exactly once a
-    seed pre-aligns mov close enough for point matching's limited capture range.
+    initial transform pre-aligns mov close enough for point matching's limited capture range.
     """
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)
@@ -267,10 +269,12 @@ def test_node_graph_estimator_seed_extends_matching_capture_range():
     with pytest.raises(EstimationError, match="too few matches"):
         estimator.estimate(mov, ref)
 
-    good_seed = Transform.from_translation([-a for a in big_applied_zyx])
-    with_seed_result = estimator.estimate(mov, ref, seed=good_seed)
+    good_initial_transform = Transform.from_translation([-a for a in big_applied_zyx])
+    with_initial_transform_result = estimator.estimate(
+        mov, ref, initial_transform=good_initial_transform
+    )
     np.testing.assert_allclose(
-        with_seed_result.matrix[:3, 3], [-a for a in big_applied_zyx], atol=0.5
+        with_initial_transform_result.matrix[:3, 3], [-a for a in big_applied_zyx], atol=0.5
     )
 
 
@@ -326,7 +330,7 @@ def test_ants_estimator_from_settings_maps_the_transform_type():
 
 
 def test_ants_never_warps_the_moving_volume(monkeypatch):
-    # The seed goes to ANTs as its initial transform: no pre-warp, so no zero-filled border
+    # The initial transform goes to ANTs as its initial transform: no pre-warp, so no zero-filled border
     # for a filter to turn into an edge, and one interpolation instead of two.
     def no_warp(*args, **kwargs):
         raise AssertionError("the moving volume was warped before ANTs")
@@ -334,13 +338,15 @@ def test_ants_never_warps_the_moving_volume(monkeypatch):
     monkeypatch.setattr(Transform, "apply", no_warp)
     rng = np.random.default_rng(7)
     ref = _synthetic_blob_volume(rng, (24, 48, 48))
-    seed = Transform.from_translation([0.0, 1.0, -1.0])
-    AntsEstimator(ants_kwargs=_FEW_ITERATIONS).estimate(ref, ref, seed=seed)
+    initial_transform = Transform.from_translation([0.0, 1.0, -1.0])
+    AntsEstimator(ants_kwargs=_FEW_ITERATIONS).estimate(
+        ref, ref, initial_transform=initial_transform
+    )
 
 
-def test_ants_refines_from_a_far_seed_without_cropping():
-    # A large offset, an exact seed and Sobel on both volumes, no crop: ANTs keeps the
-    # seed's answer (test_ants_never_warps_the_moving_volume pins the no-warp behaviour).
+def test_ants_refines_from_a_far_initial_transform_without_cropping():
+    # A large offset, an exact initial transform and Sobel on both volumes, no crop: ANTs keeps the
+    # initial transform's answer (test_ants_never_warps_the_moving_volume pins the no-warp behaviour).
     from biahub.registration.preprocess import PreprocessedEstimator
     from biahub.settings import Sobel
 
@@ -350,7 +356,7 @@ def test_ants_refines_from_a_far_seed_without_cropping():
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
     truth = Transform.from_translation([-a for a in applied_zyx])
     estimator = PreprocessedEstimator(AntsEstimator(), [Sobel()])
-    result = estimator.estimate(mov, ref, seed=truth)
+    result = estimator.estimate(mov, ref, initial_transform=truth)
     np.testing.assert_allclose(result.matrix[:3, 3], truth.matrix[:3, 3], atol=0.5)
 
 
@@ -394,12 +400,12 @@ def test_correlation_score_prefers_the_correct_transform():
     ) == pytest.approx(1.0)
 
 
-def test_ants_estimator_seed_is_mechanically_used():
-    """With a correct seed and near-zero optimizer iterations the correction is
-    ~identity, so the result must track the seed -- proving the seed pre-warp and the
-    `correction @ seed` composition are wired, and that the pass runs an invertible
+def test_ants_estimator_initial_transform_is_mechanically_used():
+    """With a correct initial transform and near-zero optimizer iterations the correction is
+    ~identity, so the result must track the initial transform -- proving the initial transform pre-warp and the
+    `correction @ initial transform` composition are wired, and that the pass runs an invertible
     transform family (not ants.registration's default SyN, which Transform.from_ants
-    cannot parse). A wildly wrong seed must still return a finite transform."""
+    cannot parse). A wildly wrong initial transform must still return a finite transform."""
     rng = np.random.default_rng(10)
     shape = (24, 48, 48)
     ref = _synthetic_blob_volume(rng, shape)
@@ -414,18 +420,24 @@ def test_ants_estimator_seed_is_mechanically_used():
             "aff_smoothing_sigmas": (2, 1, 0),
         }
     )
-    true_seed = Transform.from_translation([-a for a in applied_zyx])
-    result = estimator.estimate(mov, ref, seed=true_seed)
-    np.testing.assert_allclose(result.matrix[:3, 3], true_seed.matrix[:3, 3], atol=1.0)
+    true_initial_transform = Transform.from_translation([-a for a in applied_zyx])
+    result = estimator.estimate(mov, ref, initial_transform=true_initial_transform)
+    np.testing.assert_allclose(
+        result.matrix[:3, 3], true_initial_transform.matrix[:3, 3], atol=1.0
+    )
 
-    huge_seed = Transform.from_translation([15.0, -10.0, 8.0])
-    assert np.all(np.isfinite(estimator.estimate(mov, ref, seed=huge_seed).matrix))
+    huge_initial_transform = Transform.from_translation([15.0, -10.0, 8.0])
+    assert np.all(
+        np.isfinite(
+            estimator.estimate(mov, ref, initial_transform=huge_initial_transform).matrix
+        )
+    )
 
 
-def test_ants_keeps_a_seed_with_rotation_scale_and_shear():
-    # With no iterations ANTs returns its initial transform, so the result must be the seed
-    # itself: a seed with every linear part pins the direction and axis order at the ANTs
-    # boundary, which translation-only seeds cannot (a translation inverts to its negative).
+def test_ants_keeps_an_initial_transform_with_rotation_scale_and_shear():
+    # With no iterations ANTs returns its initial transform, so the result must be the initial transform
+    # itself: an initial transform with every linear part pins the direction and axis order at the ANTs
+    # boundary, which translation-only initial transforms cannot (a translation inverts to its negative).
     rng = np.random.default_rng(12)
     ref = _synthetic_blob_volume(rng, (24, 48, 48))
     angle = np.deg2rad(4)
@@ -439,7 +451,7 @@ def test_ants_keeps_a_seed_with_rotation_scale_and_shear():
     matrix = np.eye(4)
     matrix[:3, :3] = linear
     matrix[:3, 3] = [1.5, -2.0, 3.0]
-    seed = Transform(matrix)
+    initial_transform = Transform(matrix)
     estimator = AntsEstimator(
         ants_kwargs={
             "type_of_transform": "Affine",
@@ -448,19 +460,19 @@ def test_ants_keeps_a_seed_with_rotation_scale_and_shear():
             "aff_smoothing_sigmas": (2, 1, 0),
         }
     )
-    result = estimator.estimate(ref, ref, seed=seed)
-    np.testing.assert_allclose(result.matrix, seed.matrix, atol=1e-5)
+    result = estimator.estimate(ref, ref, initial_transform=initial_transform)
+    np.testing.assert_allclose(result.matrix, initial_transform.matrix, atol=1e-5)
 
 
-def test_ants_estimator_with_seed_still_recovers_translation():
+def test_ants_estimator_with_initial_transform_still_recovers_translation():
     rng = np.random.default_rng(5)
     shape = (24, 48, 48)
     ref = _synthetic_blob_volume(rng, shape)
     applied_zyx = (2, -3, 4)
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
 
-    close_seed = Transform.from_translation([-a for a in applied_zyx])
-    transform = AntsEstimator().estimate(mov, ref, seed=close_seed)
+    close_initial_transform = Transform.from_translation([-a for a in applied_zyx])
+    transform = AntsEstimator().estimate(mov, ref, initial_transform=close_initial_transform)
     np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
 
 
@@ -642,31 +654,42 @@ def _identity_pass_estimator(score_of, fail_from=()):
     return estimator
 
 
-def test_a_competitor_seed_wins_only_when_it_scores_strictly_higher():
-    seed, competitor = (
+def test_a_competitor_initial_transform_wins_only_when_it_scores_strictly_higher():
+    initial_transform, competitor = (
         Transform.from_translation([1, 0, 0]),
         Transform.from_translation([2, 0, 0]),
     )
     vol = np.zeros((4, 4, 4))
     better = _identity_pass_estimator(lambda t: t.translation[0] / 10)  # competitor 0.2 > 0.1
-    assert better.estimate(vol, vol, seed=seed, competitor=competitor) is competitor
+    assert (
+        better.estimate(vol, vol, initial_transform=initial_transform, competitor=competitor)
+        is competitor
+    )
     tie = _identity_pass_estimator(lambda t: 0.5)
-    assert tie.estimate(vol, vol, seed=seed, competitor=competitor) is seed
+    assert (
+        tie.estimate(vol, vol, initial_transform=initial_transform, competitor=competitor)
+        is initial_transform
+    )
 
 
-def test_a_competitor_seed_rescues_a_failed_first_pass():
-    seed, competitor = (
+def test_a_competitor_initial_transform_rescues_a_failed_first_pass():
+    initial_transform, competitor = (
         Transform.from_translation([1, 0, 0]),
         Transform.from_translation([2, 0, 0]),
     )
     vol = np.zeros((4, 4, 4))
-    estimator = _identity_pass_estimator(lambda t: 0.3, fail_from=(seed,))
-    assert estimator.estimate(vol, vol, seed=seed, competitor=competitor) is competitor
+    estimator = _identity_pass_estimator(lambda t: 0.3, fail_from=(initial_transform,))
+    assert (
+        estimator.estimate(
+            vol, vol, initial_transform=initial_transform, competitor=competitor
+        )
+        is competitor
+    )
     with pytest.raises(EstimationError):
-        estimator.estimate(vol, vol, seed=seed)
+        estimator.estimate(vol, vol, initial_transform=initial_transform)
 
 
-def test_a_competitor_seed_needs_a_score_fn():
+def test_a_competitor_initial_transform_needs_a_score_fn():
     estimator = _drifting_estimator(np.zeros(3), None, iterations=1)
     with pytest.raises(ValueError, match="competitor"):
         estimator.estimate(
@@ -686,9 +709,12 @@ def test_ants_estimates_are_repeatable():
     rng = np.random.default_rng(5)
     ref = _synthetic_blob_volume(rng, (24, 48, 48))
     mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
-    # with a seed, as the engine always calls it: the seed is applied (an ITK resample) first
-    seed = Transform.identity(3)
-    first, second = (AntsEstimator().estimate(mov, ref, seed=seed).matrix for _ in range(2))
+    # with an initial transform, as the engine always calls it: the initial transform is applied (an ITK resample) first
+    initial_transform = Transform.identity(3)
+    first, second = (
+        AntsEstimator().estimate(mov, ref, initial_transform=initial_transform).matrix
+        for _ in range(2)
+    )
     assert np.array_equal(first, second), np.abs(first - second).max()
 
 
@@ -739,9 +765,9 @@ def _off_centre_blob(volume, centre=(4, 6, 6), brightness=20000.0, sigma=2.0):
     return volume + brightness * blob.astype(np.float32)
 
 
-def test_ants_starts_from_the_seed_not_the_centres_of_mass():
+def test_ants_starts_from_the_initial_transform_not_the_centres_of_mass():
     # A bright structure in one channel only moves its centre of mass. ANTs' default
-    # initialisation aligns the centres of mass, replacing the seed's translation; with
+    # initialisation aligns the centres of mass, replacing the initial transform's translation; with
     # near-zero iterations the result shows where it started.
     rng = np.random.default_rng(10)
     shape = (24, 48, 48)
@@ -754,10 +780,14 @@ def test_ants_starts_from_the_seed_not_the_centres_of_mass():
         "aff_shrink_factors": (6, 3, 1),
         "aff_smoothing_sigmas": (2, 1, 0),
     }
-    true_seed = Transform.from_translation([-a for a in applied_zyx])
+    true_initial_transform = Transform.from_translation([-a for a in applied_zyx])
 
-    from_seed = AntsEstimator(ants_kwargs=few_iterations).estimate(mov, ref, seed=true_seed)
-    np.testing.assert_allclose(from_seed.matrix[:3, 3], true_seed.matrix[:3, 3], atol=1.0)
+    from_initial_transform = AntsEstimator(ants_kwargs=few_iterations).estimate(
+        mov, ref, initial_transform=true_initial_transform
+    )
+    np.testing.assert_allclose(
+        from_initial_transform.matrix[:3, 3], true_initial_transform.matrix[:3, 3], atol=1.0
+    )
 
 
 # --- ants.estimate: the wrapper around ants.registration --------------------------------
@@ -905,7 +935,7 @@ def test_competing_candidates_report_a_non_finite_score():
     from biahub.registration.estimators import CompetingEstimator
 
     class _Candidate(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
+        def estimate(self, mov, ref, initial_transform=None):
             return Transform.identity(3)
 
     competing = CompetingEstimator(
@@ -997,8 +1027,8 @@ def test_propagation_does_not_return_a_transform_whose_score_is_nan():
     from biahub.registration.estimators import EstimationError
 
     class _Plain(EstimatorBase):
-        def estimate(self, mov, ref, seed=None):
-            return seed
+        def estimate(self, mov, ref, initial_transform=None):
+            return initial_transform
 
     with pytest.raises(EstimationError, match="from both"):
         _estimate_competing(
@@ -1021,17 +1051,17 @@ def test_every_estimator_declares_the_members_the_engine_reads():
     from biahub.registration.methods.landmark.bead_matching import (
         NodeGraphEstimator,
         VoteIcpEstimator,
-        VoteSeedCorrection,
+        VoteInitialTransformCorrection,
     )
 
     classes = [
         AntsEstimator, PCCEstimator, FocusEstimator, ManualEstimator, NodeGraphEstimator,
-        VoteIcpEstimator, VoteSeedCorrection, ChainedEstimator, CompetingEstimator,
+        VoteIcpEstimator, VoteInitialTransformCorrection, ChainedEstimator, CompetingEstimator,
     ]  # fmt: skip
     assert all(issubclass(cls, EstimatorBase) for cls in classes)
     defaults = EstimatorBase()
     assert (
-        defaults.uses_seed,
+        defaults.uses_initial_transform,
         defaults.holds_xy_across_gaps,
         defaults.accepts_competitor,
     ) == (
@@ -1040,6 +1070,9 @@ def test_every_estimator_declares_the_members_the_engine_reads():
         False,
     )
     assert defaults.trace() == {"best_candidate": None, "blocks": None}
-    assert (PCCEstimator.uses_seed, FocusEstimator.holds_xy_across_gaps) == (False, True)
+    assert (PCCEstimator.uses_initial_transform, FocusEstimator.holds_xy_across_gaps) == (
+        False,
+        True,
+    )
     assert NodeGraphEstimator.accepts_competitor
     assert isinstance(ChainedEstimator([PCCEstimator()]), TransformEstimator)

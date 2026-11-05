@@ -376,7 +376,7 @@ def score_transform(
     `ref`, without refining the transform (an estimator's pass would score something
     other than what was passed in). Used as the
     `score_fn` a fallback pass (e.g. `registration.engine.repair`) needs to compare
-    candidate seeds against each other and against the current transform.
+    candidate initial transforms against each other and against the current transform.
     """
     warped = transform.apply(np.asarray(mov), reference=np.asarray(ref))
     peaks = peaks_from_beads(

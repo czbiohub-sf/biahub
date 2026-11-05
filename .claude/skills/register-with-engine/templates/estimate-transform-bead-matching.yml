@@ -2,8 +2,9 @@
 # onto label-free Phase3D). Production beads settings of 2025_09_18_72hpf_cldnb-she-myo6b reduced
 # to the fields EstimateTransformSettings accepts, plus:
 #   spectral: always          -- acquire-then-refine second candidate; measured better than hungarian-only
-#   seed_correction votefit    -- corrects a drifted approx_transform by bead displacement voting
-# Replace approx_transform with the dataset's previous seed when one exists. Same instrument
+#   initial_transform_correction votefit -- corrects a drifted initial transform by bead
+#                                displacement voting
+# Replace transform.initial with the dataset's previous result when one exists. Same instrument
 # geometry -> same linear part; only the translation moves between acquisitions.
 moving:
   channel: GFP EX488 EM525-45
@@ -73,7 +74,7 @@ bead_matching:
     min_votes: 3
     max_iterations: 20
     convergence_translation: 0.5
-  seed_correction_settings:
+  initial_transform_correction_settings:
     mode: votefit
     vote_peaks_settings:
       threshold_abs: 200.0

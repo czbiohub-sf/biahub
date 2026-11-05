@@ -15,21 +15,21 @@ def test_all_variants_satisfy_protocol():
     assert isinstance(ConsensusInitialTransform(history={}, scores={}), InitialTransformPolicy)
 
 
-def test_fixed_seed_returns_the_same_transform_for_every_t():
+def test_fixed_initial_transform_returns_the_same_transform_for_every_t():
     transform = Transform.from_translation([1.0, 2.0, 3.0])
     policy = FixedInitialTransform(transform)
     for t in range(5):
         assert policy.initial_for(t) is transform
 
 
-def test_fixed_seed_is_how_optimize_registration_becomes_a_seed_not_a_command():
-    # "Refine an existing transform" is just estimate() with this as the seed policy.
+def test_fixed_initial_transform_is_how_optimize_registration_becomes_an_initial_transform_not_a_command():
+    # "Refine an existing transform" is just estimate() with this as the initial transform policy.
     existing_transform = Transform.from_translation([7.0, -3.0, 0.5])
     policy = FixedInitialTransform(existing_transform)
     assert policy.initial_for(0) is existing_transform
 
 
-def test_consensus_seed_raises_when_too_few_timepoints_score_well():
+def test_consensus_initial_transform_raises_when_too_few_timepoints_score_well():
     from biahub.registration.estimators import CandidateUnavailableError
 
     history = {0: Transform.from_translation([1.0, 1.0, 1.0])}
@@ -39,7 +39,7 @@ def test_consensus_seed_raises_when_too_few_timepoints_score_well():
         policy.initial_for(3)
 
 
-def test_consensus_seed_is_the_median_transform_over_good_timepoints():
+def test_consensus_initial_transform_is_the_median_transform_over_good_timepoints():
     history = {
         0: Transform.from_translation([1.0, 0.0, 0.0]),
         1: Transform.from_translation([2.0, 0.0, 0.0]),
@@ -53,12 +53,12 @@ def test_consensus_seed_is_the_median_transform_over_good_timepoints():
         history=history, scores=scores, score_threshold=0.75, min_good=5
     )
 
-    seed = policy.initial_for(t=3)
+    initial_transform = policy.initial_for(t=3)
 
-    np.testing.assert_allclose(seed.matrix[:3, 3], [3.0, 0.0, 0.0])
+    np.testing.assert_allclose(initial_transform.matrix[:3, 3], [3.0, 0.0, 0.0])
 
 
-def test_consensus_seed_excludes_t_itself_even_if_it_scores_well():
+def test_consensus_initial_transform_excludes_t_itself_even_if_it_scores_well():
     history = {
         0: Transform.from_translation([1.0, 0.0, 0.0]),
         1: Transform.from_translation([2.0, 0.0, 0.0]),
@@ -66,15 +66,15 @@ def test_consensus_seed_excludes_t_itself_even_if_it_scores_well():
         3: Transform.from_translation([-1000.0, 0.0, 0.0]),
         4: Transform.from_translation([4.0, 0.0, 0.0]),
     }
-    # t=3 has a (spuriously) good score but must never contaminate its own consensus seed.
+    # t=3 has a (spuriously) good score but must never contaminate its own consensus initial transform.
     scores = {0: 0.9, 1: 0.9, 2: 0.9, 3: 0.99, 4: 0.9}
     policy = ConsensusInitialTransform(
         history=history, scores=scores, score_threshold=0.75, min_good=4
     )
 
-    seed = policy.initial_for(t=3)
+    initial_transform = policy.initial_for(t=3)
 
-    np.testing.assert_allclose(seed.matrix[:3, 3], [2.5, 0.0, 0.0])
+    np.testing.assert_allclose(initial_transform.matrix[:3, 3], [2.5, 0.0, 0.0])
 
 
 def test_a_shapes_initial_transform_is_the_approximate_transform_from_the_two_grids():

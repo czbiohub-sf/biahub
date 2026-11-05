@@ -1,7 +1,7 @@
 """Point-set registration: match and fit together, from positions alone (no edges).
 
 The correspondences are found from where the points lie under the current transform and
-re-fitted in a loop, so these start from a seed; they need no distinctive local structure.
+re-fitted in a loop, so these start from an initial transform; they need no distinctive local structure.
 """
 
 from __future__ import annotations

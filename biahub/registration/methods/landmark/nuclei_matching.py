@@ -7,7 +7,7 @@ warped by the current transform and on the reference, matched, and fitted. A cel
 is thin, so its nuclei constrain yx and a z offset but no z scale or tilt: the fit is the
 transform type in yx plus the median z shift.
 
-The seed must bring the nuclei within the matcher's reach (a few µm); put a coarse block
+The initial transform must bring the nuclei within the matcher's reach (a few µm); put a coarse block
 before this one when it may be further off.
 """
 

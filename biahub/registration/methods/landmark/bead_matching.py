@@ -55,7 +55,7 @@ from biahub.registration.estimators import (
 from biahub.settings import (
     BeadsMatchSettings,
     DetectPeaksSettings,
-    SeedCorrectionSettings,
+    InitialTransformCorrectionSettings,
     VoteIcpSettings,
 )
 
@@ -403,7 +403,7 @@ class NodeGraphEstimator(EstimatorBase):
 
     One pass warps `mov` by the current guess (`Transform.apply`), detects nodes in the
     warped frame, matches, fits the residual correction and composes it back
-    (`correction @ seed`: seed first, then correction). Nodes are detected in the warped
+    (`correction @ initial_transform`: the initial transform first, then the correction). Nodes are detected in the warped
     frame, so each pass sees a better-aligned image than the last; `iterations > 1` with
     a `score_fn` repeats the pass from the previous result and returns the best-scoring
     transform (never a later, worse one). Without a `score_fn` the last pass is returned.
@@ -453,7 +453,7 @@ class NodeGraphEstimator(EstimatorBase):
         """Bead-peak detection on both sides with the settings' matcher.
 
         `iterations` defaults to `beads_match_settings.qc_settings.iterations`. This is
-        the single matcher; `build_beads_estimator` composes the vote-ICP mode, seed
+        the single matcher; `build_beads_estimator` composes the vote-ICP mode, initial transform
         correction and the spectral candidate around it.
         """
         return cls(
@@ -473,26 +473,26 @@ class NodeGraphEstimator(EstimatorBase):
         self,
         mov: ArrayLike,
         ref: ArrayLike,
-        seed: Transform | None = None,
+        initial_transform: Transform | None = None,
         competitor: Transform | None = None,
     ) -> Transform:
-        """Refine `seed` over the configured passes; return the best-scoring result.
+        """Refine `initial_transform` over the configured passes; return the best-scoring result.
 
         `competitor`, when given, is refined too on the first pass and replaces the
-        seed's result only if it scores strictly higher; later passes continue from the
+        initial transform's result only if it scores strictly higher; later passes continue from the
         winner. This is the legacy `user_transform` competition, used by propagation to
-        let the input seed compete with the previous timepoint's result.
+        let the run's initial transform compete with the previous timepoint's result.
         """
         mov = np.asarray(mov)
         ref = np.asarray(ref)
         if self.score_fn is None:
             if competitor is not None:
-                raise ValueError("a competitor seed needs a score_fn to compete")
-            current = seed
+                raise ValueError("a competitor initial transform needs a score_fn to compete")
+            current = initial_transform
             for _ in range(self.iterations):
                 current = self._single_pass(mov, ref, current)
             return current
-        current, current_score = seed, None
+        current, current_score = initial_transform, None
         best: Transform | None = None
         best_score = -np.inf
         for i in range(self.iterations):
@@ -514,7 +514,7 @@ class NodeGraphEstimator(EstimatorBase):
                 raise error
             current, current_score = candidates[0]
             for transform, score in candidates[1:]:
-                if score > current_score:  # ties: the seed's result
+                if score > current_score:  # ties: the initial transform's result
                     current, current_score = transform, score
             if current_score > best_score:
                 best, best_score = current, current_score
@@ -546,13 +546,19 @@ class NodeGraphEstimator(EstimatorBase):
         return float(score) if score is not None and np.isfinite(score) else -np.inf
 
     def _single_pass(
-        self, mov: np.ndarray, ref: np.ndarray, seed: Transform | None
+        self, mov: np.ndarray, ref: np.ndarray, initial_transform: Transform | None
     ) -> Transform:
-        mov_for_detection = seed.apply(mov, reference=ref) if seed is not None else mov
-        if seed is not None and getattr(self.mov_detector, "missing_as_nan", False):
+        mov_for_detection = (
+            initial_transform.apply(mov, reference=ref)
+            if initial_transform is not None
+            else mov
+        )
+        if initial_transform is not None and getattr(
+            self.mov_detector, "missing_as_nan", False
+        ):
             # the warp's padding is no data, not dark: for a detector that leaves NaN out
             mov_for_detection = np.asarray(mov_for_detection, dtype=np.float32).copy()
-            mov_for_detection[~seed.coverage(mov.shape, ref.shape)] = np.nan
+            mov_for_detection[~initial_transform.coverage(mov.shape, ref.shape)] = np.nan
         mov_nodes = np.asarray(self.mov_detector.detect(mov_for_detection))
         ref_nodes = np.asarray(self.ref_detector.detect(ref))
         if len(mov_nodes) < 3 or len(ref_nodes) < 3:
@@ -584,14 +590,14 @@ class NodeGraphEstimator(EstimatorBase):
             raise EstimationError(
                 f"degenerate fit from {len(matches)} matches (non-finite matrix)"
             )
-        return correction @ seed if seed is not None else correction
+        return correction @ initial_transform if initial_transform is not None else correction
 
 
 class VoteIcpEstimator(EstimatorBase):
     """TransformEstimator over peak clouds by iterated displacement voting.
 
     Reach stage: dense detection on the raw moving volume (`vote_peaks_settings`), voted
-    ICP from the seed with a wide, shrinking capture radius. Precision stage: re-run at
+    ICP from the initial transform with a wide, shrinking capture radius. Precision stage: re-run at
     short range from that result with the pipeline's own moving detection, kept only on a
     strict score win. Raises `EstimationError` when voting abstains before any fit.
     """
@@ -629,12 +635,12 @@ class VoteIcpEstimator(EstimatorBase):
             score_fn=score_fn,
         )
 
-    def _register(self, mov_peaks, ref_peaks, inverse_seed, initial_radius):
+    def _register(self, mov_peaks, ref_peaks, inverse_initial_transform, initial_radius):
         s = self.settings
         return _vote_icp_register(
             mov_peaks=mov_peaks,
             ref_peaks=ref_peaks,
-            initial_transform=inverse_seed,
+            initial_transform=inverse_initial_transform,
             initial_capture_radius=initial_radius,
             min_capture_radius=s.min_capture_radius,
             radius_decay=s.radius_decay,
@@ -646,12 +652,16 @@ class VoteIcpEstimator(EstimatorBase):
         )
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform:
         mov = np.asarray(mov, dtype=np.float32)
         ref = np.asarray(ref, dtype=np.float32)
         ndim = mov.ndim
-        inverse_seed = (seed.invert() if seed is not None else Transform.identity(ndim)).matrix
+        inverse_initial_transform = (
+            initial_transform.invert()
+            if initial_transform is not None
+            else Transform.identity(ndim)
+        ).matrix
         ref_peaks = np.asarray(self.ref_detector.detect(ref))
         dense_peaks = np.asarray(self.dense_detector.detect(mov))
         if min(len(dense_peaks), len(ref_peaks)) < self.settings.min_votes:
@@ -660,7 +670,10 @@ class VoteIcpEstimator(EstimatorBase):
                 f"peaks (need >= {self.settings.min_votes})"
             )
         inverse, info = self._register(
-            dense_peaks, ref_peaks, inverse_seed, self.settings.initial_capture_radius
+            dense_peaks,
+            ref_peaks,
+            inverse_initial_transform,
+            self.settings.initial_capture_radius,
         )
         if inverse is None:
             raise EstimationError(
@@ -687,20 +700,20 @@ class VoteIcpEstimator(EstimatorBase):
         return best
 
 
-class VoteSeedCorrection(EstimatorBase):
-    """A stage that corrects a seed by bead displacement voting, for a chain's first slot.
+class VoteInitialTransformCorrection(EstimatorBase):
+    """A stage that corrects an initial transform by bead displacement voting, for a chain's first slot.
 
-    Warps `mov` by the seed, detects beads densely and votes for the residual drift;
-    "voteseed" composes the densest cluster's mean displacement into the seed, "votefit"
+    Warps `mov` by the initial transform, detects beads densely and votes for the residual drift;
+    "voteseed" composes the densest cluster's mean displacement into the initial transform, "votefit"
     also fits an affine on the cluster's pairs. Every candidate competes against the
-    unchanged seed on the median nearest-neighbour distance of the pipeline's own
-    detection, so a bad vote leaves the seed unchanged. Returns the (possibly unchanged)
-    seed; without a seed, the identity.
+    unchanged initial transform on the median nearest-neighbour distance of the pipeline's own
+    detection, so a bad vote leaves the initial transform unchanged. Returns the (possibly unchanged)
+    initial transform; without an initial transform, the identity.
     """
 
     def __init__(
         self,
-        settings: SeedCorrectionSettings,
+        settings: InitialTransformCorrectionSettings,
         mov_detector: NodeDetector,
         ref_detector: NodeDetector,
     ):
@@ -713,24 +726,28 @@ class VoteSeedCorrection(EstimatorBase):
     @classmethod
     def from_beads_settings(
         cls, beads_match_settings: BeadsMatchSettings
-    ) -> VoteSeedCorrection:
+    ) -> VoteInitialTransformCorrection:
         return cls(
-            settings=beads_match_settings.seed_correction_settings,
+            settings=beads_match_settings.initial_transform_correction_settings,
             mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
             ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
         )
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform:
         mov = np.asarray(mov, dtype=np.float32)
         ref = np.asarray(ref, dtype=np.float32)
-        seed = seed if seed is not None else Transform.identity(mov.ndim)
+        initial_transform = (
+            initial_transform
+            if initial_transform is not None
+            else Transform.identity(mov.ndim)
+        )
         settings = self.settings
         ref_peaks = np.asarray(self.ref_detector.detect(ref))
         if len(ref_peaks) < settings.min_votes:
-            self.last_note = f"only {len(ref_peaks)} ref peaks; seed unchanged"
-            return seed
+            self.last_note = f"only {len(ref_peaks)} ref peaks; initial transform unchanged"
+            return initial_transform
         ref_tree = cKDTree(ref_peaks)
 
         def nn_median(transform: Transform) -> float:
@@ -739,7 +756,7 @@ class VoteSeedCorrection(EstimatorBase):
                 return np.inf
             return float(np.median(ref_tree.query(peaks)[0]))
 
-        warped = seed.apply(mov, reference=ref)
+        warped = initial_transform.apply(mov, reference=ref)
         dense_peaks = np.asarray(self.dense_detector.detect(warped))
         drift, pairs, n_votes = vote_drift(
             dense_peaks,
@@ -749,16 +766,14 @@ class VoteSeedCorrection(EstimatorBase):
             settings.min_votes,
         )
         if drift is None:
-            self.last_note = (
-                f"only {len(dense_peaks)} dense peaks / too few votes; seed unchanged"
-            )
-            return seed
-        # Work in the inverse convention the vote was measured in: the seed maps reference
+            self.last_note = f"only {len(dense_peaks)} dense peaks / too few votes; initial transform unchanged"
+            return initial_transform
+        # Work in the inverse convention the vote was measured in: the initial transform maps reference
         # coordinates to moving sample coordinates, so undoing an image drift of +d in the
-        # reference frame composes as inverse @ T(-d). Both signs compete with the unchanged seed.
-        inverse = seed.invert().matrix
+        # reference frame composes as inverse @ T(-d). Both signs compete with the unchanged initial transform.
+        inverse = initial_transform.invert().matrix
         candidates = {
-            "keep": seed,
+            "keep": initial_transform,
             "minus": Transform(inverse @ Transform.from_translation(-drift).matrix).invert(),
             "plus": Transform(inverse @ Transform.from_translation(drift).matrix).invert(),
         }
@@ -768,8 +783,8 @@ class VoteSeedCorrection(EstimatorBase):
         note = f"drift={np.round(drift, 1).tolist()} votes={n_votes} pick={best}"
         if settings.mode == "votefit" and len(pairs) >= 4:
             # The cluster's votes are correspondences (warped moving peak p, reference peak
-            # q) in the uncorrected seed's warped frame; re-warping should put p at q, i.e.
-            # sample point C(q) = p, so the fit composes onto the seed as inverse @ C.
+            # q) in the uncorrected initial transform's warped frame; re-warping should put p at q, i.e.
+            # sample point C(q) = p, so the fit composes onto the initial transform as inverse @ C.
             p = np.asarray([a for a, _ in pairs], dtype=float)
             q = np.asarray([b for _, b in pairs], dtype=float)
             correction = (
@@ -802,12 +817,13 @@ def build_beads_estimator(
     score_fn: ScoreFn | None = None,
     iterations: int | None = None,
 ) -> TransformEstimator:
-    """Build the beads method as configured: matcher, estimation mode, seed correction, spectral.
+    """Build the beads method as configured: matcher, mode, initial-transform correction, spectral.
 
-    `estimation_mode: vote_icp` swaps the graph matcher for `VoteIcpEstimator`; a
-    `seed_correction_settings.mode` other than `none` chains a `VoteSeedCorrection` in
-    front; `spectral` on returns a `CompetingEstimator` of the configured matcher and a
-    spectral-acquire-then-refine cascade, the higher-scoring candidate wins.
+    `estimation_mode: vote_icp` swaps the graph matcher for `VoteIcpEstimator`; an
+    `initial_transform_correction_settings.mode` other than `none` chains a
+    `VoteInitialTransformCorrection` in front; `spectral` on returns a
+    `CompetingEstimator` of the configured matcher and a spectral-acquire-then-refine
+    cascade, the higher-scoring candidate wins.
     """
     # imported here: metrics imports this module (overlap_score, peaks_from_beads)
     from biahub.registration.metrics import metric_fn
@@ -827,9 +843,12 @@ def build_beads_estimator(
         )
     else:
         configured = node_graph(beads_match_settings)
-    if beads_match_settings.seed_correction_settings.mode != "none":
+    if beads_match_settings.initial_transform_correction_settings.mode != "none":
         configured = ChainedEstimator(
-            [VoteSeedCorrection.from_beads_settings(beads_match_settings), configured],
+            [
+                VoteInitialTransformCorrection.from_beads_settings(beads_match_settings),
+                configured,
+            ],
             score_fn=score_fn,
         )
     if beads_match_settings.spectral == "off":

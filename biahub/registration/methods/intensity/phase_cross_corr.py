@@ -256,8 +256,8 @@ class PCCEstimator(EstimatorBase):
     sub-volume (a translation measured on a crop holds for the whole volume).
     """
 
-    # Ignores the seed: repair from other seeds would return the same answer.
-    uses_seed = False
+    # Ignores the initial transform: repair from other initial transforms would return the same answer.
+    uses_initial_transform = False
 
     def __init__(
         self,
@@ -287,9 +287,9 @@ class PCCEstimator(EstimatorBase):
         )
 
     def estimate(
-        self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
+        self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform:
-        # PCC is correlation-based -- it finds the peak directly, no seed needed.
+        # PCC is correlation-based -- it finds the peak directly, no initial transform needed.
         mov = np.asarray(mov).astype(np.float32)
         ref = np.asarray(ref).astype(np.float32)
         if self.crop_zyx is not None:

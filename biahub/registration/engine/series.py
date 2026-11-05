@@ -50,7 +50,7 @@ class SeriesResult:
     # came from ("t=81", "initial", "identity"); set by `transforms_for_file`.
     filled_from: dict[int, str] = field(default_factory=dict)
     # A stand-in decided while estimating (propagation: a failed timepoint returns the
-    # seed it started from), with its source; used instead of the input seed.
+    # initial transform it started from), with its source; used instead of the run's initial transform.
     stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
     # What the estimator did at each estimated t (its `trace()`): a stack's blocks, and
     # the candidate a competition kept.
@@ -163,10 +163,10 @@ def estimate_series(
             if on_timepoint is not None:
                 on_timepoint(t, result)
             continue
-        seed = initial_policy.initial_for(t)
+        initial_transform = initial_policy.initial_for(t)
         estimate, error = None, None
         try:
-            transform = estimator.estimate(mov_t, ref_t, seed=seed)
+            transform = estimator.estimate(mov_t, ref_t, initial_transform=initial_transform)
         except EstimationError as e:
             error = f"{type(e).__name__}: {e}"
         else:
@@ -175,10 +175,10 @@ def estimate_series(
         trace = estimator.trace()
         if keep_initial:
             estimate, result.initialized_from[t] = _keep_initial(
-                estimate, seed, score_fn, mov_t, ref_t
+                estimate, initial_transform, score_fn, mov_t, ref_t
             )
             if result.initialized_from[t] == "file":
-                trace = None  # the kept seed is not the estimator's
+                trace = None  # the kept initial transform is not the estimator's
         _keep_trace(result, t, trace)
         if estimate is None:
             result.scores[t] = float("nan")
@@ -190,14 +190,14 @@ def estimate_series(
     return result
 
 
-def _keep_initial(estimate, seed, score_fn, mov, ref) -> tuple[tuple, str]:
-    """Return the estimate if it scores strictly better than the seed as it is, else the seed.
+def _keep_initial(estimate, initial_transform, score_fn, mov, ref) -> tuple[tuple, str]:
+    """Return the estimate if it scores strictly better than the initial transform as it is, else the initial transform.
 
-    The seed is an earlier result (a seed file), so a run from it never ends worse than
+    The initial transform is an earlier result (`from: file`), so a run from it never ends worse than
     it: a failed or no better estimate keeps it. Returns ((transform, score), source),
     source "file+refined" or "file".
     """
-    kept = (seed, float(score_fn(seed, mov, ref)))
+    kept = (initial_transform, float(score_fn(initial_transform, mov, ref)))
     if estimate is not None and is_higher(estimate[1], kept[1]):
         return estimate, "file+refined"
     return kept, "file"
@@ -228,24 +228,28 @@ def _gap_rule(estimator, reference_policy, mov, t: int, transform: Transform) ->
 
 
 def _estimate_competing(
-    estimator, mov, ref, seed, competitor, score_fn
+    estimator, mov, ref, initial_transform, competitor, score_fn
 ) -> tuple[Transform, dict]:
-    """Estimate from `seed`, with `competitor` competing (ties to the seed).
+    """Estimate from `initial_transform`, with `competitor` competing (ties to the initial transform).
 
     An estimator that takes a competitor refines both on its first pass (the legacy
-    rule); any other estimator is run from both seeds and the better score is kept.
+    rule); any other estimator is run from both initial transforms and the better score is kept.
     Returns the transform and the estimator's trace of the start that produced it.
     """
     if competitor is None:
-        return estimator.estimate(mov, ref, seed=seed), estimator.trace()
+        return estimator.estimate(
+            mov, ref, initial_transform=initial_transform
+        ), estimator.trace()
     if estimator.accepts_competitor:
-        transform = estimator.estimate(mov, ref, seed=seed, competitor=competitor)
+        transform = estimator.estimate(
+            mov, ref, initial_transform=initial_transform, competitor=competitor
+        )
         return transform, estimator.trace()
     traces: dict[str, dict] = {}
 
     def from_start(name: str, start: Transform):
         def attempt():
-            transform = estimator.estimate(mov, ref, seed=start)
+            transform = estimator.estimate(mov, ref, initial_transform=start)
             traces[name] = estimator.trace()
             return transform, float(score_fn(transform, mov, ref))
 
@@ -253,13 +257,13 @@ def _estimate_competing(
 
     chosen = select_best(
         {
-            "previous": from_start("previous", seed),
+            "previous": from_start("previous", initial_transform),
             "initial": from_start("initial", competitor),
         }
     )
     if chosen.name is None:
         raise EstimationError(
-            "failed from both the previous result and the input seed: "
+            "failed from both the previous result and the run's initial transform: "
             + "; ".join(chosen.failures.values())
         )
     return chosen.transform, traces[chosen.name]
@@ -269,7 +273,7 @@ def estimate_propagated(
     mov,
     reference_policy: ReferencePolicy,
     estimator: TransformEstimator,
-    input_seed: Transform,
+    initial_transform: Transform,
     score_fn: ScoreFn,
     time_indices: Iterable[int],
     done: dict[int, dict] | None = None,
@@ -279,12 +283,12 @@ def estimate_propagated(
     """Estimate timepoints in order, each starting from the previous one's result.
 
     The legacy `use_prev_t_transform` rules: timepoint t starts from what t-1 returned,
-    with `input_seed` competing on the first pass; a timepoint that fails returns the
-    seed it started from (recorded as a stand-in, the error kept) and that seed is
+    with `initial_transform` competing on the first pass; a timepoint that fails returns the
+    initial transform it started from (recorded as a stand-in, the error kept) and that initial transform is
     passed on; an empty frame (no data) is skipped and the chain carries on from the last
     result before it; the
     stabilization reference frame is not estimated against itself -- it is identity, and
-    the chain starts after it from `input_seed`. `done` holds records of timepoints
+    the chain starts after it from `initial_transform`. `done` holds records of timepoints
     already estimated (resume): they are not redone, only used to continue the chain.
     """
     done = done or {}
@@ -313,19 +317,19 @@ def estimate_propagated(
                 result.scores[t] = float(score_fn(identity, mov_t, ref_t))
                 previous = None
             else:
-                seed = previous if previous is not None else input_seed
-                competitor = input_seed if previous is not None else None
+                start = previous if previous is not None else initial_transform
+                competitor = initial_transform if previous is not None else None
                 try:
                     transform, trace = _estimate_competing(
-                        estimator, mov_t, ref_t, seed, competitor, score_fn
+                        estimator, mov_t, ref_t, start, competitor, score_fn
                     )
                 except EstimationError as e:
                     _keep_trace(result, t, estimator.trace())
                     result.scores[t] = float("nan")
                     result.errors[t] = f"{type(e).__name__}: {e}"
                     source = f"t={previous_t}" if previous is not None else "initial"
-                    result.stand_ins[t] = (seed, source)
-                    previous = seed
+                    result.stand_ins[t] = (start, source)
+                    previous = start
                 else:
                     _keep_trace(result, t, trace)
                     transform = _gap_rule(estimator, reference_policy, mov, t, transform)

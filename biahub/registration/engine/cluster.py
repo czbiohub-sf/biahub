@@ -226,7 +226,7 @@ class _JobInputs(NamedTuple):
 def _job_inputs(
     moving_position_dirpath: Path, reference_position_dirpath: Path, settings_path: Path
 ) -> _JobInputs:
-    """Return what every job starts from: the run's settings, both series, estimator, seed."""
+    """Return what every job starts from: the run's settings, both series, estimator, initial transform."""
     use_task_threads()  # a fresh job process: before any ITK operation
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
@@ -256,7 +256,7 @@ def _estimate_timepoint_job(
     t: int,
     record_path: Path,
 ) -> dict:
-    """One independent estimate, from the config seed, written as a JSON record."""
+    """One independent estimate, from the config initial transform, written as a JSON record."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
     # t is read by the estimate and every extra; the previous timepoint only by leftover
@@ -320,7 +320,7 @@ def _estimate_propagated_job(
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
     estimator, score_fn = job.estimator, job.score_fn
-    seed = _static_initial(settings)
+    initial_transform = _static_initial(settings)
     done = {}
     if resume:
         for t in time_indices:
@@ -377,7 +377,7 @@ def _estimate_propagated_job(
         mov,
         job.reference_policy,
         estimator,
-        seed,
+        initial_transform,
         score_fn,
         time_indices,
         done=done,
@@ -402,7 +402,11 @@ def _repair_timepoint_job(
     settings, mov, ref = job.settings, job.mov, job.ref
     mov.keep_only([t])
     ref.keep_only([t])
-    estimator, score_fn, seed = job.estimator, job.score_fn, job.initial.initial_for(t)
+    estimator, score_fn, initial_transform = (
+        job.estimator,
+        job.score_fn,
+        job.initial.initial_for(t),
+    )
     repair_settings = settings.fallback.repair
 
     # This run's estimate records (the driver cleared any earlier run's).
@@ -418,7 +422,7 @@ def _repair_timepoint_job(
         score_fn,
         series,
         neighbour_consensus_initial_candidates(
-            seed,
+            initial_transform,
             consensus_score_threshold=repair_settings.consensus_threshold,
             consensus_min_good=repair_settings.consensus_min_good,
             order=tuple(repair_settings.candidates),
@@ -463,7 +467,7 @@ def _sweep_timepoint_job(
     settings, mov, ref = job.settings, job.mov, job.ref
     mov.keep_only([t])
     ref.keep_only([t])
-    score_fn, seed = job.score_fn, job.initial.initial_for(t)
+    score_fn, initial_transform = job.score_fn, job.initial.initial_for(t)
     trials = {
         name: build_estimator(
             trial, tuple(mov.shape[-3:]), job.mov_voxel_size, job.ref_voxel_size
@@ -472,7 +476,9 @@ def _sweep_timepoint_job(
     }
 
     series = _load_series(records_dir, [t], settings.transform.type, resumed=[t])
-    outcome = sweep_timepoint(t, mov, job.reference_policy, trials, seed, score_fn, series)
+    outcome = sweep_timepoint(
+        t, mov, job.reference_policy, trials, initial_transform, score_fn, series
+    )
     record = PassRecord(
         t=t,
         accepted=outcome.accepted,
