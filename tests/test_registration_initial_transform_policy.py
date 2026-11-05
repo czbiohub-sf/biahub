@@ -119,67 +119,15 @@ def test_a_file_initial_transform_gives_each_timepoints_and_asks_to_be_kept_unle
     assert isinstance(policy, InitialTransformPolicy)
 
 
-@pytest.mark.parametrize(
-    "old, pointer",
-    [
-        ({"seed": np.eye(4).tolist()}, "transform.initial: {from: matrix"),
-        ({"seed_direction": "forward"}, "transform.initial: {from: matrix"),
-        (
-            {"seed_from_shapes": True},
-            "transform.initial: {from: shapes, rotate90: -1, fliplr: false}",
-        ),
-        ({"seed_from": "previous_timepoint"}, "transform.initial.propagate: true"),
-        ({"seed_file": "plate.yml"}, "transform.initial: {from: file, file: plate.yml}"),
-    ],
-)
-def test_the_first_schemas_seed_keys_are_refused_with_where_they_moved(old, pointer):
-    from pydantic import ValidationError
-
-    from biahub.settings import TransformFitSettings
-
-    with pytest.raises(ValidationError, match=pointer.replace("{", r"\{").replace("}", r"\}")):
-        TransformFitSettings(type="euclidean", **old)
-
-
 def test_repair_tries_the_initial_transform_as_the_candidate_initial():
-    from pydantic import ValidationError
-
     from biahub.registration.engine import neighbour_consensus_initial_candidates
     from biahub.settings import RepairSettings
 
     assert RepairSettings().candidates == ["t-1", "t+1", "consensus", "initial"]
-    with pytest.raises(ValidationError, match="repair candidate 'seed' is now 'initial'"):
-        RepairSettings(candidates=["t-1", "seed"])
     initial = Transform.from_translation([1.0, 0.0, 0.0])
     candidates = neighbour_consensus_initial_candidates(initial)(5, {}, {}, set())
     assert list(candidates) == ["consensus_full", "initial"]
     assert candidates["initial"].initial_for(5) is initial
-
-
-def test_older_transforms_files_load_with_the_new_names():
-    # entries written before the rename: seeded_from and the 'seed' / 'seed_file' sources
-    from biahub.settings import TransformEntry
-
-    old = TransformEntry(
-        matrix=np.eye(4).tolist(),
-        status="unreliable",  # a stand-in (filled_from) is never accepted
-        seeded_from="seed_file+refined",
-        filled_from="seed_file",
-    )
-    assert old.initialized_from == "file+refined" and old.filled_from == "file"
-    assert (
-        TransformEntry(
-            matrix=np.eye(4).tolist(), status="unreliable", filled_from="seed"
-        ).filled_from
-        == "initial"
-    )
-    assert (
-        TransformEntry(
-            matrix=np.eye(4).tolist(), status="unreliable", filled_from="t=81"
-        ).filled_from
-        == "t=81"
-    )
-    assert "seeded_from" not in TransformEntry(matrix=np.eye(4).tolist()).model_dump()
 
 
 def test_only_an_earlier_result_asks_to_be_kept_unless_beaten():

@@ -473,13 +473,6 @@ class BeadsMatchSettings(MyBaseModel):
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
 
-    @model_validator(mode="before")
-    @classmethod
-    def reject_old_keys(cls, data):
-        if isinstance(data, dict) and "spectral_arm" in data:
-            raise ValueError("spectral_arm is now spectral (values off, on_low_score, always)")
-        return data
-
 
 class LocalPhaseCrossCorrSettings(MyBaseModel):
     """Local phase cross-correlation: a shift per tile of the max projections, fitted in yx.
@@ -1428,8 +1421,6 @@ class ChannelSettings(MyBaseModel):
 
 
 InitialSource = Literal["matrix", "shapes", "file"]
-# transform.* keys of the first schema, now transform.initial (refused, with a pointer)
-OLD_INITIAL_KEYS = ("seed", "seed_direction", "seed_from_shapes", "seed_from", "seed_file")
 
 
 class InitialTransformSettings(MyBaseModel):
@@ -1441,7 +1432,7 @@ class InitialTransformSettings(MyBaseModel):
     sizes (their OME-NGFF scale), after `rotate90` quarter turns in yx and `fliplr`.
     `from: file` -- each position and timepoint's transform in a transforms `file` (an
     earlier result, e.g. a pooled plate transform): the estimate from it is kept only
-    when it scores strictly better, and the entry records `seeded_from`.
+    when it scores strictly better, and the entry records `initialized_from`.
 
     `propagate`: each timepoint starts from the previous one's result, the initial
     transform competing on the first pass (sequential, as the legacy
@@ -1486,35 +1477,11 @@ class InitialTransformSettings(MyBaseModel):
         return self
 
 
-def _refuse_old_initial_keys(data: dict) -> dict:
-    """Refuse the first schema's transform.seed* keys, saying what to write instead."""
-    old = [k for k in OLD_INITIAL_KEYS if k in data]
-    if not old:
-        return data
-    where = {
-        "seed": "transform.initial: {from: matrix, matrix: [...], direction: inverse}",
-        "seed_direction": "transform.initial: {from: matrix, matrix: [...], direction: ...}",
-        "seed_from_shapes": "transform.initial: {from: shapes, rotate90: -1, fliplr: false}",
-        "seed_from": "transform.initial.propagate: true (previous_timepoint; leave it out "
-        "for input)",
-        "seed_file": f"transform.initial: {{from: file, file: {data.get('seed_file')}}}",
-    }
-    raise ValueError(
-        "transform.seed* moved to transform.initial: "
-        + "; ".join(f"{k} -> {where[k]}" for k in old)
-    )
-
-
 class TransformFitSettings(MyBaseModel):
     """What kind of transform to fit (`type`), and where it starts (`initial`)."""
 
     type: Literal["euclidean", "similarity", "affine"] = "euclidean"
     initial: InitialTransformSettings | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def refuse_old_keys(cls, data):
-        return _refuse_old_initial_keys(data) if isinstance(data, dict) else data
 
     @property
     def propagates(self) -> bool:
@@ -1557,15 +1524,6 @@ class RepairSettings(MyBaseModel):
     consensus_min_good: int = 5
     max_timepoints: int | None = None
     polish_rounds: NonNegativeInt = 3
-
-    @field_validator("candidates", mode="before")
-    @classmethod
-    def refuse_seed(cls, v):
-        if isinstance(v, list) and "seed" in v:
-            raise ValueError(
-                "repair candidate 'seed' is now 'initial' (the run's transform.initial)"
-            )
-        return v
 
 
 class SweepSettings(MyBaseModel):
@@ -1657,10 +1615,9 @@ METHOD_BLOCKS: dict[str, str] = {
 TransformType = Literal["euclidean", "similarity", "affine"]
 
 
-# Method names as written before they followed the config's underscore style.
+# The legacy pipeline's method names (estimation_method / stabilization_method).
 RENAMED_METHODS = {
     "beads": "bead_matching",
-    "nuclei": "nuclei_matching",
     "phase-cross-corr": "phase_cross_corr",
     "focus-finding": "focus_finding",
 }
@@ -1920,16 +1877,6 @@ class EstimateTransformSettings(MyBaseModel):
             return adapter.validate_python(value)
         except ValidationError as error:
             raise ValueError(str(error)) from None
-
-    @model_validator(mode="before")
-    @classmethod
-    def point_score_metric_to_score(cls, data):
-        if isinstance(data, dict) and "score_metric" in data:
-            raise ValueError(
-                f"score_metric is now score.metric: write "
-                f"score: {{metric: {data['score_metric']}}}"
-            )
-        return data
 
     @model_validator(mode="after")
     def check_pool_has_a_shared_frame(self) -> "EstimateTransformSettings":
@@ -2203,21 +2150,6 @@ class TransformEntry(MyBaseModel):
     # "file+refined" (the estimate from it, which scored better).
     initialized_from: Literal["file", "file+refined"] | None = None
     note: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def read_older_names(cls, data):
-        """Entries written before transform.initial: seeded_from, 'seed' / 'seed_file'."""
-        if not isinstance(data, dict):
-            return data
-        data = dict(data)
-        older = {"seed_file": "file", "seed_file+refined": "file+refined", "seed": "initial"}
-        if "seeded_from" in data:
-            value = data.pop("seeded_from")
-            data.setdefault("initialized_from", older.get(value, value))
-        if data.get("filled_from") in older:
-            data["filled_from"] = older[data["filled_from"]]
-        return data
 
     @field_validator("matrix")
     @classmethod

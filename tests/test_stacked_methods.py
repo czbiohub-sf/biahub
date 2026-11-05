@@ -387,7 +387,6 @@ def test_every_method_has_a_family_and_says_what_it_estimates():
     "old, new",
     [
         ("beads", "bead_matching"),
-        ("nuclei", "nuclei_matching"),
         ("phase-cross-corr", "phase_cross_corr"),
         ("focus-finding", "focus_finding"),
     ],

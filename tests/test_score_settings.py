@@ -28,11 +28,6 @@ def test_the_metric_defaults_to_the_methods_and_can_be_set():
     assert chosen.effective_score_metric == "mutual_information"
 
 
-def test_the_old_score_metric_key_points_to_score_metric():
-    with pytest.raises(ValidationError, match="score: {metric: correlation}"):
-        _settings("ants", score_metric="correlation")
-
-
 @pytest.mark.parametrize(
     "method, score, message",
     [

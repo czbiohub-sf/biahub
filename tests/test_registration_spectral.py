@@ -284,10 +284,8 @@ def test_spectral_rel_cut_of_one_keeps_the_top_correspondence():
     assert len(matches) >= 1
 
 
-def test_the_spectral_candidate_is_configured_by_spectral_and_the_old_key_is_refused():
+def test_the_spectral_candidate_is_configured_by_spectral():
     from biahub.settings import BeadsMatchSettings
 
     assert BeadsMatchSettings(spectral="on_low_score").spectral == "on_low_score"
     assert BeadsMatchSettings().spectral == "off"
-    with pytest.raises(ValueError, match="spectral_arm is now spectral"):
-        BeadsMatchSettings(spectral_arm="always")
