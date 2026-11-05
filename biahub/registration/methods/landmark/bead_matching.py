@@ -52,7 +52,6 @@ from biahub.registration.estimators import (
     fit_pairs,
 )
 from biahub.settings import (
-    AffineTransformSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
     SeedCorrectionSettings,
@@ -313,22 +312,22 @@ def transform_from_matches(
     matches: ArrayLike,
     mov_peaks: ArrayLike,
     ref_peaks: ArrayLike,
-    affine_transform_settings: AffineTransformSettings,
+    transform_type: str,
     ndim: int = 3,
     verbose: bool = False,
 ) -> tuple[Transform, Transform]:
     """Return the (forward, inverse) transform fitted to matched peaks (`Transform.fit`, skimage).
 
     `matches` are (moving, reference) index pairs into the (N, D) peaks; the transform
-    type is the settings'. `ndim` is not needed (the peaks give it) and kept for callers.
+    type is `transform_type`. `ndim` is not needed (the peaks give it) and kept for callers.
     Raises ValueError when the fit fails.
     """
     if verbose:
-        click.echo(f"Estimating transform with settings: {affine_transform_settings}")
+        click.echo(f"Estimating a {transform_type} transform from {len(matches)} matches")
     fwd_transform = Transform.fit(
         np.asarray(mov_peaks)[matches[:, 0]],
         np.asarray(ref_peaks)[matches[:, 1]],
-        affine_transform_settings.transform_type,
+        transform_type,
         solver="skimage",
     )
     return fwd_transform, fwd_transform.invert()
@@ -417,7 +416,7 @@ class NodeGraphEstimator:
         mov_detector: NodeDetector,
         ref_detector: NodeDetector,
         beads_match_settings: BeadsMatchSettings,
-        affine_transform_settings: AffineTransformSettings,
+        transform_type: str,
         iterations: int = 1,
         score_fn: ScoreFn | None = None,
         matcher: NodeMatcher | None = None,
@@ -428,7 +427,7 @@ class NodeGraphEstimator:
         self.mov_detector = mov_detector
         self.ref_detector = ref_detector
         self.beads_match_settings = beads_match_settings
-        self.affine_transform_settings = affine_transform_settings
+        self.transform_type = transform_type
         self.iterations = iterations
         self.score_fn = score_fn
         # (matches, mov_nodes, ref_nodes) -> the correction; default: the transform type's
@@ -444,7 +443,7 @@ class NodeGraphEstimator:
     def from_beads_settings(
         cls,
         beads_match_settings: BeadsMatchSettings,
-        affine_transform_settings: AffineTransformSettings,
+        transform_type: str,
         iterations: int | None = None,
         score_fn: ScoreFn | None = None,
     ) -> NodeGraphEstimator:
@@ -458,7 +457,7 @@ class NodeGraphEstimator:
             mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
             ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
             beads_match_settings=beads_match_settings,
-            affine_transform_settings=affine_transform_settings,
+            transform_type=transform_type,
             iterations=(
                 beads_match_settings.qc_settings.iterations
                 if iterations is None
@@ -574,7 +573,7 @@ class NodeGraphEstimator:
                 fit_pairs(
                     mov_nodes[matches[:, 0]],
                     ref_nodes[matches[:, 1]],
-                    self.affine_transform_settings.transform_type,
+                    self.transform_type,
                     solver="skimage",  # the beads method's fit (see Transform.fit)
                 )
             )
@@ -796,7 +795,7 @@ def _vote_icp_register(**kwargs):
 
 def build_beads_estimator(
     beads_match_settings: BeadsMatchSettings,
-    affine_transform_settings: AffineTransformSettings,
+    transform_type: str,
     score_fn: ScoreFn | None = None,
     iterations: int | None = None,
 ) -> TransformEstimator:
@@ -814,14 +813,14 @@ def build_beads_estimator(
 
     def node_graph(settings: BeadsMatchSettings) -> NodeGraphEstimator:
         return NodeGraphEstimator.from_beads_settings(
-            settings, affine_transform_settings, iterations=iterations, score_fn=score_fn
+            settings, transform_type, iterations=iterations, score_fn=score_fn
         )
 
     if beads_match_settings.estimation_mode == "vote_icp":
         configured: TransformEstimator = VoteIcpEstimator.from_beads_settings(
             beads_match_settings,
             score_fn=score_fn,
-            transform_type=affine_transform_settings.transform_type,
+            transform_type=transform_type,
         )
     else:
         configured = node_graph(beads_match_settings)

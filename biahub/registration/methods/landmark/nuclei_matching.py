@@ -20,7 +20,7 @@ from numpy.typing import ArrayLike
 from biahub.core.transform import Transform
 from biahub.registration.estimators import ScoreFn, fit_pairs
 from biahub.registration.methods.landmark.bead_matching import NodeGraphEstimator
-from biahub.settings import AffineTransformSettings, BeadsMatchSettings, NucleiSettings
+from biahub.settings import BeadsMatchSettings, NucleiSettings
 
 # How the evaluation pairs this method's landmarks: (radius in µm, axes it is measured on).
 # Nuclei are long in z: they pair up in yx within 3 µm and their z is compared afterwards.
@@ -158,7 +158,7 @@ def nuclei_estimator(
         mov_detector=NucleiNodeDetector(settings, ref_um),
         ref_detector=NucleiNodeDetector(settings, ref_um),
         beads_match_settings=matching,
-        affine_transform_settings=AffineTransformSettings(transform_type=transform_type),
+        transform_type=transform_type,
         iterations=settings.iterations,
         score_fn=score_fn,
         fit=yx_and_z_shift_fit(transform_type, ref_um),

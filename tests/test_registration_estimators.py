@@ -20,7 +20,6 @@ from biahub.registration.methods.landmark.bead_matching import (
 )
 from biahub.registration.metrics import correlation_score
 from biahub.settings import (
-    AffineTransformSettings,
     AntsRegistrationSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
@@ -47,9 +46,7 @@ def _make_matched_clouds(rng, n=30, translation=(5.0, -3.0, 2.0)):
 
 def test_node_graph_estimator_satisfies_protocols():
     assert isinstance(BeadNodeDetector(DetectPeaksSettings()), NodeDetector)
-    estimator = NodeGraphEstimator.from_beads_settings(
-        BeadsMatchSettings(), AffineTransformSettings()
-    )
+    estimator = NodeGraphEstimator.from_beads_settings(BeadsMatchSettings(), "euclidean")
     assert isinstance(estimator, TransformEstimator)
 
 
@@ -58,13 +55,13 @@ def test_node_graph_estimator_matches_direct_call():
     mov_nodes, ref_nodes = _make_matched_clouds(rng)
 
     beads_match_settings = BeadsMatchSettings()
-    affine_transform_settings = AffineTransformSettings(transform_type="euclidean")
+    transform_type = "euclidean"
 
     estimator = NodeGraphEstimator(
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=beads_match_settings,
-        affine_transform_settings=affine_transform_settings,
+        transform_type=transform_type,
     )
     mov_volume = np.zeros((10, 10, 10))
     ref_volume = np.zeros((10, 10, 10))
@@ -72,7 +69,7 @@ def test_node_graph_estimator_matches_direct_call():
 
     matches = matches_from_beads(mov_nodes, ref_nodes, beads_match_settings)
     expected_transform, _ = transform_from_matches(
-        matches, mov_nodes, ref_nodes, affine_transform_settings, ndim=3
+        matches, mov_nodes, ref_nodes, transform_type, ndim=3
     )
 
     np.testing.assert_allclose(transform.matrix, expected_transform.matrix)
@@ -96,7 +93,7 @@ def test_node_graph_estimator_keeps_the_best_scoring_iteration_not_the_last():
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
         iterations=2,
         score_fn=score_fn,
     )
@@ -115,7 +112,7 @@ def _drifting_estimator(translation, score_fn, iterations):
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
         iterations=iterations,
         score_fn=score_fn,
     )
@@ -156,7 +153,7 @@ def test_node_graph_estimator_fails_clearly_with_too_few_nodes():
         mov_detector=_FixedNodeDetector(np.zeros((2, 3))),
         ref_detector=_FixedNodeDetector(np.zeros((30, 3))),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(),
+        transform_type="euclidean",
     )
     with pytest.raises(EstimationError, match="2 moving, 30 reference"):
         estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
@@ -169,7 +166,7 @@ def test_node_graph_estimator_fails_clearly_when_no_iteration_scores():
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
         iterations=2,
         score_fn=lambda transform, mov, ref: float("nan"),
     )
@@ -186,7 +183,7 @@ def test_node_graph_estimator_recovers_known_translation():
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
     )
     transform = estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
 
@@ -221,7 +218,7 @@ def _bead_estimator():
         mov_detector=BeadNodeDetector(peaks_settings),
         ref_detector=BeadNodeDetector(peaks_settings),
         beads_match_settings=beads_match_settings,
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
     )
 
 
@@ -316,9 +313,7 @@ def test_ants_estimator_satisfies_protocol():
 
 def test_ants_estimator_from_settings_maps_the_transform_type():
     # Preparation (Sobel, clipping, masks) is the preprocess blocks', not the estimator's.
-    estimator = AntsEstimator.from_settings(
-        AntsRegistrationSettings(), AffineTransformSettings(transform_type="affine")
-    )
+    estimator = AntsEstimator.from_settings(AntsRegistrationSettings(), "affine")
     assert estimator.ants_kwargs["type_of_transform"] == "Affine"
     assert estimator.ants_kwargs["aff_iterations"] == DEFAULT_ANTS_KWARGS["aff_iterations"]
     assert not any(hasattr(estimator, a) for a in ("sobel_filter", "crop", "clip"))

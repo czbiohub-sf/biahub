@@ -26,7 +26,7 @@ from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimationError
-from biahub.settings import AffineTransformSettings, AntsRegistrationSettings
+from biahub.settings import AntsRegistrationSettings
 
 DEFAULT_ANTS_KWARGS = {
     "type_of_transform": "Similarity",
@@ -148,14 +148,12 @@ class AntsEstimator:
     def from_settings(
         cls,
         ants_registration_settings: AntsRegistrationSettings,
-        affine_transform_settings: AffineTransformSettings,
+        transform_type: str,
         verbose: bool = False,
     ) -> AntsEstimator:
-        """Transform family from the affine settings."""
+        """ANTs fitting `transform_type` (euclidean, similarity or affine)."""
         ants_kwargs = dict(DEFAULT_ANTS_KWARGS)
-        ants_kwargs["type_of_transform"] = _ANTS_TRANSFORM_TYPE[
-            affine_transform_settings.transform_type
-        ]
+        ants_kwargs["type_of_transform"] = _ANTS_TRANSFORM_TYPE[transform_type]
         return cls(ants_kwargs=ants_kwargs, verbose=verbose)
 
     def estimate(

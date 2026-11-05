@@ -217,7 +217,7 @@ fwd_transform, inv_transform = transform_from_matches(
     matches=matches,
     mov_peaks=mov_peaks,
     ref_peaks=ref_peaks,
-    affine_transform_settings=config.affine_transform_settings,
+    transform_type=config.affine_transform_settings.transform_type,
     ndim=mov_data_reg.ndim,
 )
 
@@ -251,7 +251,9 @@ matches
 # %%
 composed_transform
 # %% Run the full beads estimator (detect -> match -> correct -> score, over its passes)
-estimator = build_beads_estimator(config.beads_match_settings, config.affine_transform_settings)
+estimator = build_beads_estimator(
+    config.beads_match_settings, config.affine_transform_settings.transform_type
+)
 optimized_transform = estimator.estimate(mov_data, ref_data, seed=initial_transform)
 quality_score_optimized = metric_fn("overlap", config.beads_match_settings)(
     optimized_transform, mov_data, ref_data

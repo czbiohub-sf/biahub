@@ -19,7 +19,6 @@ from biahub.registration.methods.landmark.bead_matching import (
 )
 from biahub.registration.metrics import score_transform
 from biahub.settings import (
-    AffineTransformSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
     SeedCorrectionSettings,
@@ -121,14 +120,14 @@ def test_vote_icp_estimator_recovers_an_offset_the_hungarian_matcher_cannot():
     applied_zyx = (8, -12, 16)
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
     settings = _beads_settings()
-    affine = AffineTransformSettings(transform_type="euclidean")
+    affine = "euclidean"
 
     with pytest.raises(EstimationError):
         NodeGraphEstimator(
             mov_detector=BeadNodeDetector(PEAKS),
             ref_detector=BeadNodeDetector(PEAKS),
             beads_match_settings=settings,
-            affine_transform_settings=affine,
+            transform_type=affine,
         ).estimate(mov, ref)
 
     estimator = VoteIcpEstimator.from_beads_settings(settings, score_fn=_score(settings))
@@ -145,7 +144,7 @@ def test_vote_icp_estimator_recovers_an_offset_the_hungarian_matcher_cannot():
                 mov_detector=BeadNodeDetector(PEAKS),
                 ref_detector=BeadNodeDetector(PEAKS),
                 beads_match_settings=settings,
-                affine_transform_settings=affine,
+                transform_type=affine,
             ),
         ],
         score_fn=_score(settings),
@@ -156,13 +155,11 @@ def test_vote_icp_estimator_recovers_an_offset_the_hungarian_matcher_cannot():
 
 
 def test_build_beads_estimator_wires_vote_icp_mode_and_seed_correction():
-    plain = build_beads_estimator(_beads_settings(), AffineTransformSettings())
-    vote = build_beads_estimator(
-        _beads_settings(estimation_mode="vote_icp"), AffineTransformSettings()
-    )
+    plain = build_beads_estimator(_beads_settings(), "euclidean")
+    vote = build_beads_estimator(_beads_settings(estimation_mode="vote_icp"), "euclidean")
     corrected = build_beads_estimator(
         _beads_settings(seed_correction_settings=SeedCorrectionSettings(mode="votefit")),
-        AffineTransformSettings(),
+        "euclidean",
     )
     assert isinstance(plain, NodeGraphEstimator)
     assert isinstance(vote, VoteIcpEstimator)

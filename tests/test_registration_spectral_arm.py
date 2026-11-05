@@ -20,7 +20,6 @@ from biahub.registration.methods.landmark.bead_matching import (
     build_beads_estimator,
 )
 from biahub.settings import (
-    AffineTransformSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
     SpectralMatchSettings,
@@ -122,7 +121,7 @@ def test_a_matcher_that_cannot_run_is_an_estimation_error():
         mov_detector=BeadNodeDetector(settings.source_peaks_settings),
         ref_detector=BeadNodeDetector(settings.target_peaks_settings),
         beads_match_settings=settings,
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
         matcher=too_large,
     )
     with pytest.raises(EstimationError, match="too many candidates"):
@@ -230,13 +229,9 @@ def _beads_settings(**overrides):
 
 
 def test_build_beads_estimator_builds_the_competing_cascade_when_the_spectral_arm_is_on():
-    plain = build_beads_estimator(_beads_settings(), AffineTransformSettings())
-    competing = build_beads_estimator(
-        _beads_settings(spectral_arm="always"), AffineTransformSettings()
-    )
-    gated = build_beads_estimator(
-        _beads_settings(spectral_arm="on_low_score"), AffineTransformSettings()
-    )
+    plain = build_beads_estimator(_beads_settings(), "euclidean")
+    competing = build_beads_estimator(_beads_settings(spectral_arm="always"), "euclidean")
+    gated = build_beads_estimator(_beads_settings(spectral_arm="on_low_score"), "euclidean")
 
     assert isinstance(plain, NodeGraphEstimator)
     assert isinstance(competing, CompetingEstimator) and list(competing.arms) == [
@@ -257,13 +252,13 @@ def test_spectral_arm_recovers_an_offset_beyond_the_hungarian_capture_range():
     applied_zyx = (8, -12, 16)
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
     settings = _beads_settings(spectral_arm="always")
-    affine = AffineTransformSettings(transform_type="euclidean")
+    affine = "euclidean"
 
     hungarian_only = NodeGraphEstimator(
         mov_detector=BeadNodeDetector(settings.source_peaks_settings),
         ref_detector=BeadNodeDetector(settings.target_peaks_settings),
         beads_match_settings=settings,
-        affine_transform_settings=affine,
+        transform_type=affine,
     )
     with pytest.raises(EstimationError):
         hungarian_only.estimate(mov, ref)

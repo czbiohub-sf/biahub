@@ -90,7 +90,6 @@ from biahub.registration.preprocess import (
 )
 from biahub.registration.utils import resolve_time_indices
 from biahub.settings import (
-    AffineTransformSettings,
     AnchorSettings,
     EstimateTransformSettings,
     InitialTransformSettings,
@@ -174,27 +173,6 @@ def _metric_fn(settings: EstimateTransformSettings, metric: str, prepare=None) -
     return metric_fn(metric, _final(settings).bead_matching, prepare)
 
 
-def _affine_settings(settings: EstimateTransformSettings) -> AffineTransformSettings:
-    """Build the legacy `AffineTransformSettings` the estimators' constructors still take."""
-    fit, init = settings.transform, settings.transform.initial
-    seed_inverse = np.eye(4).tolist()
-    if init is not None and init.from_ == "matrix":
-        seed_inverse = (
-            init.matrix
-            if init.direction == "inverse"
-            else np.linalg.inv(np.asarray(init.matrix, dtype=float)).tolist()
-        )
-    return AffineTransformSettings(
-        transform_type=fit.type,
-        approx_transform=seed_inverse,
-        use_prev_t_transform=False,
-        compute_approx_transform=init is not None and init.from_ == "shapes",
-        # the legacy field knows first / previous: a cross registration and a neighbour
-        # median give absolute transforms, like first
-        t_reference="previous" if settings.reference.frame == "previous" else "first",
-    )
-
-
 def build_estimator(
     settings: EstimateTransformSettings,
     shape_zyx: tuple[int, int, int] | None = None,
@@ -217,14 +195,13 @@ def build_estimator(
     # the bead estimators' own choices score the raw volumes, not the prepared ones
     method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn
     seed = _static_initial(settings)
-    affine = _affine_settings(settings)
     if settings.method == "bead_matching":
         estimator: TransformEstimator = build_beads_estimator(
-            settings.bead_matching, affine, score_fn=method_score
+            settings.bead_matching, settings.transform.type, score_fn=method_score
         )
     elif settings.method == "ants":
         estimator = AntsEstimator.from_settings(
-            settings.ants, affine, verbose=settings.verbose
+            settings.ants, settings.transform.type, verbose=settings.verbose
         )
     elif settings.method == "phase_cross_corr" and settings.phase_cross_corr.local:
         estimator = LocalPCCEstimator(
