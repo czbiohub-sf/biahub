@@ -76,6 +76,7 @@ from biahub.registration.methods.landmark.bead_matching import (
     build_beads_estimator,
 )
 from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimator
+from biahub.registration.methods.metadata.shapes import ShapesEstimator
 from biahub.registration.metrics import (
     LEFTOVER_MOTION_VOLUMES,
     leftover_motion,
@@ -221,6 +222,13 @@ def build_estimator(
             settings.transform.type,
             ref_voxel_size or (1.0, 1.0, 1.0),
             score_fn=method_score,
+        )
+    elif settings.method == "shapes":
+        estimator = ShapesEstimator.from_settings(
+            settings.shapes,
+            settings.transform.type,
+            mov_voxel_size or (1.0, 1.0, 1.0),
+            ref_voxel_size or (1.0, 1.0, 1.0),
         )
     elif settings.method == "manual":
         manual = settings.manual

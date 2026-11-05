@@ -20,6 +20,7 @@ from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import CandidateUnavailableError
+from biahub.registration.methods.metadata.shapes import ShapesEstimator
 
 
 @runtime_checkable
@@ -231,13 +232,9 @@ class FixedInitialTransform:
 
 
 class ShapesInitialTransform:
-    """`transform.initial: {from: shapes}`: the initial transform from the two grids.
+    """`transform.initial: {from: shapes}`: the shapes method's answer for the two grids.
 
-    The moving grid, flipped left-right (`fliplr`) and turned by `rotate90` quarter
-    turns in yx, then rescaled by the voxel-size ratio (z, and yx from the last axis)
-    onto the reference grid. The voxel sizes are the stores' own (their OME-NGFF scale;
-    only the last three axes are read): there is no default instrument. The same
-    transform for every t, computed once. ZYX order.
+    The same transform for every t, computed once (see `ShapesEstimator`).
     """
 
     keep_unless_beaten = False
@@ -252,17 +249,12 @@ class ShapesInitialTransform:
         fliplr: bool,
         transform_type: str = "affine",
     ):
-        mov_shape, ref_shape = tuple(mov_shape[-3:]), tuple(ref_shape[-3:])
-        scale_z = mov_voxel_size[-3] / ref_voxel_size[-3]
-        scale_yx = mov_voxel_size[-1] / ref_voxel_size[-1]
-        forward = (
-            Transform.from_scaling((scale_z, scale_yx, scale_yx), ref_shape, ref_shape).matrix
-            @ Transform.from_rotation_yx(90 * rotate90, mov_shape, ref_shape).matrix
-            @ (Transform.from_flip_x(mov_shape, ref_shape).matrix if fliplr else np.eye(4))
+        method = ShapesEstimator(
+            mov_voxel_size, ref_voxel_size, rotate90, fliplr, transform_type
         )
         # reference -> moving, as on disk (init_run shows it)
-        self.inverse_matrix = np.linalg.inv(forward)
-        self.transform = Transform.from_inverse(self.inverse_matrix, transform_type)
+        self.inverse_matrix = method.inverse_matrix(mov_shape, ref_shape)
+        self.transform = method.transform_for(mov_shape, ref_shape)
 
     def initial_for(self, t: int) -> Transform:
         return self.transform

@@ -9,6 +9,7 @@
 | a single hand-picked registration | `manual` | napari point annotation on one timepoint (`time_indices: <t>`), applied to all; `templates/estimate-transform-manual.yml` |
 | stabilization of a channel over time (drift) | `phase_cross_corr` | translation only; crop with `center_crop_xy` |
 | stabilization of phase (focus z + stackreg yx) | `focus_finding` | what the A549 projects used (`label-free/2-stabilize`) |
+| the registration the two stores' metadata implies (voxel sizes, camera turn and flip) | `shapes` | reads no pixels: `shapes: {rotate90: -1, fliplr: false}` (mantis light-sheet); a first block before a fine method, or a quick check of the geometry |
 
 `reference.frame`: `cross` (another channel at the same timepoint: registration), `first`
 or `previous` (the channel's own first / previous frame with data: stabilization).
@@ -54,8 +55,10 @@ out: identity):
 
 - `{from: matrix, matrix: [...], direction: inverse}`: one transform for every timepoint
   (e.g. the previous run's `approx_transform`, inverse direction as on disk).
-- `{from: shapes, rotate90: -1, fliplr: false}`: built from the two stores' shapes and
-  voxel sizes, after a rotation and flip (the values shown are the mantis light-sheet's).
+- `{from: shapes, rotate90: -1, fliplr: false}`: the `shapes` method's answer, from the two
+  stores' shapes and voxel sizes after a rotation and flip (the values shown are the
+  mantis light-sheet's). As the initial transform it is also the stand-in for a failed
+  timepoint and the repair candidate `initial`; as a stack's first block it is not.
 - `{from: file, file: <transforms file>}`: each position and timepoint's transform from an
   earlier result (see `pool` below).
 

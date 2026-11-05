@@ -13,6 +13,7 @@ from waveorder.focus import focus_from_transverse_band
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimatorBase
+from biahub.registration.methods.metadata.shapes import ShapesEstimator
 
 NA_DETECTION_SOURCE = 1.35
 
@@ -146,20 +147,18 @@ def user_assisted_registration(
     source_zyx_ants = ants.from_numpy(source_channel_volume.astype(np.float32))
     target_zyx_ants = ants.from_numpy(target_channel_volume.astype(np.float32))
 
-    # the initial transform from the two grids (flip, rotate, rescale) pre-aligns the
-    # source for display; imported here: the engine imports this module
-    from biahub.registration.engine.policies import ShapesInitialTransform
-
-    shapes = ShapesInitialTransform(
-        mov_shape=(source_channel_Z, source_channel_Y, source_channel_X),
-        ref_shape=(target_channel_Z, target_channel_Y, target_channel_X),
-        mov_voxel_size=source_channel_voxel_size,
-        ref_voxel_size=target_channel_voxel_size,
+    # the shapes method's answer (flip, rotate, rescale) pre-aligns the source for display
+    shapes = ShapesEstimator(
+        source_channel_voxel_size,
+        target_channel_voxel_size,
         rotate90=pre_affine_90degree_rotation,
         fliplr=pre_affine_fliplr,
+    ).transform_for(
+        (source_channel_Z, source_channel_Y, source_channel_X),
+        (target_channel_Z, target_channel_Y, target_channel_X),
     )
-    compound_affine = shapes.transform.matrix  # moving -> reference
-    tx_manual = shapes.transform.to_ants().invert()
+    compound_affine = shapes.matrix  # moving -> reference
+    tx_manual = shapes.to_ants().invert()
     # the focus slice in reference planes, for the viewer
     scaling_factor_z = source_channel_voxel_size[-3] / target_channel_voxel_size[-3]
 

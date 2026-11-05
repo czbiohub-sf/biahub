@@ -544,6 +544,18 @@ class FocusSettings(MyBaseModel):
         return v
 
 
+class ShapesSettings(MyBaseModel):
+    """The shapes method: the registration from the two grids (shapes and voxel sizes).
+
+    The moving grid is flipped left-right when `fliplr`, turned by `rotate90` quarter
+    turns in yx, then rescaled by the voxel-size ratio onto the reference grid. Both are
+    given: a turn or a flip depends on how the two cameras are mounted.
+    """
+
+    rotate90: int
+    fliplr: bool
+
+
 # --------------------------------------------------------------------------------------
 # Projection settings (`biahub project`)
 
@@ -1605,7 +1617,13 @@ class NucleiSettings(MyBaseModel):
 
 
 EstimationMethod = Literal[
-    "bead_matching", "ants", "phase_cross_corr", "manual", "focus_finding", "nuclei_matching"
+    "bead_matching",
+    "ants",
+    "phase_cross_corr",
+    "manual",
+    "focus_finding",
+    "nuclei_matching",
+    "shapes",
 ]
 # The settings block each method reads.
 METHOD_BLOCKS: dict[str, str] = {
@@ -1615,6 +1633,7 @@ METHOD_BLOCKS: dict[str, str] = {
     "manual": "manual",
     "focus_finding": "focus_finding",
     "nuclei_matching": "nuclei_matching",
+    "shapes": "shapes",
 }
 TransformType = Literal["euclidean", "similarity", "affine"]
 
@@ -1688,7 +1707,8 @@ _METHOD_STACK = TypeAdapter(MethodStack)
 
 # What each method measures from, and what it can estimate. Landmark-based methods detect
 # structures seen in both channels and match them (graph matching); intensity-based ones
-# compare the images directly; interactive ones ask a person. The family says whether a
+# compare the images directly; interactive ones ask a person; metadata-based ones read
+# only what the stores say (shapes, voxel sizes). The family says whether a
 # method can work on a dataset (landmarks, or shared image structure); the estimate says
 # where it goes in a stack (translations make coarse first blocks).
 METHOD_FAMILIES: dict[str, tuple[str, str]] = {
@@ -1698,6 +1718,7 @@ METHOD_FAMILIES: dict[str, tuple[str, str]] = {
     "ants": ("intensity-based", "linear (the transform type)"),
     "focus_finding": ("intensity-based", "translation (z by focus, yx by stackreg)"),
     "manual": ("interactive", "linear (clicked pairs)"),
+    "shapes": ("metadata-based", "linear (voxel-size scaling, quarter turns, a flip)"),
 }
 
 
@@ -1740,6 +1761,7 @@ DEFAULT_SCORE_METRIC: dict[str, str] = {
     "manual": "gradient_correlation",
     "focus_finding": "correlation",
     "nuclei_matching": "correlation",
+    "shapes": "correlation",
 }
 
 
@@ -1859,6 +1881,7 @@ class EstimateTransformSettings(MyBaseModel):
     manual: ManualSettings | None = None
     focus_finding: FocusSettings | None = None
     nuclei_matching: NucleiSettings | None = None
+    shapes: ShapesSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     score: ScoreSettings = ScoreSettings()
@@ -1917,6 +1940,23 @@ class EstimateTransformSettings(MyBaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_shapes_has_no_preprocess(self) -> "EstimateTransformSettings":
+        # the shapes method reads only metadata: blocks before it would change nothing
+        blocks = (
+            [b.preprocess for b in self.method if b.method == "shapes"]
+            if self.is_stack
+            else [self.preprocess]
+            if self.method == "shapes"
+            else []
+        )
+        if any(blocks):
+            raise ValueError(
+                "shapes reads no pixels (only the stores' shapes and voxel sizes): remove "
+                "its preprocess blocks"
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_masks_have_a_method_that_uses_them(self) -> "EstimateTransformSettings":
         masks = [b.kind for b in self.preprocess if isinstance(b, MASK_BLOCKS)]
         if masks and not self.is_stack and self.method not in MASK_METHODS:
@@ -1937,6 +1977,13 @@ class EstimateTransformSettings(MyBaseModel):
             "nuclei_matching": ("nuclei_matching", NucleiSettings),
         }
         if self.is_stack:  # each block brings its own settings
+            return self
+        if self.method == "shapes":  # no defaults: the turn and flip are the setup's
+            if self.shapes is None:
+                raise ValueError(
+                    "method shapes needs its block: shapes: {rotate90: <quarter turns>, "
+                    "fliplr: <true|false>}"
+                )
             return self
         field, model = defaults[self.method]
         if getattr(self, field) is None:
