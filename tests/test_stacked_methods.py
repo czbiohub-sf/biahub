@@ -391,8 +391,7 @@ def test_every_method_has_a_family_and_says_what_it_estimates():
     assert {family for family, _ in METHOD_FAMILIES.values()} == {
         "landmark-based",
         "intensity-based",
-        "interactive",
-        "metadata-based",
+        "manual",
     }
 
 
@@ -475,8 +474,7 @@ def test_every_method_lives_in_its_familys_folder_under_its_own_name():
     folders = {
         "landmark-based": "landmark",
         "intensity-based": "intensity",
-        "interactive": "interactive",
-        "metadata-based": "metadata",
+        "manual": "manual",
     }
     root = Path(methods.__file__).parent
     for method, (family, _) in METHOD_FAMILIES.items():

@@ -28,7 +28,7 @@ def _settings(method, **kwargs):
 
 
 def test_the_shapes_method_reads_only_the_shapes_and_the_voxel_sizes():
-    from biahub.registration.methods.metadata.shapes import ShapesEstimator
+    from biahub.registration.methods.manual.shapes import ShapesEstimator
 
     estimator = ShapesEstimator(
         GRIDS["mov_voxel_size"], GRIDS["ref_voxel_size"], rotate90=-1, fliplr=True
@@ -51,7 +51,7 @@ def test_the_shapes_method_reads_only_the_shapes_and_the_voxel_sizes():
 
 def test_the_initial_transform_from_shapes_is_the_methods_answer():
     from biahub.registration.engine.policies import ShapesInitialTransform
-    from biahub.registration.methods.metadata.shapes import ShapesEstimator
+    from biahub.registration.methods.manual.shapes import ShapesEstimator
 
     policy = ShapesInitialTransform(**GRIDS, rotate90=-1, fliplr=False)
     method = ShapesEstimator(
@@ -63,7 +63,7 @@ def test_the_initial_transform_from_shapes_is_the_methods_answer():
 
 def test_method_shapes_needs_its_block_and_builds_with_the_stores_voxel_sizes():
     from biahub.registration.engine.core import build_estimator
-    from biahub.registration.methods.metadata.shapes import ShapesEstimator
+    from biahub.registration.methods.manual.shapes import ShapesEstimator
 
     with pytest.raises(ValidationError, match="shapes: {rotate90"):
         _settings("shapes")
@@ -83,7 +83,7 @@ def test_method_shapes_needs_its_block_and_builds_with_the_stores_voxel_sizes():
 def test_shapes_starts_a_stack_and_the_next_block_starts_from_it():
     from biahub.registration.engine.core import build_estimator
     from biahub.registration.estimators import ChainedEstimator
-    from biahub.registration.methods.metadata.shapes import ShapesEstimator
+    from biahub.registration.methods.manual.shapes import ShapesEstimator
 
     settings = _settings(
         [{"shapes": {"rotate90": 0, "fliplr": False}}, {"phase_cross_corr": {}}]

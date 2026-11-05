@@ -1707,18 +1707,19 @@ _METHOD_STACK = TypeAdapter(MethodStack)
 
 # What each method measures from, and what it can estimate. Landmark-based methods detect
 # structures seen in both channels and match them (graph matching); intensity-based ones
-# compare the images directly; interactive ones ask a person; metadata-based ones read
-# only what the stores say (shapes, voxel sizes). The family says whether a
-# method can work on a dataset (landmarks, or shared image structure); the estimate says
-# where it goes in a stack (translations make coarse first blocks).
+# compare the images directly; manual ones take the registration from a person (clicked
+# points, or the setup's turn and flip with the stores' voxel sizes). The family says
+# whether a method can work on a dataset (landmarks, shared image structure, or a person
+# who knows the setup); the estimate says where it goes in a stack (translations make
+# coarse first blocks).
 METHOD_FAMILIES: dict[str, tuple[str, str]] = {
     "bead_matching": ("landmark-based", "affine"),
     "nuclei_matching": ("landmark-based", "yx linear and a z shift"),
     "phase_cross_corr": ("intensity-based", "translation; yx linear when local"),
     "ants": ("intensity-based", "linear (the transform type)"),
     "focus_finding": ("intensity-based", "translation (z by focus, yx by stackreg)"),
-    "manual": ("interactive", "linear (clicked pairs)"),
-    "shapes": ("metadata-based", "linear (voxel-size scaling, quarter turns, a flip)"),
+    "manual": ("manual", "linear (clicked pairs)"),
+    "shapes": ("manual", "linear (voxel-size scaling, quarter turns, a flip)"),
 }
 
 

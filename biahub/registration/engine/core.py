@@ -71,12 +71,12 @@ from biahub.registration.methods.intensity.ants import AntsEstimator
 from biahub.registration.methods.intensity.focus_finding import FocusEstimator
 from biahub.registration.methods.intensity.local_phase_cross_corr import LocalPCCEstimator
 from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
-from biahub.registration.methods.interactive.manual import ManualEstimator
 from biahub.registration.methods.landmark.bead_matching import (
     build_beads_estimator,
 )
 from biahub.registration.methods.landmark.nuclei_matching import nuclei_estimator
-from biahub.registration.methods.metadata.shapes import ShapesEstimator
+from biahub.registration.methods.manual.manual import ManualEstimator
+from biahub.registration.methods.manual.shapes import ShapesEstimator
 from biahub.registration.metrics import (
     LEFTOVER_MOTION_VOLUMES,
     leftover_motion,

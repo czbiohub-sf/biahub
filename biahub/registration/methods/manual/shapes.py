@@ -1,6 +1,7 @@
 """The shapes method: the registration from the two grids (shapes and voxel sizes).
 
-The moving grid, flipped left-right (`fliplr`) and turned by `rotate90` quarter turns in
+A manual method: the person states the setup (how the camera is turned and flipped);
+the stores give the rest. The moving grid, flipped left-right (`fliplr`) and turned by `rotate90` quarter turns in
 yx, then rescaled by the voxel-size ratio (z, and yx from the last axis) onto the
 reference grid. The voxel sizes are the stores' own (their OME-NGFF scale; only the last
 three axes are read): there is no default instrument. No pixels are read, so it is the

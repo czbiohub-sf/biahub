@@ -13,7 +13,7 @@ from waveorder.focus import focus_from_transverse_band
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimatorBase
-from biahub.registration.methods.metadata.shapes import ShapesEstimator
+from biahub.registration.methods.manual.shapes import ShapesEstimator
 
 NA_DETECTION_SOURCE = 1.35
 

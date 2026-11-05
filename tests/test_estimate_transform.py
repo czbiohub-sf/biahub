@@ -554,7 +554,7 @@ def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
         return (inverse,)
 
     monkeypatch.setattr(
-        "biahub.registration.methods.interactive.manual.user_assisted_registration",
+        "biahub.registration.methods.manual.manual.user_assisted_registration",
         fake_user_assisted_registration,
     )
     output = tmp_path / "out" / "registration_settings.yml"

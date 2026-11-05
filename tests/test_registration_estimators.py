@@ -16,13 +16,13 @@ from biahub.registration.methods.intensity.ants import DEFAULT_ANTS_KWARGS, Ants
 from biahub.registration.methods.intensity.focus_finding import FocusEstimator, find_focus
 from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
 from biahub.registration.methods.intensity.stackreg import StackregEstimator
-from biahub.registration.methods.interactive.manual import ManualEstimator
 from biahub.registration.methods.landmark.bead_matching import (
     BeadNodeDetector,
     NodeGraphEstimator,
     matches_from_beads,
     transform_from_matches,
 )
+from biahub.registration.methods.manual.manual import ManualEstimator
 from biahub.registration.metrics import correlation_score
 from biahub.settings import (
     AntsRegistrationSettings,
@@ -528,7 +528,7 @@ def test_manual_estimator_inverts_user_assisted_registrations_inverse_output(mon
         return [inverse_matrix.tolist()]
 
     monkeypatch.setattr(
-        "biahub.registration.methods.interactive.manual.user_assisted_registration",
+        "biahub.registration.methods.manual.manual.user_assisted_registration",
         fake_user_assisted_registration,
     )
 
@@ -1052,12 +1052,12 @@ def test_every_estimator_declares_the_members_the_engine_reads():
         CompetingEstimator,
         TransformEstimator,
     )
-    from biahub.registration.methods.interactive.manual import ManualEstimator
     from biahub.registration.methods.landmark.bead_matching import (
         NodeGraphEstimator,
         VoteIcpEstimator,
         VoteInitialTransformCorrection,
     )
+    from biahub.registration.methods.manual.manual import ManualEstimator
 
     classes = [
         AntsEstimator, PCCEstimator, FocusEstimator, ManualEstimator, NodeGraphEstimator,

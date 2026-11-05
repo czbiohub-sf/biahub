@@ -20,7 +20,7 @@ from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import CandidateUnavailableError
-from biahub.registration.methods.metadata.shapes import ShapesEstimator
+from biahub.registration.methods.manual.shapes import ShapesEstimator
 
 
 @runtime_checkable
