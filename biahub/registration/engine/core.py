@@ -281,7 +281,7 @@ def _one_transform_per_timepoint(
     """
     if isinstance(initial, Transform):
         initial = FixedInitialTransform(initial)
-    from_file = getattr(initial, "keep_unless_beaten", False)
+    from_file = initial.keep_unless_beaten
     out = []
     for t in time_indices:
         if t in result.transforms:

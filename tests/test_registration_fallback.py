@@ -109,6 +109,8 @@ def test_repair_names_each_failed_candidate():
     target = np.array([10.0, 10.0, 10.0])
 
     class _RaisingSeedPolicy:
+        keep_unless_beaten = False
+
         def initial_for(self, t):
             raise CandidateUnavailableError("not enough good timepoints yet")
 
@@ -135,6 +137,8 @@ def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whol
     target = np.array([10.0, 10.0, 10.0])
 
     class _RaisingSeedPolicy:
+        keep_unless_beaten = False
+
         def initial_for(self, t):
             raise CandidateUnavailableError("not enough good timepoints yet")
 
@@ -164,6 +168,8 @@ def test_a_repair_candidate_with_a_bug_is_not_hidden_as_a_failed_candidate():
     target = np.array([10.0, 10.0, 10.0])
 
     class _BuggyPolicy:
+        keep_unless_beaten = False
+
         def initial_for(self, t):
             raise TypeError("a bug")
 

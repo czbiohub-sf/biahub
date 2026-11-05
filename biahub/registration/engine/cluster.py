@@ -275,7 +275,7 @@ def _estimate_timepoint_job(
         FixedInitialTransform(job.initial.initial_for(t)),
         score_fn,
         [t],
-        keep_initial=getattr(job.initial, "keep_unless_beaten", False),
+        keep_initial=job.initial.keep_unless_beaten,
     )
     record = TimepointRecord(
         t=t,

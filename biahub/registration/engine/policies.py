@@ -202,7 +202,13 @@ class NeighbourMedian:
 
 @runtime_checkable
 class InitialTransformPolicy(Protocol):
-    """Returns the initial transform guess for timepoint `t`."""
+    """Returns the initial transform guess for timepoint `t`.
+
+    `keep_unless_beaten`: the initial transform is an earlier result, so the engine keeps
+    it unless the estimate from it scores strictly better.
+    """
+
+    keep_unless_beaten: bool
 
     def initial_for(self, t: int) -> Transform: ...
 
@@ -214,6 +220,8 @@ class FixedInitialTransform:
     existing transform as this seed instead of a fresh default. No separate "optimize"
     concept is needed once seed policies exist.
     """
+
+    keep_unless_beaten = False
 
     def __init__(self, transform: Transform):
         self.transform = transform
@@ -229,6 +237,8 @@ class ShapesInitialTransform:
     optional 90-degree rotation and left-right flip (`registration.seed`); the same
     transform for every t, computed once.
     """
+
+    keep_unless_beaten = False
 
     def __init__(
         self,
@@ -294,6 +304,8 @@ class ConsensusInitialTransform:
     whose per-candidate try/except already skips a candidate that raises) treats "no
     consensus yet" the same as any other failed candidate rather than crashing.
     """
+
+    keep_unless_beaten = False
 
     def __init__(
         self,

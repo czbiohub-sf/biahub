@@ -180,3 +180,15 @@ def test_older_transforms_files_load_with_the_new_names():
         == "t=81"
     )
     assert "seeded_from" not in TransformEntry(matrix=np.eye(4).tolist()).model_dump()
+
+
+def test_only_an_earlier_result_asks_to_be_kept_unless_beaten():
+    from biahub.registration.engine.policies import (
+        ConsensusInitialTransform,
+        FixedInitialTransform,
+        ShapesInitialTransform,
+    )
+
+    for policy in (FixedInitialTransform, ShapesInitialTransform, ConsensusInitialTransform):
+        assert policy.keep_unless_beaten is False
+    assert "keep_unless_beaten" in InitialTransformPolicy.__annotations__
