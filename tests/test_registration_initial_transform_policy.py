@@ -77,10 +77,24 @@ def test_consensus_initial_transform_excludes_t_itself_even_if_it_scores_well():
     np.testing.assert_allclose(initial_transform.matrix[:3, 3], [2.5, 0.0, 0.0])
 
 
-def test_a_shapes_initial_transform_is_the_approximate_transform_from_the_two_grids():
-    # what init_run computes today: get_aprox_transform's matrix, read as inverse
+def test_a_shapes_initial_transform_takes_the_voxel_sizes_it_is_given():
+    # No built-in voxel sizes: the caller reads them from each store's metadata. Same
+    # grids and no rotation or flip leave the moving volume where it is.
     from biahub.registration.engine.policies import ShapesInitialTransform
-    from biahub.registration.seed import get_aprox_transform
+
+    shape, um = (30, 100, 100), (1.0, 0.5, 0.5)
+    same = ShapesInitialTransform(shape, shape, um, um, rotate90=0, fliplr=False)
+    np.testing.assert_allclose(same.initial_for(0).matrix, np.eye(4), atol=1e-12)
+    # the moving voxels twice the reference's in z: one moving plane spans two reference
+    # ones (the inverse matrix, reference -> moving, halves z)
+    coarse = ShapesInitialTransform(
+        shape, shape, (2.0, 0.5, 0.5), um, rotate90=0, fliplr=False
+    )
+    np.testing.assert_allclose(np.diag(coarse.inverse_matrix)[:3], (0.5, 1.0, 1.0))
+
+
+def test_a_shapes_initial_transform_is_the_same_for_every_t_and_composes_flip_rotation_scale():
+    from biahub.registration.engine.policies import ShapesInitialTransform
 
     grids = dict(
         mov_shape=(30, 100, 100),
@@ -88,16 +102,16 @@ def test_a_shapes_initial_transform_is_the_approximate_transform_from_the_two_gr
         mov_voxel_size=(0.5, 0.2, 0.2),
         ref_voxel_size=(0.6, 0.15, 0.15),
     )
-    policy = ShapesInitialTransform(
-        **grids, rotate90=-1, fliplr=False, transform_type="affine"
-    )
-    expected = get_aprox_transform(
-        **grids, pre_affine_90degree_rotation=-1, pre_affine_fliplr=False
-    )
+    policy = ShapesInitialTransform(**grids, rotate90=-1, fliplr=True, transform_type="affine")
+    mov, ref = grids["mov_shape"], grids["ref_shape"]
+    forward = (
+        Transform.from_scaling((0.5 / 0.6, 0.2 / 0.15, 0.2 / 0.15), ref, ref).matrix
+        @ Transform.from_rotation_yx(-90, mov, ref).matrix
+        @ Transform.from_flip_x(mov, ref).matrix
+    )  # flip first, then rotate, then scale (moving -> reference)
     for t in (0, 7):
-        np.testing.assert_array_equal(
-            policy.initial_for(t).matrix, Transform.from_inverse(expected.matrix).matrix
-        )
+        np.testing.assert_allclose(policy.initial_for(t).matrix, forward, atol=1e-12)
+    np.testing.assert_allclose(policy.inverse_matrix, np.linalg.inv(forward), atol=1e-12)
     assert policy.initial_for(0).transform_type == "affine"
     assert isinstance(policy, InitialTransformPolicy)
 

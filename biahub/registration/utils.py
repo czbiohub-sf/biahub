@@ -7,7 +7,8 @@
   against the store.
 
 Transforms live in `biahub.core.transform`, cropping in `biahub.estimate_crop`, the
-approximate initial transform in `registration.seed`. Shapes are ZYX.
+approximate initial transform in `ShapesInitialTransform` (`engine.policies`). Shapes are
+ZYX.
 """
 
 import click

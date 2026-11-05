@@ -233,9 +233,11 @@ class FixedInitialTransform:
 class ShapesInitialTransform:
     """`transform.initial: {from: shapes}`: the approximate transform from the two grids.
 
-    The moving grid rescaled by the voxel-size ratio onto the reference grid, after an
-    optional 90-degree rotation and left-right flip (`registration.seed`); the same
-    transform for every t, computed once.
+    The moving grid, flipped left-right (`fliplr`) and turned by `rotate90` quarter
+    turns in yx, then rescaled by the voxel-size ratio (z, and yx from the last axis)
+    onto the reference grid. The voxel sizes are the stores' own (their OME-NGFF scale;
+    only the last three axes are read): there is no default instrument. The same
+    transform for every t, computed once. ZYX order.
     """
 
     keep_unless_beaten = False
@@ -250,19 +252,17 @@ class ShapesInitialTransform:
         fliplr: bool,
         transform_type: str = "affine",
     ):
-        from biahub.registration.seed import get_aprox_transform
-
-        approx = get_aprox_transform(
-            mov_shape=mov_shape,
-            ref_shape=ref_shape,
-            mov_voxel_size=mov_voxel_size,
-            ref_voxel_size=ref_voxel_size,
-            pre_affine_90degree_rotation=rotate90,
-            pre_affine_fliplr=fliplr,
+        mov_shape, ref_shape = tuple(mov_shape[-3:]), tuple(ref_shape[-3:])
+        scale_z = mov_voxel_size[-3] / ref_voxel_size[-3]
+        scale_yx = mov_voxel_size[-1] / ref_voxel_size[-1]
+        forward = (
+            Transform.from_scaling((scale_z, scale_yx, scale_yx), ref_shape, ref_shape).matrix
+            @ Transform.from_rotation_yx(90 * rotate90, mov_shape, ref_shape).matrix
+            @ (Transform.from_flip_x(mov_shape, ref_shape).matrix if fliplr else np.eye(4))
         )
-        # get_aprox_transform's matrix maps reference to moving coordinates (inverse)
-        self.inverse_matrix = approx.matrix
-        self.transform = Transform.from_inverse(approx.matrix, transform_type)
+        # reference -> moving, as on disk (init_run shows it)
+        self.inverse_matrix = np.linalg.inv(forward)
+        self.transform = Transform.from_inverse(self.inverse_matrix, transform_type)
 
     def initial_for(self, t: int) -> Transform:
         return self.transform

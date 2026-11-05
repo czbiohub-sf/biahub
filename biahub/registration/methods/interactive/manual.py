@@ -140,36 +140,28 @@ def user_assisted_registration(
             f"Could not determine best target channel focus slice, using {target_channel_focus_idx}"
         )
 
-    # Calculate scaling factors for displaying data
-    scaling_factor_z = source_channel_voxel_size[-3] / target_channel_voxel_size[-3]
-    scaling_factor_yx = source_channel_voxel_size[-1] / target_channel_voxel_size[-1]
-    click.echo(
-        f"Z scaling factor: {scaling_factor_z:.3f}; XY scaling factor: {scaling_factor_yx:.3f}\n"
-    )
-
     # Add layers to napari with and transform
     # Rotate the image if needed here
     # Convert to ants objects
     source_zyx_ants = ants.from_numpy(source_channel_volume.astype(np.float32))
     target_zyx_ants = ants.from_numpy(target_channel_volume.astype(np.float32))
 
-    ref_shape_zyx = (target_channel_Z, target_channel_Y, target_channel_X)
-    mov_shape_zyx = (source_channel_Z, source_channel_Y, source_channel_X)
-    scaling_affine = Transform.from_scaling(
-        (scaling_factor_z, scaling_factor_yx, scaling_factor_yx), ref_shape_zyx, ref_shape_zyx
-    ).matrix
-    rotate90_affine = Transform.from_rotation_yx(
-        90 * pre_affine_90degree_rotation, mov_shape_zyx, ref_shape_zyx
-    ).matrix
+    # the approximate transform from the two grids (flip, rotate, rescale) pre-aligns the
+    # source for display; imported here: the engine imports this module
+    from biahub.registration.engine.policies import ShapesInitialTransform
 
-    # Apply flip transformation if requested (flip happens first)
-    if pre_affine_fliplr:
-        fliplr_affine = Transform.from_flip_x(mov_shape_zyx, ref_shape_zyx).matrix
-    else:
-        fliplr_affine = np.eye(4)
-
-    compound_affine = scaling_affine @ rotate90_affine @ fliplr_affine
-    tx_manual = Transform(compound_affine).to_ants().invert()
+    shapes = ShapesInitialTransform(
+        mov_shape=(source_channel_Z, source_channel_Y, source_channel_X),
+        ref_shape=(target_channel_Z, target_channel_Y, target_channel_X),
+        mov_voxel_size=source_channel_voxel_size,
+        ref_voxel_size=target_channel_voxel_size,
+        rotate90=pre_affine_90degree_rotation,
+        fliplr=pre_affine_fliplr,
+    )
+    compound_affine = shapes.transform.matrix  # moving -> reference
+    tx_manual = shapes.transform.to_ants().invert()
+    # the focus slice in reference planes, for the viewer
+    scaling_factor_z = source_channel_voxel_size[-3] / target_channel_voxel_size[-3]
 
     source_zxy_pre_reg = tx_manual.apply_to_image(source_zyx_ants, reference=target_zyx_ants)
 
