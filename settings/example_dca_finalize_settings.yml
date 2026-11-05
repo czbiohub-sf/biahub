@@ -7,6 +7,7 @@ base_config: dca_base.toml
 confirmed_config: null
 
 # Per-well sample sheet. Null uses <plate parent>/<plate stem>.dca-metadata.{csv,tsv} if present.
+# One row per well; see example_dca_metadata.csv for the columns.
 metadata_table: null
 
 # Optional AirTable source, e.g.

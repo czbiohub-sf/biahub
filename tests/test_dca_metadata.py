@@ -1,4 +1,5 @@
 import sys
+import tomllib
 
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,10 @@ from biahub.dca_metadata import (
     read_metadata_table,
 )
 from biahub.settings import AirtableSettings, DcaFinalizeSettings
+
+REPO = Path(__file__).parents[1]
+EXAMPLE_SHEET = REPO / "settings" / "example_dca_metadata.csv"
+A549_BASE = REPO / "nextflow" / "configs" / "a549" / "dca_base.toml"
 
 ROW_C2 = ["ds", "C/2", "A549", "TOMM20", "mitochondria", "ZIKV", "5", "30", "24"]
 ROW_B1 = ["ds", "B/1", "A549", "SEC61B", "endoplasmic_reticulum", "mock", "0", "30", "24"]
@@ -242,3 +247,12 @@ def test_sheet_without_matching_dataset_gives_no_rows(tmp_path):
     write_table(tmp_path / "plate.dca-metadata.csv", [ROW_C2], ",")
     settings = DcaFinalizeSettings(base_config="b.toml")
     assert metadata_rows(tmp_path / "plate.zarr", settings) == {}
+
+
+def test_example_sheet_reads_and_matches_the_a549_base():
+    rows = read_metadata_table(EXAMPLE_SHEET, dataset="2026_01_02_example_plate")
+    assert EXAMPLE_SHEET.read_text().splitlines()[0] == ",".join(TABLE_COLUMNS)
+    assert len(rows) == 3
+    base = tomllib.loads(A549_BASE.read_text())
+    control_map = base["dca"]["perturbation"]["control_class"]["map"]
+    assert {row["perturbation"] for row in rows.values()} <= set(control_map)

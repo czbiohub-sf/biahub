@@ -1,0 +1,4 @@
+dataset,well,cell_line,marker,organelle,perturbation,moi,time_interval_min,hours_post_perturbation
+2026_01_02_example_plate,B/1,A549,SEC61B,endoplasmic_reticulum,mock,0,30,24
+2026_01_02_example_plate,B/2,A549,SEC61B,endoplasmic_reticulum,DENV,5,30,24
+2026_01_02_example_plate,C/1,A549,SEC61B,endoplasmic_reticulum,ZIKV,5,30,24
