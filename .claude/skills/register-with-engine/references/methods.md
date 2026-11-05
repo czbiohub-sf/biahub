@@ -4,7 +4,7 @@
 
 | Job | Method | Notes |
 |---|---|---|
-| fluorescence -> label-free registration on a beads well | `beads` | the default; graph matching on detected beads, optional spectral arm for large offsets |
+| fluorescence -> label-free registration on a beads well | `beads` | the default; graph matching on detected beads, optional spectral candidate (`spectral`) for large offsets |
 | registration without usable beads (e.g. fluorescence onto virtual staining) | `ants` | intensity-based; see "ANTs" below; `templates/estimate-transform-ants.yml` |
 | a single hand-picked registration | `manual` | napari point annotation on one timepoint (`time_indices: <t>`), applied to all; `templates/estimate-transform-manual.yml` |
 | stabilization of a channel over time (drift) | `phase_cross_corr` | translation only; crop with `center_crop_xy` |
@@ -40,7 +40,7 @@ Every decision -- accept or flag, repair, the competitions -- uses one score per
 - `score.preprocess`: image blocks applied to the warped moving volume and the reference
   just before comparing (after the overlap is found on the raw volumes), e.g. `sobel` to
   compare edges. Intensity metrics only. The method's own `preprocess` never changes the
-  score -- not even inside the method: the bead estimators' own choices (which arm, which
+  score -- not even inside the method: the bead estimators' own choices (which candidate, which
   pass) score the raw volumes too -- so scores from configs with different blocks stay
   comparable.
 - `score.report`: more metrics computed for every transform on the raw warped pair (no

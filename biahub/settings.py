@@ -461,17 +461,24 @@ class BeadsMatchSettings(MyBaseModel):
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
     spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
-    # Second arm of the estimate: acquire the correspondence with spectral matching, then
-    # refine with `algorithm`; the higher-scoring arm wins. "on_low_score" runs it only when
-    # the first arm scores below qc_settings.score_threshold.
-    spectral_arm: Literal["off", "on_low_score", "always"] = "off"
-    # "matching": detect -> match -> fit (the configured algorithm, plus the spectral arm);
+    # A second candidate: acquire the correspondence with spectral matching, then refine
+    # with `algorithm`; the higher-scoring candidate wins. "on_low_score" runs it only when
+    # `algorithm` alone scores below qc_settings.score_threshold.
+    spectral: Literal["off", "on_low_score", "always"] = "off"
+    # "matching": detect -> match -> fit (the configured algorithm, plus `spectral`);
     # "vote_icp": correspond-by-voting ICP over the peak clouds (pointcloud.vote_icp_register).
     estimation_mode: Literal["matching", "vote_icp"] = "matching"
     vote_icp_settings: VoteIcpSettings = VoteIcpSettings()
     seed_correction_settings: SeedCorrectionSettings = SeedCorrectionSettings()
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_old_keys(cls, data):
+        if isinstance(data, dict) and "spectral_arm" in data:
+            raise ValueError("spectral_arm is now spectral (values off, on_low_score, always)")
+        return data
 
 
 class LocalPhaseCrossCorrSettings(MyBaseModel):

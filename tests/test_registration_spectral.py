@@ -189,7 +189,9 @@ def test_competing_estimator_escalates_only_below_the_threshold():
         escalate_below=-1.0,
     )
     competing.estimate(np.zeros((2, 2, 2)), np.zeros((2, 2, 2)))
-    assert second.seeds == [], "first arm scored 0.0 >= -1.0, so the second must not run"
+    assert second.seeds == [], (
+        "the first candidate scored 0.0 >= -1.0, so the second must not run"
+    )
 
 
 def test_competing_estimator_fails_with_every_arms_reason_when_all_fail():
@@ -228,10 +230,10 @@ def _beads_settings(**overrides):
     )
 
 
-def test_build_beads_estimator_builds_the_competing_cascade_when_the_spectral_arm_is_on():
+def test_build_beads_estimator_builds_the_competing_cascade_when_spectral_is_on():
     plain = build_beads_estimator(_beads_settings(), "euclidean")
-    competing = build_beads_estimator(_beads_settings(spectral_arm="always"), "euclidean")
-    gated = build_beads_estimator(_beads_settings(spectral_arm="on_low_score"), "euclidean")
+    competing = build_beads_estimator(_beads_settings(spectral="always"), "euclidean")
+    gated = build_beads_estimator(_beads_settings(spectral="on_low_score"), "euclidean")
 
     assert isinstance(plain, NodeGraphEstimator)
     assert isinstance(competing, CompetingEstimator) and list(competing.candidates) == [
@@ -243,15 +245,15 @@ def test_build_beads_estimator_builds_the_competing_cascade_when_the_spectral_ar
     assert gated.escalate_below == _beads_settings().qc_settings.score_threshold
 
 
-def test_spectral_arm_recovers_an_offset_beyond_the_hungarian_capture_range():
+def test_spectral_recovers_an_offset_beyond_the_hungarian_capture_range():
     """An offset the Hungarian matcher alone cannot match from an identity seed is
-    recovered once the spectral arm acquires the correspondence first."""
+    recovered once spectral matching acquires the correspondence first."""
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)
     ref = _synthetic_bead_volume(rng, shape, n_beads=30)
     applied_zyx = (8, -12, 16)
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
-    settings = _beads_settings(spectral_arm="always")
+    settings = _beads_settings(spectral="always")
     affine = "euclidean"
 
     hungarian_only = NodeGraphEstimator(
@@ -280,3 +282,12 @@ def test_spectral_rel_cut_of_one_keeps_the_top_correspondence():
     matcher = GraphMatcher(algorithm="spectral", spectral_sigma=3.0, spectral_rel_cut=1.0)
     matches = matcher.match(Graph.from_nodes(nodes), Graph.from_nodes(nodes + 5.0))
     assert len(matches) >= 1
+
+
+def test_the_spectral_candidate_is_configured_by_spectral_and_the_old_key_is_refused():
+    from biahub.settings import BeadsMatchSettings
+
+    assert BeadsMatchSettings(spectral="on_low_score").spectral == "on_low_score"
+    assert BeadsMatchSettings().spectral == "off"
+    with pytest.raises(ValueError, match="spectral_arm is now spectral"):
+        BeadsMatchSettings(spectral_arm="always")

@@ -453,8 +453,8 @@ class NodeGraphEstimator(EstimatorBase):
         """Bead-peak detection on both sides with the settings' matcher.
 
         `iterations` defaults to `beads_match_settings.qc_settings.iterations`. This is
-        the single-arm estimator; `engine.build_beads_estimator` composes the vote-ICP
-        mode, seed correction and the spectral arm around it.
+        the single matcher; `build_beads_estimator` composes the vote-ICP mode, seed
+        correction and the spectral candidate around it.
         """
         return cls(
             mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
@@ -802,12 +802,12 @@ def build_beads_estimator(
     score_fn: ScoreFn | None = None,
     iterations: int | None = None,
 ) -> TransformEstimator:
-    """Build the beads method as configured: matcher, estimation mode, seed correction, arms.
+    """Build the beads method as configured: matcher, estimation mode, seed correction, spectral.
 
     `estimation_mode: vote_icp` swaps the graph matcher for `VoteIcpEstimator`; a
     `seed_correction_settings.mode` other than `none` chains a `VoteSeedCorrection` in
-    front; `spectral_arm` on returns a `CompetingEstimator` of the configured matcher
-    and a spectral-acquire-then-refine cascade, the higher-scoring arm wins.
+    front; `spectral` on returns a `CompetingEstimator` of the configured matcher and a
+    spectral-acquire-then-refine cascade, the higher-scoring candidate wins.
     """
     # imported here: metrics imports this module (overlap_score, peaks_from_beads)
     from biahub.registration.metrics import metric_fn
@@ -832,7 +832,7 @@ def build_beads_estimator(
             [VoteSeedCorrection.from_beads_settings(beads_match_settings), configured],
             score_fn=score_fn,
         )
-    if beads_match_settings.spectral_arm == "off":
+    if beads_match_settings.spectral == "off":
         return configured
     spectral_settings = beads_match_settings.model_copy(deep=True)
     spectral_settings.algorithm = "spectral"
@@ -844,7 +844,7 @@ def build_beads_estimator(
         score_fn=score_fn,
         escalate_below=(
             beads_match_settings.qc_settings.score_threshold
-            if beads_match_settings.spectral_arm == "on_low_score"
+            if beads_match_settings.spectral == "on_low_score"
             else None
         ),
     )

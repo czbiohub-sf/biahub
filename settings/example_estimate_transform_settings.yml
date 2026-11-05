@@ -59,7 +59,7 @@ bead_matching:
     sigma: 3.0
     rel_cut: 0.5
     max_iter: 60
-  spectral_arm: 'off'
+  spectral: 'off'
   estimation_mode: matching
   vote_icp_settings:
     vote_peaks_settings:
