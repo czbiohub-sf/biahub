@@ -6,6 +6,12 @@
 <!-- --8<-- [start:body] -->
 Thanks for your interest in contributing to `biahub`!
 
+Participation in biahub is governed by the
+[Contributor Covenant Code of Conduct](https://github.com/czbiohub-sf/biahub/blob/main/CODE_OF_CONDUCT.md).
+
+Do not report security vulnerabilities in public issues. Follow our
+[security policy](https://github.com/czbiohub-sf/biahub/blob/main/SECURITY.md) to report them privately.
+
 ## Getting started
 
 Please read the [README](https://github.com/czbiohub-sf/biahub/blob/main/README.md) for an overview of the project,

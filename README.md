@@ -15,6 +15,9 @@ Bio-image analysis hub supporting high-throughput data reconstruction on HPC clu
 
 `biahub` was originally developed to reconstruct data acquired on the [mantis](https://doi.org/10.1093/pnasnexus/pgae323) microscope using the [shrimPy](https://github.com/czbiohub-sf/shrimPy) acquisition engine, and has since been extended to process diverse multimodal datasets. `biahub` reconstruction workflows rely on OME-ZARR datasets (for example, as created with [iohub](https://github.com/czbiohub-sf/iohub)) which enable efficient parallelization across compute nodes.
 
+> **Project status:** Active development. biahub is alpha software, and its
+> APIs, CLI, and configuration formats may change between releases.
+
 <!-- --8<-- [end:intro] -->
 
 <img src="docs/figures/dynacell_fig2.webp" alt="FOV reconstruction" width="80%">
@@ -256,4 +259,18 @@ The step modules are path-agnostic: each subworkflow is handed an input zarr, an
 ## Contributing
 
 We would appreciate bug reports and code contributions if you use this package. If you would like to contribute to this package, please read the [contributing guide](https://github.com/czbiohub-sf/biahub/blob/main/CONTRIBUTING.md).
+
+## Community
+
+Participation in biahub is governed by the
+[Contributor Covenant Code of Conduct](https://github.com/czbiohub-sf/biahub/blob/main/CODE_OF_CONDUCT.md).
+
+## Security
+
+Do not report security vulnerabilities in public issues. Follow our
+[security policy](https://github.com/czbiohub-sf/biahub/blob/main/SECURITY.md) to report them privately.
+
+## License
+
+[BSD-3-Clause](https://github.com/czbiohub-sf/biahub/blob/main/LICENSE.md)
 <!-- --8<-- [end:body] -->
