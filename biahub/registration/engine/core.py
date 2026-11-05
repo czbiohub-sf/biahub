@@ -28,6 +28,7 @@ from biahub.registration.engine.disk import (
     FLAGS_FILENAME,
     INITIAL_FILENAME,
     RUN_PLAN_FILENAME,
+    RunJournal,
     _flags,
     _load_series,
     _read_record,
@@ -328,9 +329,9 @@ def _pass_report(outcome: PassResult) -> dict:
     }
 
 
-def _report(result: SeriesResult, time_indices: list[int]) -> dict:
+def _report(result: SeriesResult, time_indices: list[int], run_id: str) -> dict:
     return {
-        "run_id": result.journal.current_run_id,
+        "run_id": run_id,
         "time_indices": time_indices,
         "scores": {
             str(t): _finite_or_none(result.scores[t])
@@ -668,13 +669,14 @@ def finalize_run(
             transform_type, fallback=result.transforms.get(t, initial.initial_for(t))
         )
 
+    journal = RunJournal()  # this finalize's fallback attempts, from the records
     for t in flags["repair"]:
         outcome = outcome_for(t, repair_records, repairs_dir, set(repaired))
         if outcome is None:
             continue
         result.repairs[t] = outcome
         reseed_score = outcome.score if outcome.reseed_score is None else outcome.reseed_score
-        result.journal.record(
+        journal.record(
             t=t,
             pass_name="repair",
             before_score=result.scores[t],
@@ -683,7 +685,7 @@ def finalize_run(
             failures=outcome.failures,
         )
         if outcome.reseed_score is not None:
-            result.journal.record(
+            journal.record(
                 t=t,
                 pass_name="polish",
                 before_score=reseed_score,
@@ -704,7 +706,7 @@ def finalize_run(
         outcome = outcome_for(t, sweep_records, sweeps_dir, set(swept))
         if outcome is None:
             continue
-        result.journal.record(
+        journal.record(
             t=t,
             pass_name="sweep",
             before_score=base_scores[t],
@@ -728,9 +730,11 @@ def finalize_run(
         result.leftover_motion = leftover_motion_report(
             result, time_indices, transforms, plan["voxel_um"]
         )
-    result.journal.save(output_dir / "run_journal.json")
+    journal.save(output_dir / "run_journal.json")
     _write_json(
-        output_dir / "estimate_transform_report.json", _report(result, time_indices), indent=2
+        output_dir / "estimate_transform_report.json",
+        _report(result, time_indices, journal.current_run_id),
+        indent=2,
     )
     return result, time_indices, transforms
 

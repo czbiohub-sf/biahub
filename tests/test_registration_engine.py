@@ -17,7 +17,7 @@ from biahub.registration.engine.policies import (
     FixedInitialTransform,
     PreviousFrame,
 )
-from biahub.registration.engine.series import RunJournal, estimate_series
+from biahub.registration.engine.series import estimate_series
 from biahub.registration.estimators import EstimationError
 
 IDENTITY = Transform.identity(3)
@@ -175,8 +175,6 @@ def test_repair_touches_only_flagged_timepoints_and_journals_them():
     assert result.repairs[5].accepted and result.repairs[5].source == "fix"
     assert result.transforms[5] is fix and result.scores[5] == 0.95
     assert [result.transforms[t] for t in range(8) if t != 5] == [IDENTITY] * 7
-    assert result.journal.accepted_this_run(5, pass_name="repair")
-    assert not result.journal.attempted_this_run(4)
 
 
 def test_repair_rescues_a_timepoint_whose_estimate_failed():
@@ -302,16 +300,14 @@ def _score_by_x(transform):
 def test_polish_keeps_improving_rounds_and_stops_at_the_first_flat_one():
     estimator = _StepEstimator(target=2.0)
     start = Transform.from_translation([0.0, 0.0, 0.0])
-    journal = RunJournal()
 
     transform, score, rounds = polish(
-        3, None, None, estimator, start, 0.0, _score_by_x, rounds=5, journal=journal
+        3, None, None, estimator, start, 0.0, _score_by_x, rounds=5
     )
 
     assert (score, rounds) == (2.0, 2)
     assert transform.translation[0] == 2.0
     assert estimator.calls == 3, "the third round did not improve, so polish stops there"
-    assert journal.accepted_this_run(3, pass_name="polish")
 
 
 def test_polish_is_capped_and_a_raising_round_keeps_the_accepted_transform():
@@ -402,7 +398,6 @@ def test_sweep_timepoint_keeps_the_best_trial_that_beats_the_estimate():
     assert outcome.scores == pytest.approx({"a": 0.05, "b": 0.4, "c": 0.3})
     assert result.scores[2] == pytest.approx(0.4)
     assert result.provenance[2] == "sweep:b"
-    assert result.journal.accepted_this_run(2, pass_name="sweep")
 
 
 def test_sweep_competes_with_repair_from_the_pre_fallback_score():

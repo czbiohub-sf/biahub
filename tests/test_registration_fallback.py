@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.engine import RunJournal, repair
+from biahub.registration.engine import repair
 from biahub.registration.engine.policies import FixedInitialTransform
 from biahub.registration.estimators import CandidateUnavailableError, EstimationError
 
@@ -101,15 +101,14 @@ def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
     assert set(result.scores) == {"good"}
 
 
-def test_repair_journals_candidate_failures_and_they_round_trip_through_disk(tmp_path):
-    journal = RunJournal()
+def test_repair_names_each_failed_candidate():
     target = np.array([10.0, 10.0, 10.0])
 
     class _RaisingSeedPolicy:
         def initial_for(self, t):
             raise CandidateUnavailableError("not enough good timepoints yet")
 
-    repair(
+    result = repair(
         t=3,
         mov=None,
         ref=None,
@@ -118,19 +117,12 @@ def test_repair_journals_candidate_failures_and_they_round_trip_through_disk(tmp
         current_score=_score_by_closeness(Transform.from_translation([0.0, 0.0, 0.0]), target),
         candidates={"consensus": _RaisingSeedPolicy()},
         score_fn=lambda t: _score_by_closeness(t, target),
-        journal=journal,
     )
 
-    (attempt,) = journal.attempts
-    assert attempt.accepted is False
-    assert attempt.failures == {
+    assert result.accepted is False
+    assert result.failures == {
         "consensus": "CandidateUnavailableError: not enough good timepoints yet"
     }
-
-    path = tmp_path / "journal.json"
-    journal.save(path)
-    (reloaded,) = RunJournal.load(path).attempts
-    assert reloaded.failures == attempt.failures
 
 
 def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whole_pass():
@@ -160,27 +152,6 @@ def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whol
 
     assert result.accepted is True
     assert result.source == "good"
-
-
-def test_repair_records_to_the_journal_when_given_one():
-    journal = RunJournal()
-    target = np.array([10.0, 10.0, 10.0])
-    candidates = {"close": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0]))}
-
-    repair(
-        t=3,
-        mov=None,
-        ref=None,
-        estimator=_EchoEstimator(),
-        current_transform=Transform.from_translation([0.0, 0.0, 0.0]),
-        current_score=_score_by_closeness(Transform.from_translation([0.0, 0.0, 0.0]), target),
-        candidates=candidates,
-        score_fn=lambda t: _score_by_closeness(t, target),
-        journal=journal,
-    )
-
-    assert journal.attempted_this_run(3, pass_name="repair") is True
-    assert journal.accepted_this_run(3, pass_name="repair") is True
 
 
 def test_a_repair_candidate_with_a_bug_is_not_hidden_as_a_failed_candidate():

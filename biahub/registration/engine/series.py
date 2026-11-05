@@ -9,12 +9,9 @@ initial-transform policy where it starts; the estimator registers that pair.
 from __future__ import annotations
 
 import inspect
-import json
-import uuid
 
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field, fields
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -38,95 +35,6 @@ from biahub.registration.estimators import (
 
 if TYPE_CHECKING:  # an annotation only
     from biahub.registration.engine.fallback import PassResult
-
-
-@dataclass
-class Attempt:
-    run_id: str
-    t: int
-    pass_name: str
-    before_score: float
-    after_score: float
-    accepted: bool
-    # candidate name -> "ExceptionType: message" for candidates that raised
-    failures: dict[str, str] = field(default_factory=dict)
-
-
-class RunJournal:
-    """Records fallback-pass attempts for one timepoint series, tagged with a run id.
-
-    A fresh `RunJournal()` generates a new run id. Loading from disk
-    (`RunJournal.load(path)`) with no `run_id` given ALSO starts a fresh run id while
-    preserving prior attempts in history -- so `attempted_this_run(t)` correctly
-    returns False for anything recorded under a different (stale) run, forcing
-    re-attempt on an ordinary restart. Explicitly continuing the *same* run (e.g.
-    resubmitting a job that was killed mid-run, without wanting to redo already-accepted
-    work) requires the caller to pass that run's id back in -- resume semantics are
-    something the caller decides, never an implicit default.
-    """
-
-    def __init__(self, run_id: str | None = None):
-        self.current_run_id = run_id or uuid.uuid4().hex
-        self.attempts: list[Attempt] = []
-
-    def record(
-        self,
-        t: int,
-        pass_name: str,
-        before_score: float,
-        after_score: float,
-        accepted: bool,
-        failures: dict[str, str] | None = None,
-    ) -> None:
-        self.attempts.append(
-            Attempt(
-                self.current_run_id,
-                t,
-                pass_name,
-                before_score,
-                after_score,
-                accepted,
-                failures=dict(failures or {}),
-            )
-        )
-
-    def attempted_this_run(self, t: int, pass_name: str | None = None) -> bool:
-        return any(
-            a.t == t
-            and a.run_id == self.current_run_id
-            and (pass_name is None or a.pass_name == pass_name)
-            for a in self.attempts
-        )
-
-    def accepted_this_run(self, t: int, pass_name: str | None = None) -> bool:
-        return any(
-            a.t == t
-            and a.run_id == self.current_run_id
-            and a.accepted
-            and (pass_name is None or a.pass_name == pass_name)
-            for a in self.attempts
-        )
-
-    def to_dict(self) -> dict:
-        return {"attempts": [asdict(a) for a in self.attempts]}
-
-    @classmethod
-    def from_dict(cls, data: dict, run_id: str | None = None) -> RunJournal:
-        journal = cls(run_id=run_id)
-        journal.attempts = [Attempt(**a) for a in data.get("attempts", [])]
-        return journal
-
-    def save(self, path: Path) -> None:
-        # imported here: disk imports series, so a module-level import would be a cycle
-        from biahub.registration.engine.disk import _write_json
-
-        _write_json(path, self.to_dict(), indent=2)
-
-    @classmethod
-    def load(cls, path: Path, run_id: str | None = None) -> RunJournal:
-        if not path.exists():
-            return cls(run_id=run_id)
-        return cls.from_dict(json.loads(path.read_text()), run_id=run_id)
 
 
 @dataclass
@@ -162,7 +70,6 @@ class SeriesResult:
     # `finalize_run` derived from them.
     raw_shifts: dict[int, dict] = field(default_factory=dict)
     leftover_motion: dict | None = None
-    journal: RunJournal = field(default_factory=RunJournal)
 
 
 @dataclass
@@ -237,7 +144,6 @@ def estimate_series(
     initial_policy: InitialTransformPolicy,
     score_fn: ScoreFn,
     time_indices: Iterable[int],
-    journal: RunJournal | None = None,
     on_timepoint: OnTimepoint | None = None,
     keep_initial: bool = False,
 ) -> SeriesResult:
@@ -247,7 +153,7 @@ def estimate_series(
     With `keep_initial` (an initial transform from a file, an earlier result) it competes
     as it is (`_keep_initial`).
     """
-    result = SeriesResult(journal=journal if journal is not None else RunJournal())
+    result = SeriesResult()
     for t in time_indices:
         _forget_blocks(estimator)
         mov_t = np.asarray(mov[t])

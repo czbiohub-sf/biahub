@@ -12,8 +12,10 @@ import hashlib
 import json
 import os
 import shutil
+import uuid
 
 from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import click
@@ -287,3 +289,54 @@ def _flags(output_dir: Path) -> dict:
     if not path.exists():
         raise click.UsageError(f"no flags in {output_dir}: run --step flag first")
     return json.loads(path.read_text())
+
+
+@dataclass
+class Attempt:
+    run_id: str
+    t: int
+    pass_name: str
+    before_score: float
+    after_score: float
+    accepted: bool
+    # candidate name -> "ExceptionType: message" for candidates that raised
+    failures: dict[str, str] = field(default_factory=dict)
+
+
+class RunJournal:
+    """The run's fallback attempts (repair, polish, sweep), written by finalize.
+
+    Built from the pass records when a run is finalized and saved as `run_journal.json`;
+    `current_run_id` tags every attempt of this finalize.
+    """
+
+    def __init__(self, run_id: str | None = None):
+        self.current_run_id = run_id or uuid.uuid4().hex
+        self.attempts: list[Attempt] = []
+
+    def record(
+        self,
+        t: int,
+        pass_name: str,
+        before_score: float,
+        after_score: float,
+        accepted: bool,
+        failures: dict[str, str] | None = None,
+    ) -> None:
+        self.attempts.append(
+            Attempt(
+                self.current_run_id,
+                t,
+                pass_name,
+                before_score,
+                after_score,
+                accepted,
+                failures=dict(failures or {}),
+            )
+        )
+
+    def to_dict(self) -> dict:
+        return {"attempts": [asdict(a) for a in self.attempts]}
+
+    def save(self, path: Path) -> None:
+        _write_json(path, self.to_dict(), indent=2)

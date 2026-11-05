@@ -24,7 +24,6 @@ from biahub.registration.engine.policies import (
     ReferencePolicy,
 )
 from biahub.registration.engine.series import (
-    RunJournal,
     SeriesResult,
 )
 from biahub.registration.estimators import (
@@ -271,12 +270,11 @@ def _best_of(
     current_transform: Transform,
     current_score: float,
     score_fn: Callable[[Transform], float],
-    journal: RunJournal | None,
 ) -> PassResult:
     """Run each attempt in order; keep the best-scoring one if it strictly beats current.
 
     An attempt that raises is skipped, not fatal, and its exception is kept in
-    `PassResult.failures` (and the journal) so a broken candidate is distinguishable
+    `PassResult.failures` so a broken candidate is distinguishable
     from one that merely lost. Ties go to the earlier attempt.
     """
 
@@ -294,15 +292,6 @@ def _best_of(
     best_name, best_transform, best_score = chosen.name, chosen.transform, chosen.score
     scores, failures = chosen.scores, chosen.failures
     accepted = best_name != "unchanged"
-    if journal is not None:
-        journal.record(
-            t=t,
-            pass_name=pass_name,
-            before_score=current_score,
-            after_score=best_score,
-            accepted=accepted,
-            failures=failures,
-        )
     return PassResult(
         transform=best_transform,
         score=best_score,
@@ -322,7 +311,6 @@ def repair(
     current_score: float,
     candidates: dict[str, InitialTransformPolicy],
     score_fn: Callable[[Transform], float],
-    journal: RunJournal | None = None,
 ) -> PassResult:
     """Re-estimate timepoint `t` from each candidate seed; keep whichever scores best.
 
@@ -341,7 +329,6 @@ def repair(
         current_transform,
         current_score,
         score_fn,
-        journal,
     )
 
 
@@ -354,7 +341,6 @@ def sweep(
     current_transform: Transform,
     current_score: float,
     score_fn: Callable[[Transform], float],
-    journal: RunJournal | None = None,
 ) -> PassResult:
     """Re-estimate timepoint `t` with each trial's estimator from `seed`; keep the best.
 
@@ -372,7 +358,6 @@ def sweep(
         current_transform,
         current_score,
         score_fn,
-        journal,
     )
 
 
@@ -385,7 +370,6 @@ def polish(
     score: float,
     score_fn: Callable[[Transform], float],
     rounds: int,
-    journal: RunJournal | None = None,
 ) -> tuple[Transform, float, int]:
     """Re-seed the estimator from `transform` and refine again, up to `rounds` times.
 
@@ -394,7 +378,7 @@ def polish(
     produced it. A round is kept only on a strict score gain; the first round that fails
     to improve (or raises) ends the pass. Returns (transform, score, improving rounds).
     """
-    before, improved = score, 0
+    improved = 0
     for _ in range(rounds):
         try:
             candidate = estimator.estimate(mov, ref, seed=transform)
@@ -404,14 +388,6 @@ def polish(
         if not is_higher(candidate_score, score):
             break
         transform, score, improved = candidate, candidate_score, improved + 1
-    if journal is not None and rounds:
-        journal.record(
-            t=t,
-            pass_name="polish",
-            before_score=before,
-            after_score=score,
-            accepted=improved > 0,
-        )
     return transform, score, improved
 
 
@@ -470,7 +446,6 @@ def repair_timepoint(
         current_score=result.scores[t] if current is not None else -np.inf,
         candidates=candidates(t, result.transforms, result.scores, set(result.flagged)),
         score_fn=lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
-        journal=result.journal,
     )
     if outcome.accepted and polish_rounds:
         outcome.reseed_score = outcome.score
@@ -483,7 +458,6 @@ def repair_timepoint(
             outcome.score,
             lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
             polish_rounds,
-            journal=result.journal,
         )
         if outcome.polish_rounds:
             outcome.source += f"+polish{outcome.polish_rounds}"
@@ -541,7 +515,6 @@ def sweep_timepoint(
         current_transform=current if current is not None else Transform.identity(mov_t.ndim),
         current_score=-np.inf if not np.isfinite(baseline_score) else baseline_score,
         score_fn=lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
-        journal=result.journal,
     )
     _fold_sweep(result, t, outcome)
     return outcome

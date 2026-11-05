@@ -15,7 +15,7 @@ from biahub.registration.engine.core import (
     init_run,
     transforms_for_file,
 )
-from biahub.registration.engine.disk import JOB_FAILED_PREFIX
+from biahub.registration.engine.disk import JOB_FAILED_PREFIX, RunJournal
 from biahub.registration.engine.fallback import (
     PassResult,
     flag_timepoints,
@@ -24,7 +24,6 @@ from biahub.registration.engine.fallback import (
     select_flagged,
 )
 from biahub.registration.engine.series import (
-    RunJournal,
     SeriesResult,
     estimate_propagated,
     estimate_series,
