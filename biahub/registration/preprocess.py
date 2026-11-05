@@ -148,8 +148,8 @@ class RawVolumeScore:
     """A method's own score function, held to the raw volumes while its input is prepared.
 
     Blocks change what a method estimates from, not what it is judged on: during a
-    `PreprocessedEstimator` estimate, every internal choice (which candidate, which pass) scores
-    the raw volumes, as the engine's decision does.
+    `PreprocessedEstimator` estimate, every internal choice (which candidate, which
+    pass) scores the raw volumes, as the engine's decision does.
     """
 
     def __init__(self, score_fn):

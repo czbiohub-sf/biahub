@@ -143,9 +143,9 @@ def test_nuclei_on_a_single_slice():
 
 
 def test_the_initial_transform_padding_does_not_hide_the_moving_nuclei():
-    # DragonFly DAPI sits on a camera offset (~250); warped by an initial transform that moves it ~40 px,
-    # the zero padding pulled the detection threshold below the background, every nucleus
-    # merged into one object, and 0 moving nuclei were found.
+    # DragonFly DAPI sits on a camera offset (~250); warped by an initial transform that
+    # moves it ~40 px, the zero padding pulled the detection threshold below the
+    # background, every nucleus merged into one object, and 0 moving nuclei were found.
     truth = _forward(shift_vox=(2.0, 40.0, -35.0))
     mov, ref = _pair(truth)
     found = _estimator().estimate(mov + 250.0, ref, initial_transform=truth)

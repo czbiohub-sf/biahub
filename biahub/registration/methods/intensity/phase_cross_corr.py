@@ -256,7 +256,8 @@ class PCCEstimator(EstimatorBase):
     sub-volume (a translation measured on a crop holds for the whole volume).
     """
 
-    # Ignores the initial transform: repair from other initial transforms would return the same answer.
+    # Ignores the initial transform: repair from other initial transforms would return
+    # the same answer.
     uses_initial_transform = False
 
     def __init__(

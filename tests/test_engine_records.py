@@ -144,7 +144,7 @@ def test_bead_landmarks_find_the_estimates_settings_in_a_multi_position_run(tmp_
 
 
 class _Traced(EstimatorBase):
-    """Returns its initial transform shifted by `d` in x, scored by x; its trace names the call."""
+    """Shifts its initial transform by `d` in x (scored by x); its trace names the call."""
 
     def __init__(self, d=1.0, fail=False):
         self.d, self.fail, self.calls = d, fail, 0
@@ -200,8 +200,9 @@ def test_a_series_keeps_each_timepoints_trace_and_drops_it_where_nothing_was_est
 
 
 def test_propagation_keeps_the_trace_of_the_start_that_won():
-    # run from the previous result (x=1 -> 2) and from the run's initial transform (x=0 -> 1): the
-    # previous one wins, so t=1's trace is that first call's, not the later one's
+    # run from the previous result (x=1 -> 2) and from the run's initial transform (x=0
+    # -> 1): the previous one wins, so t=1's trace is that first call's, not the later
+    # one's
     from biahub.registration.engine.policies import CrossChannel
     from biahub.registration.engine.series import estimate_propagated
 

@@ -1,4 +1,4 @@
-"""An initial transform from a transforms file (an earlier result) and pooling positions into one transform.
+"""An initial transform from a transforms file (an earlier result), and pooling positions.
 
 Together they give the plate-then-position flow: estimate on a few positions with
 `pool:` (one shared transform), then on every position with `transform.initial` from
@@ -131,8 +131,8 @@ def test_each_position_refines_from_the_initial_transform_file(three_positions, 
 def test_a_failed_estimate_keeps_the_initial_transform_files_transform(
     three_positions, tmp_path
 ):
-    # no beads detected (threshold above every peak): the estimate fails, the initial transform file's
-    # transform is kept as it is, scored, and says so
+    # no beads detected (threshold above every peak): the estimate fails, the initial
+    # transform file's transform is kept as it is, scored, and says so
     initial_transform_file = _plate_file(tmp_path, SHIFTS["0"])
     peaks = DetectPeaksSettings(
         threshold_abs=1e9, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
@@ -200,8 +200,8 @@ def test_pool_refuses_a_chained_stabilization():
 def test_a_timepoint_without_an_estimate_falls_back_to_its_initial_transform_from_the_file(
     tmp_path,
 ):
-    # An empty frame (or a crashed job) has no estimate: its stand-in must be the initial transform
-    # file's transform for that timepoint, not the config seed (identity with seed_file).
+    # An empty frame (or a crashed job) has no estimate: its stand-in must be the
+    # initial transform file's transform for that timepoint, not identity.
     from tests.test_estimate_transform import _write_plate
 
     rng = np.random.default_rng(11)

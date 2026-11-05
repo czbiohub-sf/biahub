@@ -50,7 +50,8 @@ class SeriesResult:
     # came from ("t=81", "initial", "identity"); set by `transforms_for_file`.
     filled_from: dict[int, str] = field(default_factory=dict)
     # A stand-in decided while estimating (propagation: a failed timepoint returns the
-    # initial transform it started from), with its source; used instead of the run's initial transform.
+    # initial transform it started from), with its source; used instead of the run's
+    # initial transform.
     stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
     # What the estimator did at each estimated t (its `trace()`): a stack's blocks, and
     # the candidate a competition kept.
@@ -191,11 +192,11 @@ def estimate_series(
 
 
 def _keep_initial(estimate, initial_transform, score_fn, mov, ref) -> tuple[tuple, str]:
-    """Return the estimate if it scores strictly better than the initial transform as it is, else the initial transform.
+    """Return the estimate if it scores strictly better than the initial transform, else it.
 
-    The initial transform is an earlier result (`from: file`), so a run from it never ends worse than
-    it: a failed or no better estimate keeps it. Returns ((transform, score), source),
-    source "file+refined" or "file".
+    The initial transform is an earlier result (`from: file`), so a run from it never
+    ends worse than it: a failed or no better estimate keeps it. Returns ((transform,
+    score), source), source "file+refined" or "file".
     """
     kept = (initial_transform, float(score_fn(initial_transform, mov, ref)))
     if estimate is not None and is_higher(estimate[1], kept[1]):
@@ -230,11 +231,12 @@ def _gap_rule(estimator, reference_policy, mov, t: int, transform: Transform) ->
 def _estimate_competing(
     estimator, mov, ref, initial_transform, competitor, score_fn
 ) -> tuple[Transform, dict]:
-    """Estimate from `initial_transform`, with `competitor` competing (ties to the initial transform).
+    """Estimate from `initial_transform`, with `competitor` competing (ties keep the first).
 
     An estimator that takes a competitor refines both on its first pass (the legacy
-    rule); any other estimator is run from both initial transforms and the better score is kept.
-    Returns the transform and the estimator's trace of the start that produced it.
+    rule); any other estimator is run from both initial transforms and the better score
+    is kept. Returns the transform and the estimator's trace of the start that produced
+    it.
     """
     if competitor is None:
         return estimator.estimate(
@@ -283,13 +285,13 @@ def estimate_propagated(
     """Estimate timepoints in order, each starting from the previous one's result.
 
     The legacy `use_prev_t_transform` rules: timepoint t starts from what t-1 returned,
-    with `initial_transform` competing on the first pass; a timepoint that fails returns the
-    initial transform it started from (recorded as a stand-in, the error kept) and that initial transform is
-    passed on; an empty frame (no data) is skipped and the chain carries on from the last
-    result before it; the
-    stabilization reference frame is not estimated against itself -- it is identity, and
-    the chain starts after it from `initial_transform`. `done` holds records of timepoints
-    already estimated (resume): they are not redone, only used to continue the chain.
+    with `initial_transform` competing on the first pass; a timepoint that fails returns
+    the initial transform it started from (recorded as a stand-in, the error kept) and
+    that initial transform is passed on; an empty frame (no data) is skipped and the
+    chain carries on from the last result before it; the stabilization reference frame
+    is not estimated against itself -- it is identity, and the chain starts after it
+    from `initial_transform`. `done` holds records of timepoints already estimated
+    (resume): they are not redone, only used to continue the chain.
     """
     done = done or {}
     result = SeriesResult()

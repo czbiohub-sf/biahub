@@ -6,8 +6,8 @@ analyses with all of them (residuals in voxels or µm); both call them from here
 Two families, because the pipeline registers across modalities:
 
 - Bead metrics (`bead_alignment_metrics`, `residual_score`) need beads visible in both
-  channels. They complement `bead_matching.overlap_score`, which is a bead-count ratio quantized
-  at ~1/N per bead, with continuous residuals in voxels.
+  channels. They complement `bead_matching.overlap_score`, which is a bead-count ratio
+  quantized at ~1/N per bead, with continuous residuals in voxels.
 - Intensity metrics work on any pair of channels. Plain correlation is meaningless
   between, say, phase and fluorescence (the correct transform can score ~0.1), so
   `normalized_mutual_information` -- the cross-modal similarity ANTs' Mattes metric

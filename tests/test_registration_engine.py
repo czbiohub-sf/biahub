@@ -502,7 +502,8 @@ def test_estimate_propagated_follows_the_legacy_rules():
     x = {t: tr.translation[2] for t, tr in result.transforms.items()}
     # t0 from the run's initial transform (+1); t1 from t0 (+1) -> 2
     assert x[0] == 1.0 and x[1] == 2.0
-    # t2 fails: it returns the initial transform it started from (t1's result), recorded as a stand-in
+    # t2 fails: it returns the initial transform it started from (t1's result), recorded
+    # as a stand-in
     assert 2 not in result.transforms and "too few matches" in result.errors[2]
     stand_in, source = result.stand_ins[2]
     assert stand_in.translation[2] == 2.0 and source == "t=1"
@@ -544,8 +545,9 @@ def test_estimate_propagated_lets_the_input_initial_transform_compete_and_resume
 
     mov = _frames([1, 2, 3])
 
-    # The input initial transform is at x=10; scores favour transforms near x=11, so from t=1 the
-    # estimate started from the run's initial transform beats the one from the previous result.
+    # The input initial transform is at x=10; scores favour transforms near x=11, so
+    # from t=1 the estimate started from the run's initial transform beats the one from
+    # the previous result.
     def score(transform, m, r):
         return -abs(transform.translation[2] - 11.0)
 
@@ -625,12 +627,13 @@ def test_estimate_propagated_does_not_estimate_the_stabilization_reference_frame
         _frames([1, 2, 3]), reference_policy, estimator, _shift_x(10), _finite_score, range(3)
     )
     assert result.transforms[0].is_identity  # t=0 is the reference itself
-    # t=0 never estimated: t=1 from the run's initial transform; t=2 from t=1's result, with the input
-    # initial transform competing (a generic estimator is run from both)
+    # t=0 never estimated: t=1 from the run's initial transform; t=2 from t=1's result,
+    # with the input initial transform competing (a generic estimator is run from both)
     assert [
         initial_transform.translation[2] for initial_transform in estimator.initial_transforms
     ] == [10.0, 11.0, 10.0]
-    # the chain starts after the reference from the run's initial transform (x=10), as legacy did
+    # the chain starts after the reference from the run's initial transform (x=10), as
+    # legacy did
     assert result.transforms[1].translation[2] == 11.0
     assert result.transforms[2].translation[2] == 12.0
 

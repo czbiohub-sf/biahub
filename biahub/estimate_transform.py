@@ -63,9 +63,10 @@ def transform_entries(
     """One entry per estimated timepoint with its score, repair provenance and status.
 
     A timepoint is `unreliable` when the pipeline found no good transform for it: none
-    at all (the entry is a stand-in -- the run's initial transform -- and `note` says why), no score,
-    a stack block that failed (`note` names it and the block kept instead), or flagged and
-    still below `hard_fail` after repair and sweep. Otherwise `accepted`.
+    at all (the entry is a stand-in -- the run's initial transform -- and `note` says
+    why), no score, a stack block that failed (`note` names it and the block kept
+    instead), or flagged and still below `hard_fail` after repair and sweep. Otherwise
+    `accepted`.
 
     A single timepoint (manual, `time_indices: 0`) is the series' transform: one entry
     without `t`, which `apply-transform` applies to every timepoint.
@@ -720,7 +721,8 @@ def estimate_transform_cli(
         )
         if result and result.get("failed"):
             # Recorded (the run can carry on), but not a success: a distinct exit code
-            # lets a workflow retry it and keep it out of its cache (nextflow/modules/registration.nf).
+            # lets a workflow retry it and keep it out of its cache
+            # (nextflow/modules/registration.nf).
             click.echo(f"{step}: jobs failed at {result['failed']}", err=True)
             raise SystemExit(JOBS_FAILED_EXIT_CODE)
         return

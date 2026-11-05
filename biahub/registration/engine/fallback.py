@@ -312,10 +312,11 @@ def repair(
     candidates: dict[str, InitialTransformPolicy],
     score_fn: Callable[[Transform], float],
 ) -> PassResult:
-    """Re-estimate timepoint `t` from each candidate initial transform; keep whichever scores best.
+    """Re-estimate timepoint `t` from each candidate initial transform; keep the best score.
 
-    A candidate whose `initial_for()` raises -- e.g. `ConsensusInitialTransform` when too few timepoints
-    score well enough yet -- is skipped like one whose `estimate()` raises.
+    A candidate whose `initial_for()` raises -- e.g. `ConsensusInitialTransform` when
+    too few timepoints score well enough yet -- is skipped like one whose `estimate()`
+    raises.
     """
     return _best_of(
         t,
@@ -344,11 +345,12 @@ def sweep(
     current_score: float,
     score_fn: Callable[[Transform], float],
 ) -> PassResult:
-    """Re-estimate timepoint `t` with each trial's estimator from `initial_transform`; keep the best.
+    """Re-estimate `t` with each trial's estimator from `initial_transform`; keep the best.
 
-    Repair changes the initial transform and keeps the method; the sweep keeps the initial transform and changes the
-    method's settings, for the timepoints the run's one parameter set does not serve.
-    `score_fn` is the run's own, so every trial is judged on the same scale.
+    Repair changes the initial transform and keeps the method; the sweep keeps the
+    initial transform and changes the method's settings, for the timepoints the run's
+    one parameter set does not serve. `score_fn` is the run's own, so every trial is
+    judged on the same scale.
     """
     return _best_of(
         t,
@@ -379,10 +381,11 @@ def polish(
 ) -> tuple[Transform, float, int]:
     """Restart the estimator from `transform` and refine again, up to `rounds` times.
 
-    Repair candidates are coarse initial transforms and detection runs in the initial-transform-warped space, so an
-    estimate started from the accepted transform sees better nodes than the one that
-    produced it. A round is kept only on a strict score gain; the first round that fails
-    to improve (or raises) ends the pass. Returns (transform, score, improving rounds).
+    Repair candidates are coarse initial transforms and detection runs in the
+    initial-transform-warped space, so an estimate started from the accepted transform
+    sees better nodes than the one that produced it. A round is kept only on a strict
+    score gain; the first round that fails to improve (or raises) ends the pass. Returns
+    (transform, score, improving rounds).
     """
     improved = 0
     for _ in range(rounds):

@@ -1,4 +1,4 @@
-"""Local phase cross-correlation: tile shifts on max projections, fitted in yx; z stays the initial transform's."""
+"""Local phase cross-correlation: tile shifts on max projections, fitted in yx; z kept."""
 
 import numpy as np
 import pytest

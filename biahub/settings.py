@@ -28,7 +28,8 @@ from pydantic import (
 )
 
 
-# All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
+# All settings classes inherit from MyBaseModel, which forbids extra parameters to guard
+# against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -173,8 +174,8 @@ class TrackastraConfig(MyBaseModel):
 
     ``model`` is a pretrained name (``general_2d``, ``ctc``) or a path to a trained
     model folder. ``mode`` links greedily (``greedy``, or ``greedy_nodiv`` without
-    divisions) or with an ILP (``ilp``, via motile and ilpy: Gurobi with a full licence, else SCIP).
-    The model predicts in pixel space and needs no distance settings.
+    divisions) or with an ILP (``ilp``, via motile and ilpy: Gurobi with a full licence,
+    else SCIP). The model predicts in pixel space and needs no distance settings.
     """
 
     model: str = "general_2d"
@@ -393,19 +394,20 @@ class SpectralMatchSettings(MyBaseModel):
 
 
 class InitialTransformCorrectionSettings(MyBaseModel):
-    """Correct a per-timepoint initial transform by bead displacement voting before estimating.
+    """Correct a per-timepoint initial transform by bead displacement voting first.
 
-    For a series whose geometry drifts beyond the static initial transform's capture range while the
-    bead field is too thin for the matchers to re-acquire from scratch. The moving volume
-    is warped with the initial transform, beads are detected densely (`vote_peaks_settings`) and each
-    votes for its displacement to every reference bead within `capture_radius`; the mean
-    of the densest `cluster_radius`-ball of votes is the residual drift. "voteseed"
-    composes that translation into the initial transform; "votefit" additionally fits an affine on the
-    cluster's members, kept only if it lowers the peaks' median nearest-neighbour distance.
-    Candidates only compete against the unchanged initial transform, so a bad vote cannot make it worse.
+    For a series whose geometry drifts beyond the static initial transform's capture
+    range while the bead field is too thin for the matchers to re-acquire from scratch.
+    The moving volume is warped with the initial transform, beads are detected densely
+    (`vote_peaks_settings`) and each votes for its displacement to every reference bead
+    within `capture_radius`; the mean of the densest `cluster_radius`-ball of votes is
+    the residual drift. "vote_translation" composes that translation into the initial
+    transform; "vote_affine" also fits an affine on the cluster's members, kept only if
+    it lowers the peaks' median nearest-neighbour distance. Candidates only compete
+    against the unchanged initial transform, so a bad vote cannot make it worse.
     """
 
-    mode: Literal["none", "voteseed", "votefit"] = "none"
+    mode: Literal["none", "vote_translation", "vote_affine"] = "none"
     vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
         threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
     )
@@ -417,12 +419,12 @@ class InitialTransformCorrectionSettings(MyBaseModel):
 class VoteIcpSettings(MyBaseModel):
     """Tunables for `estimation_mode: vote_icp` (see `pointcloud.vote_icp_register`).
 
-    The capture radius starts wide enough to reach a badly drifted initial transform and shrinks
-    geometrically each iteration (default 80 -> 40 -> 20 -> 10, then held), so early
-    rounds recover the bulk misalignment and late rounds only see unambiguous neighbours.
-    `vote_peaks_settings` is the dense detection on the raw moving volume for the reach
-    stage; a precision stage re-runs at short range with the pipeline's own
-    `source_peaks_settings` and is kept only on a strict score win.
+    The capture radius starts wide enough to reach a badly drifted initial transform and
+    shrinks geometrically each iteration (default 80 -> 40 -> 20 -> 10, then held), so
+    early rounds recover the bulk misalignment and late rounds only see unambiguous
+    neighbours. `vote_peaks_settings` is the dense detection on the raw moving volume
+    for the reach stage; a precision stage re-runs at short range with the pipeline's
+    own `source_peaks_settings` and is kept only on a strict score win.
     """
 
     vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
@@ -2020,8 +2022,9 @@ class EstimateTransformSettings(MyBaseModel):
     def check_sweep_paths(self) -> "EstimateTransformSettings":
         if self.fallback.sweep is None or self.is_stack:  # (a stack refuses sweeps)
             return self
-        # A sweep trial only rebuilds the estimator: the score, initial transform and reference come
-        # from these settings, so only the method's own block and the fit type can change.
+        # A sweep trial only rebuilds the estimator: the score, initial transform and
+        # reference come from these settings, so only the method's own block and the fit
+        # type can change.
         block = METHOD_BLOCKS[self.method]
         for overrides in self.fallback.sweep.trials():
             for path in overrides:
@@ -2071,8 +2074,8 @@ class EstimateTransformSettings(MyBaseModel):
     def stack_settings(self) -> list["EstimateTransformSettings"]:
         """Return one single-method config per block (these settings alone if not a stack).
 
-        Each block's method, settings, preprocess and transform type; the reference, initial transform,
-        score, fallback and time indices are the run's.
+        Each block's method, settings, preprocess and transform type; the reference,
+        initial transform, score, fallback and time indices are the run's.
         """
         if not self.is_stack:
             return [self]

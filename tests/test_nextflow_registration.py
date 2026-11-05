@@ -404,7 +404,8 @@ def test_registration_nf_reruns_the_estimate_when_its_initial_transform_file_is_
     tmp_path,
 ):
     # transform.initial.file is named by the config; the file itself is staged too, so
-    # rewriting it in place reruns the estimate instead of reusing the old initial transform's results.
+    # rewriting it in place reruns the estimate instead of reusing the old initial
+    # transform's results.
     import json
 
     from biahub.core.transform import Transform

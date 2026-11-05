@@ -22,7 +22,8 @@ class StackregEstimator(EstimatorBase):
     forward, moving -> reference, (Y, X)).
     """
 
-    # Ignores the initial transform: repair from other initial transforms would return the same answer.
+    # Ignores the initial transform: repair from other initial transforms would return
+    # the same answer.
     uses_initial_transform = False
 
     _AXIS_SWAP = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float64)

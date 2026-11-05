@@ -226,7 +226,7 @@ class _JobInputs(NamedTuple):
 def _job_inputs(
     moving_position_dirpath: Path, reference_position_dirpath: Path, settings_path: Path
 ) -> _JobInputs:
-    """Return what every job starts from: the run's settings, both series, estimator, initial transform."""
+    """Return what every job starts from: settings, series, estimator, initial transform."""
     use_task_threads()  # a fresh job process: before any ITK operation
     settings = yaml_to_model(settings_path, EstimateTransformSettings)
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
@@ -256,7 +256,7 @@ def _estimate_timepoint_job(
     t: int,
     record_path: Path,
 ) -> dict:
-    """One independent estimate, from the config initial transform, written as a JSON record."""
+    """One independent estimate, from the run's initial transform, written as a JSON record."""
     job = _job_inputs(moving_position_dirpath, reference_position_dirpath, settings_path)
     settings, mov, ref = job.settings, job.mov, job.ref
     # t is read by the estimate and every extra; the previous timepoint only by leftover

@@ -22,8 +22,9 @@ def test_fixed_initial_transform_returns_the_same_transform_for_every_t():
         assert policy.initial_for(t) is transform
 
 
-def test_fixed_initial_transform_is_how_optimize_registration_becomes_an_initial_transform_not_a_command():
-    # "Refine an existing transform" is just estimate() with this as the initial transform policy.
+def test_a_fixed_initial_transform_is_how_optimize_registration_needs_no_command():
+    # "Refine an existing transform" is just estimate() with this as the initial
+    # transform policy.
     existing_transform = Transform.from_translation([7.0, -3.0, 0.5])
     policy = FixedInitialTransform(existing_transform)
     assert policy.initial_for(0) is existing_transform
@@ -66,7 +67,8 @@ def test_consensus_initial_transform_excludes_t_itself_even_if_it_scores_well():
         3: Transform.from_translation([-1000.0, 0.0, 0.0]),
         4: Transform.from_translation([4.0, 0.0, 0.0]),
     }
-    # t=3 has a (spuriously) good score but must never contaminate its own consensus initial transform.
+    # t=3 has a (spuriously) good score but must never contaminate its own consensus
+    # initial transform.
     scores = {0: 0.9, 1: 0.9, 2: 0.9, 3: 0.99, 4: 0.9}
     policy = ConsensusInitialTransform(
         history=history, scores=scores, score_threshold=0.75, min_good=4

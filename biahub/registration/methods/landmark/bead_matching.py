@@ -403,10 +403,11 @@ class NodeGraphEstimator(EstimatorBase):
 
     One pass warps `mov` by the current guess (`Transform.apply`), detects nodes in the
     warped frame, matches, fits the residual correction and composes it back
-    (`correction @ initial_transform`: the initial transform first, then the correction). Nodes are detected in the warped
-    frame, so each pass sees a better-aligned image than the last; `iterations > 1` with
-    a `score_fn` repeats the pass from the previous result and returns the best-scoring
-    transform (never a later, worse one). Without a `score_fn` the last pass is returned.
+    (`correction @ initial_transform`: the initial transform first, then the
+    correction). Nodes are detected in the warped frame, so each pass sees a
+    better-aligned image than the last; `iterations > 1` with a `score_fn` repeats the
+    pass from the previous result and returns the best-scoring transform (never a later,
+    worse one). Without a `score_fn` the last pass is returned.
 
     As in the legacy pipeline, a pass keeps its input when the refinement scores lower
     (ties go to the refinement), and a score of exactly 1.0 ends the passes early.
@@ -453,8 +454,8 @@ class NodeGraphEstimator(EstimatorBase):
         """Bead-peak detection on both sides with the settings' matcher.
 
         `iterations` defaults to `beads_match_settings.qc_settings.iterations`. This is
-        the single matcher; `build_beads_estimator` composes the vote-ICP mode, initial transform
-        correction and the spectral candidate around it.
+        the single matcher; `build_beads_estimator` composes the vote-ICP mode, initial
+        transform correction and the spectral candidate around it.
         """
         return cls(
             mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
@@ -476,12 +477,13 @@ class NodeGraphEstimator(EstimatorBase):
         initial_transform: Transform | None = None,
         competitor: Transform | None = None,
     ) -> Transform:
-        """Refine `initial_transform` over the configured passes; return the best-scoring result.
+        """Refine `initial_transform` over the configured passes; return the best-scoring one.
 
         `competitor`, when given, is refined too on the first pass and replaces the
-        initial transform's result only if it scores strictly higher; later passes continue from the
-        winner. This is the legacy `user_transform` competition, used by propagation to
-        let the run's initial transform compete with the previous timepoint's result.
+        initial transform's result only if it scores strictly higher; later passes
+        continue from the winner. This is the legacy `user_transform` competition, used
+        by propagation to let the run's initial transform compete with the previous
+        timepoint's result.
         """
         mov = np.asarray(mov)
         ref = np.asarray(ref)
@@ -597,9 +599,10 @@ class VoteIcpEstimator(EstimatorBase):
     """TransformEstimator over peak clouds by iterated displacement voting.
 
     Reach stage: dense detection on the raw moving volume (`vote_peaks_settings`), voted
-    ICP from the initial transform with a wide, shrinking capture radius. Precision stage: re-run at
-    short range from that result with the pipeline's own moving detection, kept only on a
-    strict score win. Raises `EstimationError` when voting abstains before any fit.
+    ICP from the initial transform with a wide, shrinking capture radius. Precision
+    stage: re-run at short range from that result with the pipeline's own moving
+    detection, kept only on a strict score win. Raises `EstimationError` when voting
+    abstains before any fit.
     """
 
     def __init__(
@@ -701,14 +704,15 @@ class VoteIcpEstimator(EstimatorBase):
 
 
 class VoteInitialTransformCorrection(EstimatorBase):
-    """A stage that corrects an initial transform by bead displacement voting, for a chain's first slot.
+    """Correct an initial transform by bead displacement voting: a chain's first stage.
 
-    Warps `mov` by the initial transform, detects beads densely and votes for the residual drift;
-    "voteseed" composes the densest cluster's mean displacement into the initial transform, "votefit"
-    also fits an affine on the cluster's pairs. Every candidate competes against the
-    unchanged initial transform on the median nearest-neighbour distance of the pipeline's own
-    detection, so a bad vote leaves the initial transform unchanged. Returns the (possibly unchanged)
-    initial transform; without an initial transform, the identity.
+    Warps `mov` by the initial transform, detects beads densely and votes for the
+    residual drift; "vote_translation" composes the densest cluster's mean displacement
+    into the initial transform, "vote_affine" also fits an affine on the cluster's
+    pairs. Every candidate competes against the unchanged initial transform on the
+    median nearest-neighbour distance of the pipeline's own detection, so a bad vote
+    leaves the initial transform unchanged. Returns the (possibly unchanged) initial
+    transform; without an initial transform, the identity.
     """
 
     def __init__(
@@ -766,11 +770,15 @@ class VoteInitialTransformCorrection(EstimatorBase):
             settings.min_votes,
         )
         if drift is None:
-            self.last_note = f"only {len(dense_peaks)} dense peaks / too few votes; initial transform unchanged"
+            self.last_note = (
+                f"only {len(dense_peaks)} dense peaks / too few votes; initial transform "
+                "unchanged"
+            )
             return initial_transform
-        # Work in the inverse convention the vote was measured in: the initial transform maps reference
-        # coordinates to moving sample coordinates, so undoing an image drift of +d in the
-        # reference frame composes as inverse @ T(-d). Both signs compete with the unchanged initial transform.
+        # Work in the inverse convention the vote was measured in: the initial transform
+        # maps reference coordinates to moving sample coordinates, so undoing an image
+        # drift of +d in the reference frame composes as inverse @ T(-d). Both signs
+        # compete with the unchanged initial transform.
         inverse = initial_transform.invert().matrix
         candidates = {
             "keep": initial_transform,
@@ -781,10 +789,11 @@ class VoteInitialTransformCorrection(EstimatorBase):
         best = min(nn, key=nn.get)
         corrected = candidates[best]
         note = f"drift={np.round(drift, 1).tolist()} votes={n_votes} pick={best}"
-        if settings.mode == "votefit" and len(pairs) >= 4:
-            # The cluster's votes are correspondences (warped moving peak p, reference peak
-            # q) in the uncorrected initial transform's warped frame; re-warping should put p at q, i.e.
-            # sample point C(q) = p, so the fit composes onto the initial transform as inverse @ C.
+        if settings.mode == "vote_affine" and len(pairs) >= 4:
+            # The cluster's votes are correspondences (warped moving peak p, reference
+            # peak q) in the uncorrected initial transform's warped frame; re-warping
+            # should put p at q, i.e. sample point C(q) = p, so the fit composes onto
+            # the initial transform as inverse @ C.
             p = np.asarray([a for a, _ in pairs], dtype=float)
             q = np.asarray([b for _, b in pairs], dtype=float)
             correction = (
@@ -817,7 +826,7 @@ def build_beads_estimator(
     score_fn: ScoreFn | None = None,
     iterations: int | None = None,
 ) -> TransformEstimator:
-    """Build the beads method as configured: matcher, mode, initial-transform correction, spectral.
+    """Build the beads method: matcher, mode, initial-transform correction, spectral.
 
     `estimation_mode: vote_icp` swaps the graph matcher for `VoteIcpEstimator`; an
     `initial_transform_correction_settings.mode` other than `none` chains a

@@ -1,15 +1,15 @@
 """Transform estimators: the protocol, its errors, and the compositions.
 
-A `TransformEstimator` promises `estimate(mov, ref, initial_transform=None) -> Transform` in the
-forward (moving -> reference) direction, plus the few members the engine reads
-(`EstimatorBase` gives their defaults). Vocabulary, fixed across the package: at the
-array level `mov` / `ref`; at the channel and CLI level `source` / `target`. `source` is
-always the moving side and `target` always the reference -- the two pairs are the same
-thing at two levels, never mixed within one signature. Each method's estimator lives with the method in
-`biahub.registration.methods`; this module holds what they share -- the protocols, the
-failure types, the one "keep the best" rule (`is_higher`, `select_best`) and the two
-compositions (`ChainedEstimator`: acquire then refine; `CompetingEstimator`: several
-candidates, keep the best score).
+A `TransformEstimator` promises `estimate(mov, ref, initial_transform=None) ->
+Transform` in the forward (moving -> reference) direction, plus the few members the
+engine reads (`EstimatorBase` gives their defaults). Vocabulary, fixed across the
+package: at the array level `mov` / `ref`; at the channel and CLI level `source` /
+`target`. `source` is always the moving side and `target` always the reference -- the
+two pairs are the same thing at two levels, never mixed within one signature. Each
+method's estimator lives with the method in `biahub.registration.methods`; this module
+holds what they share -- the protocols, the failure types, the one "keep the best" rule
+(`is_higher`, `select_best`) and the two compositions (`ChainedEstimator`: acquire then
+refine; `CompetingEstimator`: several candidates, keep the best score).
 """
 
 from __future__ import annotations
@@ -36,10 +36,10 @@ NodeMatcher = Callable[
 class TransformEstimator(Protocol):
     """Computes the Transform that maps `mov` onto `ref`.
 
-    `initial_transform`, when given, is an initial guess in this same contract's direction (true
-    forward, moving -> reference) -- e.g. a previous timepoint's accepted result via
-    `InitialTransformPolicy`. The other members are what the engine reads; see
-    `EstimatorBase`, which every estimator subclasses for their defaults.
+    `initial_transform`, when given, is an initial guess in this same contract's
+    direction (true forward, moving -> reference) -- e.g. a previous timepoint's
+    accepted result via `InitialTransformPolicy`. The other members are what the engine
+    reads; see `EstimatorBase`, which every estimator subclasses for their defaults.
     """
 
     uses_initial_transform: bool
@@ -56,13 +56,14 @@ class TransformEstimator(Protocol):
 class EstimatorBase:
     """The members the engine reads from an estimator, with the defaults most keep.
 
-    - `uses_initial_transform`: the estimate starts from `initial_transform`. Correlation methods (PCC, stackreg)
-      ignore it and set False, so the engine skips restarting passes (repair, polish).
+    - `uses_initial_transform`: the estimate starts from `initial_transform`.
+      Correlation methods (PCC, stackreg) ignore it and set False, so the engine skips
+      restarting passes (repair, polish).
     - `holds_xy_across_gaps`: across empty frames, z is measured and yx held (focus
       finding's legacy rule).
-    - `accepts_competitor`: `estimate` also takes `competitor`, a second initial transform it refines
-      alongside `initial_transform` (beads). For the others the engine runs both starts and keeps the
-      better score.
+    - `accepts_competitor`: `estimate` also takes `competitor`, a second initial
+      transform it refines alongside `initial_transform` (beads). For the others the
+      engine runs both starts and keeps the better score.
     - `trace()`: what the last `estimate` did, read right after it (failed or not) for
       the timepoint's record: `best_candidate`, the candidate a competition kept, and
       `blocks`, what each block of a stack did. None when it does not apply.
@@ -169,9 +170,9 @@ class ChainedEstimator(EstimatorBase):
     """Run estimators in sequence, each started from the previous result.
 
     Acquire-then-refine: e.g. a spectral matcher that can find the correspondence from a
-    poor initial transform, followed by the Hungarian matcher that is more precise once close. With a
-    `score_fn`, the best-scoring stage output is returned (a refinement that makes things
-    worse is dropped); without one, the last stage's output.
+    poor initial transform, followed by the Hungarian matcher that is more precise once
+    close. With a `score_fn`, the best-scoring stage output is returned (a refinement
+    that makes things worse is dropped); without one, the last stage's output.
 
     With `names` (the blocks of a stack), `trace()["blocks"]` holds what every stage of
     the last estimate did: its transform, score, error and whether it won.
@@ -194,7 +195,7 @@ class ChainedEstimator(EstimatorBase):
 
     @property
     def uses_initial_transform(self) -> bool:
-        """Only the first stage starts from the initial transform; the others from the stage before."""
+        """The first stage starts from the initial transform; the rest from the one before."""
         return self.stages[0].uses_initial_transform
 
     @property

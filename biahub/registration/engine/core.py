@@ -248,7 +248,8 @@ def _finite_or_none(value: float | None) -> float | None:
 ESTIMATE_MINUTES = 30
 REPAIR_MINUTES = 60
 # Wall-clock budget per timepoint for the sequential (propagation) job, in minutes:
-# 2024_11_07 A549 beads took 7-8 min per timepoint (two passes from two initial transforms), so ~1.3x.
+# 2024_11_07 A549 beads took 7-8 min per timepoint (two passes from two initial
+# transforms), so ~1.3x.
 PROPAGATION_MINUTES_PER_TIMEPOINT = 10
 # The `preempted` partition's limit: sbatch rejects a longer request outright.
 MAX_MINUTES = 2880
@@ -417,11 +418,12 @@ def init_run(
 ) -> dict:
     """Start a run in `output_dir` and return its plan (also written as `run_plan.json`).
 
-    Resolves the settings the jobs read (an initial transform from the store shapes is computed once,
-    here), writes them with the run manifest -- clearing an earlier run's records unless
-    `resume` -- and plans the run: the timepoints, whether they are estimated in one
-    sequential job (`transform.initial.propagate`), whether the method uses an initial transform
-    (repair needs one), and each phase's resources. Reads only store metadata.
+    Resolves the settings the jobs read (an initial transform from the store shapes is
+    computed once, here), writes them with the run manifest -- clearing an earlier run's
+    records unless `resume` -- and plans the run: the timepoints, whether they are
+    estimated in one sequential job (`transform.initial.propagate`), whether the method
+    uses an initial transform (repair needs one), and each phase's resources. Reads only
+    store metadata.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -433,7 +435,8 @@ def init_run(
         ref_T = position.data.shape[0]
         ref_shape = position.data.shape[-3:]
         ref_voxel_size = tuple(position.scale[-3:])
-    # Checked before anything is written: a refused run must not clear an earlier one's records.
+    # Checked before anything is written: a refused run must not clear an earlier one's
+    # records.
     time_indices = resolve_time_indices(settings.time_indices, T)
     if settings.reference.frame == "cross":
         beyond = [t for t in time_indices if t >= ref_T]
@@ -575,8 +578,9 @@ def flag_run(
     )
     if repair_ts and not plan["uses_initial_transform"]:
         click.echo(
-            f"repair skipped: method {settings.method_label!r} ignores the initial transform, so starting "
-            f"from another would return the same transforms ({len(repair_ts)} flagged timepoint(s) stay flagged)"
+            f"repair skipped: method {settings.method_label!r} ignores the initial "
+            "transform, so starting from another would return the same transforms "
+            f"({len(repair_ts)} flagged timepoint(s) stay flagged)"
         )
         repair_ts = []
     sweep_ts = (
@@ -620,8 +624,8 @@ def finalize_run(
     settings, plan = _run_settings(output_dir), _run_plan(output_dir)
     time_indices = plan["time_indices"]
     transform_type = settings.transform.type
-    # a timepoint without a transform of its own falls back to where it started: the initial transform
-    # file's transform for it, else the config initial transform
+    # a timepoint without a transform of its own falls back to where it started: the
+    # initial transform file's transform for it, else the config initial transform
     initial = _initial_policy(settings, output_dir)
     _, repairs_dir, sweeps_dir = _record_dirs(output_dir)
     if flags is None:

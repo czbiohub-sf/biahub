@@ -133,11 +133,11 @@ _ANTS_TRANSFORM_TYPE = {
 class AntsEstimator(EstimatorBase):
     """TransformEstimator using ANTs intensity-based optimization.
 
-    One pass: ANTs registers `mov` onto `ref` starting from the initial transform (passed as its
-    initial transform, so the moving volume is never warped first) and returns the full
-    forward transform, initial transform included. Preparation -- Sobel, clipping, masks -- is the
-    config's preprocess blocks, applied before this; `ref_mask` / `mov_mask` restrict the
-    comparison.
+    One pass: ANTs registers `mov` onto `ref` starting from the initial transform
+    (passed as its initial transform, so the moving volume is never warped first) and
+    returns the full forward transform, initial transform included. Preparation --
+    Sobel, clipping, masks -- is the config's preprocess blocks, applied before this;
+    `ref_mask` / `mov_mask` restrict the comparison.
     """
 
     def __init__(self, ants_kwargs: dict | None = None, verbose: bool = False):

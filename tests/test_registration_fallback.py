@@ -12,8 +12,8 @@ from biahub.registration.estimators import (
 
 
 class _EchoEstimator(EstimatorBase):
-    """Test double: estimate() just returns whatever initial transform it was given (or identity
-    if none), so repair's candidate-selection logic can be tested without a real
+    """Test double: estimate() just returns whatever initial transform it was given (or
+    identity if none), so repair's candidate-selection logic can be tested without a real
     estimator or real image data."""
 
     def estimate(self, mov, ref, initial_transform=None):
@@ -135,7 +135,7 @@ def test_repair_names_each_failed_candidate():
     }
 
 
-def test_repair_skips_a_candidate_whose_initial_transform_for_raises_without_failing_the_whole_pass():
+def test_repair_skips_a_candidate_whose_initial_for_raises_without_failing_the_pass():
     """E.g. `ConsensusInitialTransform` raises `CandidateUnavailableError` when too few timepoints
     score well enough yet -- skipped like any other candidate failure, not crash `repair`."""
     target = np.array([10.0, 10.0, 10.0])
@@ -167,8 +167,9 @@ def test_repair_skips_a_candidate_whose_initial_transform_for_raises_without_fai
 
 
 def test_a_repair_candidate_with_a_bug_is_not_hidden_as_a_failed_candidate():
-    # only EstimationError and CandidateUnavailableError mean "this candidate failed"; any other
-    # exception is a bug and propagates instead of being recorded as a lost candidate
+    # only EstimationError and CandidateUnavailableError mean "this candidate failed";
+    # any other exception is a bug and propagates instead of being recorded as a lost
+    # candidate
     target = np.array([10.0, 10.0, 10.0])
 
     class _BuggyPolicy:

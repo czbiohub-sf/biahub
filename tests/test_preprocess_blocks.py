@@ -219,8 +219,8 @@ def test_the_old_ants_fields_point_to_preprocess_blocks(ants, message):
 
 def test_a_methods_own_score_judges_the_raw_volumes(monkeypatch):
     # Blocks change what a method estimates from, not what it is judged on: the bead
-    # estimators' internal choices (which candidate, which pass) score the raw volumes, like the
-    # engine's decision -- a clipped copy could pick a different winner.
+    # estimators' internal choices (which candidate, which pass) score the raw volumes,
+    # like the engine's decision -- a clipped copy could pick a different winner.
     from biahub.registration.engine import core as engine
     from biahub.settings import (
         BeadsMatchSettings,

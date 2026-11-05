@@ -217,8 +217,8 @@ class FixedInitialTransform:
     """A fixed initial transform for every t -- today's default.
 
     Also what `optimize-registration`'s "refine an existing transform" case is: pass the
-    existing transform as this initial transform instead of a fresh default. No separate "optimize"
-    concept is needed once initial transform policies exist.
+    existing transform as this initial transform instead of a fresh default. No separate
+    "optimize" concept is needed once initial transform policies exist.
     """
 
     keep_unless_beaten = False
@@ -299,10 +299,11 @@ class ConsensusInitialTransform:
     including the ones being repaired would contaminate the very reference used to
     detect and fix them.
 
-    Raises `CandidateUnavailableError` when fewer than `min_good` timepoints qualify, so a caller
-    trying this as one of several candidates (e.g. `registration.engine.repair`,
-    whose per-candidate try/except already skips a candidate that raises) treats "no
-    consensus yet" the same as any other failed candidate rather than crashing.
+    Raises `CandidateUnavailableError` when fewer than `min_good` timepoints qualify, so
+    a caller trying this as one of several candidates (e.g.
+    `registration.engine.repair`, whose per-candidate try/except already skips a
+    candidate that raises) treats "no consensus yet" the same as any other failed
+    candidate rather than crashing.
     """
 
     keep_unless_beaten = False

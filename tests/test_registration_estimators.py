@@ -124,8 +124,8 @@ def _drifting_estimator(translation, score_fn, iterations):
 
 
 def test_node_graph_estimator_keeps_its_input_when_the_refinement_scores_lower():
-    # The initial transform is already right; the pass's refinement drifts away and scores lower, so
-    # (as in the legacy pipeline) the pass keeps its input.
+    # The initial transform is already right; the pass's refinement drifts away and
+    # scores lower, so (as in the legacy pipeline) the pass keeps its input.
     translation = np.array([5.0, -3.0, 2.0])
     initial_transform = Transform.from_translation(translation)
 
@@ -230,12 +230,12 @@ def _bead_estimator():
 
 
 def test_node_graph_estimator_initial_transform_composition_is_self_consistent():
-    """Regression test for the initial transform composition math: pre-warping mov by the initial transform and
-    composing the residual correction with it (`correction @ initial transform`) must give the exact
-    same result as manually pre-warping mov, fitting the residual with no initial transform, and
-    composing by hand -- confirms Transform.compose's "apply other first, then self"
-    contract is used in the right order here.
-    """
+    """Regression test for the initial transform composition math: pre-warping mov by
+    the initial transform and composing the residual correction with it (`correction @
+    initial_transform`) must give the exact same result as manually pre-warping mov,
+    fitting the residual with no initial transform, and composing by hand -- confirms
+    Transform.compose's "apply other first, then self" contract is used in the right
+    order here."""
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)
     ref = _synthetic_bead_volume(rng, shape)
@@ -330,8 +330,9 @@ def test_ants_estimator_from_settings_maps_the_transform_type():
 
 
 def test_ants_never_warps_the_moving_volume(monkeypatch):
-    # The initial transform goes to ANTs as its initial transform: no pre-warp, so no zero-filled border
-    # for a filter to turn into an edge, and one interpolation instead of two.
+    # The initial transform goes to ANTs as its initial transform: no pre-warp, so no
+    # zero-filled border for a filter to turn into an edge, and one interpolation
+    # instead of two.
     def no_warp(*args, **kwargs):
         raise AssertionError("the moving volume was warped before ANTs")
 
@@ -345,8 +346,9 @@ def test_ants_never_warps_the_moving_volume(monkeypatch):
 
 
 def test_ants_refines_from_a_far_initial_transform_without_cropping():
-    # A large offset, an exact initial transform and Sobel on both volumes, no crop: ANTs keeps the
-    # initial transform's answer (test_ants_never_warps_the_moving_volume pins the no-warp behaviour).
+    # A large offset, an exact initial transform and Sobel on both volumes, no crop:
+    # ANTs keeps the initial transform's answer (test_ants_never_warps_the_moving_volume
+    # pins the no-warp behaviour).
     from biahub.registration.preprocess import PreprocessedEstimator
     from biahub.settings import Sobel
 
@@ -402,9 +404,10 @@ def test_correlation_score_prefers_the_correct_transform():
 
 def test_ants_estimator_initial_transform_is_mechanically_used():
     """With a correct initial transform and near-zero optimizer iterations the correction is
-    ~identity, so the result must track the initial transform -- proving the initial transform pre-warp and the
-    `correction @ initial transform` composition are wired, and that the pass runs an invertible
-    transform family (not ants.registration's default SyN, which Transform.from_ants
+    ~identity, so the result must track the initial transform -- proving the initial
+    transform pre-warp and the `correction @ initial_transform` composition are wired,
+    and that the pass runs an invertible transform family (not ants.registration's
+    default SyN, which Transform.from_ants
     cannot parse). A wildly wrong initial transform must still return a finite transform."""
     rng = np.random.default_rng(10)
     shape = (24, 48, 48)
@@ -435,9 +438,10 @@ def test_ants_estimator_initial_transform_is_mechanically_used():
 
 
 def test_ants_keeps_an_initial_transform_with_rotation_scale_and_shear():
-    # With no iterations ANTs returns its initial transform, so the result must be the initial transform
-    # itself: an initial transform with every linear part pins the direction and axis order at the ANTs
-    # boundary, which translation-only initial transforms cannot (a translation inverts to its negative).
+    # With no iterations ANTs returns its initial transform, so the result must be the
+    # initial transform itself: an initial transform with every linear part pins the
+    # direction and axis order at the ANTs boundary, which translation-only initial
+    # transforms cannot (a translation inverts to its negative).
     rng = np.random.default_rng(12)
     ref = _synthetic_blob_volume(rng, (24, 48, 48))
     angle = np.deg2rad(4)
@@ -709,7 +713,8 @@ def test_ants_estimates_are_repeatable():
     rng = np.random.default_rng(5)
     ref = _synthetic_blob_volume(rng, (24, 48, 48))
     mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
-    # with an initial transform, as the engine always calls it: the initial transform is applied (an ITK resample) first
+    # with an initial transform, as the engine always calls it: the initial transform is
+    # applied (an ITK resample) first
     initial_transform = Transform.identity(3)
     first, second = (
         AntsEstimator().estimate(mov, ref, initial_transform=initial_transform).matrix
@@ -767,8 +772,8 @@ def _off_centre_blob(volume, centre=(4, 6, 6), brightness=20000.0, sigma=2.0):
 
 def test_ants_starts_from_the_initial_transform_not_the_centres_of_mass():
     # A bright structure in one channel only moves its centre of mass. ANTs' default
-    # initialisation aligns the centres of mass, replacing the initial transform's translation; with
-    # near-zero iterations the result shows where it started.
+    # initialisation aligns the centres of mass, replacing the initial transform's
+    # translation; with near-zero iterations the result shows where it started.
     rng = np.random.default_rng(10)
     shape = (24, 48, 48)
     ref = _synthetic_blob_volume(rng, shape)

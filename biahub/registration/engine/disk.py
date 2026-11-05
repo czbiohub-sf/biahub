@@ -34,7 +34,8 @@ from biahub.utils.config import yaml_to_model
 ENGINE_SETTINGS_FILENAME = "estimate_transform_settings.yml"
 
 
-# `transform.initial: {from: file}`: the file's transform for each timepoint of the run's position, read by every job.
+# `transform.initial: {from: file}`: the file's transform for each timepoint of the
+# run's position, read by every job.
 INITIAL_FILENAME = "initial_transforms.json"
 
 
@@ -53,8 +54,9 @@ def _open_series(position_dirpath: Path, channel_name: str):
 def config_fingerprint(settings: EstimateTransformSettings) -> dict:
     """Return what identifies a run's config: its settings, and the initial file's content.
 
-    With `transform.initial` from a file, a changed file is a different run. The one fingerprint behind both checks: `run.json` (a `--step` must use the config
-    `--init` planned) and the resume manifest (records may be reused).
+    With `transform.initial` from a file, a changed file is a different run. The one
+    fingerprint behind both checks: `run.json` (a `--step` must use the config `--init`
+    planned) and the resume manifest (records may be reused).
     """
     fingerprint = {
         "settings_sha256": hashlib.sha256(settings.model_dump_json().encode()).hexdigest()
@@ -259,14 +261,14 @@ def _record_dirs(output_dir: Path) -> tuple[Path, Path, Path]:
 def _initial_transforms_from_file(
     initial_transform_file, key: str, time_indices: list[int]
 ) -> dict[str, list]:
-    """Return a `from: file` transforms file's forward transform at each timepoint of position `key`."""
+    """Return the `from: file` forward transform at each timepoint of position `key`."""
     from biahub.settings import load_transform_settings
 
     transforms = load_transform_settings(initial_transform_file)
     if transforms.per_position and key not in transforms.positions:
         raise click.UsageError(
-            f"transform.initial.file {initial_transform_file} has no transforms for position {key} (it has "
-            f"{sorted(transforms.positions)})"
+            f"transform.initial.file {initial_transform_file} has no transforms for position "
+            f"{key} (it has {sorted(transforms.positions)})"
         )
     return {str(t): transforms.transform_for(t, key).to_list() for t in time_indices}
 

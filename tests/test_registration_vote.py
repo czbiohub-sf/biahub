@@ -102,7 +102,8 @@ def _beads_settings(**overrides):
     return BeadsMatchSettings(
         source_peaks_settings=PEAKS,
         target_peaks_settings=PEAKS,
-        # Synthetic beads sit ~15 vox apart in a 60-vox field, so the vote cluster must be tight.
+        # Synthetic beads sit ~15 vox apart in a 60-vox field, so the vote cluster must
+        # be tight.
         vote_icp_settings=VoteIcpSettings(
             vote_peaks_settings=PEAKS, initial_capture_radius=40.0, cluster_radius=3.0
         ),
@@ -161,7 +162,7 @@ def test_build_beads_estimator_wires_vote_icp_mode_and_initial_transform_correct
     corrected = build_beads_estimator(
         _beads_settings(
             initial_transform_correction_settings=InitialTransformCorrectionSettings(
-                mode="votefit"
+                mode="vote_affine"
             )
         ),
         "euclidean",
@@ -173,7 +174,7 @@ def test_build_beads_estimator_wires_vote_icp_mode_and_initial_transform_correct
     assert isinstance(corrected.stages[1], NodeGraphEstimator)
 
 
-def test_vote_initial_transform_correction_moves_a_drifted_initial_transform_toward_the_truth_and_never_worsens_it():
+def test_vote_correction_moves_a_drifted_initial_transform_to_the_truth_never_worse():
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)
     ref = _synthetic_bead_volume(rng, shape)
@@ -182,7 +183,10 @@ def test_vote_initial_transform_correction_moves_a_drifted_initial_transform_tow
     truth = Transform.from_translation([-a for a in applied_zyx])
     correction = VoteInitialTransformCorrection(
         InitialTransformCorrectionSettings(
-            mode="votefit", vote_peaks_settings=PEAKS, capture_radius=40.0, cluster_radius=3.0
+            mode="vote_affine",
+            vote_peaks_settings=PEAKS,
+            capture_radius=40.0,
+            cluster_radius=3.0,
         ),
         mov_detector=BeadNodeDetector(PEAKS),
         ref_detector=BeadNodeDetector(PEAKS),
@@ -234,3 +238,12 @@ def test_vote_icp_keeps_a_finite_precise_score_over_a_nan_coarse_one():
     result = VoteIcpEstimator.from_beads_settings(settings, score_fn=score).estimate(mov, ref)
     assert len(scored) == 2  # the precise stage ran
     np.testing.assert_array_equal(result.matrix, scored[1].matrix)
+
+
+def test_the_correction_modes_name_what_the_vote_fits():
+    from typing import get_args
+
+    from biahub.settings import InitialTransformCorrectionSettings
+
+    modes = get_args(InitialTransformCorrectionSettings.model_fields["mode"].annotation)
+    assert modes == ("none", "vote_translation", "vote_affine")

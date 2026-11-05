@@ -340,7 +340,8 @@ class ManualEstimator(EstimatorBase):
     Invert once more here to satisfy the TransformEstimator contract.
     """
 
-    # Ignores the initial transform: repair from other initial transforms would return the same answer.
+    # Ignores the initial transform: repair from other initial transforms would return
+    # the same answer.
     uses_initial_transform = False
 
     def __init__(
@@ -364,8 +365,8 @@ class ManualEstimator(EstimatorBase):
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
     ) -> Transform:
-        # No initial transform support -- napari display could pre-align with it, but that's not
-        # implemented, and the point-fit itself doesn't take an initial guess.
+        # No initial transform support -- napari display could pre-align with it, but
+        # that's not implemented, and the point-fit itself doesn't take an initial guess.
         (inverse_matrix,) = user_assisted_registration(
             source_channel_volume=np.asarray(mov),
             source_channel_name=self.source_channel_name,

@@ -1,9 +1,9 @@
 """Local phase cross-correlation: the `local` option of the phase_cross_corr method.
 
-Tile shifts between the warped moving volume and the reference, fitted in yx; z stays the
-initial transform's. Its own file because it measures tiles with the evaluation's `tile_residuals`,
-while the evaluation uses the phase-correlation primitive in `phase_cross_corr.py`: kept
-apart, the imports run one way.
+Tile shifts between the warped moving volume and the reference, fitted in yx; z stays
+the initial transform's. Its own file because it measures tiles with the evaluation's
+`tile_residuals`, while the evaluation uses the phase-correlation primitive in
+`phase_cross_corr.py`: kept apart, the imports run one way.
 """
 
 from __future__ import annotations
@@ -58,8 +58,9 @@ class LocalPCCEstimator(EstimatorBase):
             )
             if tiles["n_tiles"] < s.min_tiles:
                 raise EstimationError(
-                    f"local phase_cross_corr: {tiles['n_tiles']} tiles correlated (need {s.min_tiles}): too "
-                    "little shared structure, or the initial transform is further off than a tile reaches"
+                    f"local phase_cross_corr: {tiles['n_tiles']} tiles correlated (need "
+                    f"{s.min_tiles}): too little shared structure, or the initial "
+                    "transform is further off than a tile reaches"
                 )
             current = self._correct(current, tiles["residuals"])
         return current
