@@ -6,7 +6,12 @@ import pytest
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
-from biahub.registration.estimators import EstimationError, NodeDetector, TransformEstimator
+from biahub.registration.estimators import (
+    EstimationError,
+    EstimatorBase,
+    NodeDetector,
+    TransformEstimator,
+)
 from biahub.registration.methods.intensity.ants import DEFAULT_ANTS_KWARGS, AntsEstimator
 from biahub.registration.methods.intensity.focus_finding import FocusEstimator, find_focus
 from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
@@ -896,14 +901,16 @@ def test_unpadded_pcc_refuses_unequal_shapes_with_guidance():
     PCCEstimator(function_type="custom_padding").estimate(mov, ref)  # pads to one grid
 
 
-def test_competing_arms_report_a_non_finite_score():
+def test_competing_candidates_report_a_non_finite_score():
     from biahub.registration.estimators import CompetingEstimator
 
-    class Arm:
+    class _Candidate(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             return Transform.identity(3)
 
-    competing = CompetingEstimator({"a": Arm(), "b": Arm()}, score_fn=lambda t, m, r: np.nan)
+    competing = CompetingEstimator(
+        {"a": _Candidate(), "b": _Candidate()}, score_fn=lambda t, m, r: np.nan
+    )
     with pytest.raises(EstimationError, match=r"a: .*nan.*b: .*nan"):
         competing.estimate(np.zeros((4, 4, 4)), np.zeros((4, 4, 4)))
 
@@ -989,7 +996,7 @@ def test_propagation_does_not_return_a_transform_whose_score_is_nan():
     from biahub.registration.engine.series import _estimate_competing
     from biahub.registration.estimators import EstimationError
 
-    class _Plain:
+    class _Plain(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             return seed
 
@@ -1002,3 +1009,37 @@ def test_propagation_does_not_return_a_transform_whose_score_is_nan():
             Transform.identity(3),
             lambda transform, mov, ref: float("nan"),
         )
+
+
+def test_every_estimator_declares_the_members_the_engine_reads():
+    from biahub.registration.estimators import (
+        ChainedEstimator,
+        CompetingEstimator,
+        TransformEstimator,
+    )
+    from biahub.registration.methods.interactive.manual import ManualEstimator
+    from biahub.registration.methods.landmark.bead_matching import (
+        NodeGraphEstimator,
+        VoteIcpEstimator,
+        VoteSeedCorrection,
+    )
+
+    classes = [
+        AntsEstimator, PCCEstimator, FocusEstimator, ManualEstimator, NodeGraphEstimator,
+        VoteIcpEstimator, VoteSeedCorrection, ChainedEstimator, CompetingEstimator,
+    ]  # fmt: skip
+    assert all(issubclass(cls, EstimatorBase) for cls in classes)
+    defaults = EstimatorBase()
+    assert (
+        defaults.uses_seed,
+        defaults.holds_xy_across_gaps,
+        defaults.accepts_competitor,
+    ) == (
+        True,
+        False,
+        False,
+    )
+    assert defaults.trace() == {"best_candidate": None, "blocks": None}
+    assert (PCCEstimator.uses_seed, FocusEstimator.holds_xy_across_gaps) == (False, True)
+    assert NodeGraphEstimator.accepts_competitor
+    assert isinstance(ChainedEstimator([PCCEstimator()]), TransformEstimator)

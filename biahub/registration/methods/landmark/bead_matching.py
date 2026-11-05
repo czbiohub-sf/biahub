@@ -45,6 +45,7 @@ from biahub.registration.estimators import (
     ChainedEstimator,
     CompetingEstimator,
     EstimationError,
+    EstimatorBase,
     NodeDetector,
     NodeMatcher,
     ScoreFn,
@@ -394,7 +395,7 @@ class BeadNodeDetector:
         )
 
 
-class NodeGraphEstimator:
+class NodeGraphEstimator(EstimatorBase):
     """TransformEstimator over matched point correspondences.
 
     Composes a `NodeDetector` per channel (beads, nuclei; segmentation centroids later)
@@ -410,6 +411,8 @@ class NodeGraphEstimator:
     As in the legacy pipeline, a pass keeps its input when the refinement scores lower
     (ties go to the refinement), and a score of exactly 1.0 ends the passes early.
     """
+
+    accepts_competitor = True
 
     def __init__(
         self,
@@ -584,7 +587,7 @@ class NodeGraphEstimator:
         return correction @ seed if seed is not None else correction
 
 
-class VoteIcpEstimator:
+class VoteIcpEstimator(EstimatorBase):
     """TransformEstimator over peak clouds by iterated displacement voting.
 
     Reach stage: dense detection on the raw moving volume (`vote_peaks_settings`), voted
@@ -684,7 +687,7 @@ class VoteIcpEstimator:
         return best
 
 
-class VoteSeedCorrection:
+class VoteSeedCorrection(EstimatorBase):
     """A stage that corrects a seed by bead displacement voting, for a chain's first slot.
 
     Warps `mov` by the seed, detects beads densely and votes for the residual drift;

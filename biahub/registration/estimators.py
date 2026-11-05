@@ -1,14 +1,15 @@
 """Transform estimators: the protocol, its errors, and the compositions.
 
-A `TransformEstimator` only promises `estimate(mov, ref, seed=None) -> Transform` in the
-forward (moving -> reference) direction. Vocabulary, fixed across the package: at the
+A `TransformEstimator` promises `estimate(mov, ref, seed=None) -> Transform` in the
+forward (moving -> reference) direction, plus the few members the engine reads
+(`EstimatorBase` gives their defaults). Vocabulary, fixed across the package: at the
 array level `mov` / `ref`; at the channel and CLI level `source` / `target`. `source` is
 always the moving side and `target` always the reference -- the two pairs are the same
 thing at two levels, never mixed within one signature. Each method's estimator lives with the method in
 `biahub.registration.methods`; this module holds what they share -- the protocols, the
 failure types, the one "keep the best" rule (`is_higher`, `select_best`) and the two
-compositions (`ChainedEstimator`: acquire then refine; `CompetingEstimator`: several arms,
-keep the best score).
+compositions (`ChainedEstimator`: acquire then refine; `CompetingEstimator`: several
+candidates, keep the best score).
 """
 
 from __future__ import annotations
@@ -37,14 +38,42 @@ class TransformEstimator(Protocol):
 
     `seed`, when given, is an initial guess in this same contract's direction (true
     forward, moving -> reference) -- e.g. a previous timepoint's accepted result via
-    `InitialTransformPolicy`. Estimators that don't use a seed (correlation-based methods: PCC,
-    stackreg) ignore it and set `uses_seed = False`, so the engine skips re-seeding
-    passes (repair, polish) for them; an estimator without the attribute uses its seed.
+    `InitialTransformPolicy`. The other members are what the engine reads; see
+    `EstimatorBase`, which every estimator subclasses for their defaults.
     """
+
+    uses_seed: bool
+    holds_xy_across_gaps: bool
+    accepts_competitor: bool
 
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
     ) -> Transform: ...
+
+    def trace(self) -> dict: ...
+
+
+class EstimatorBase:
+    """The members the engine reads from an estimator, with the defaults most keep.
+
+    - `uses_seed`: the estimate starts from `seed`. Correlation methods (PCC, stackreg)
+      ignore it and set False, so the engine skips re-seeding passes (repair, polish).
+    - `holds_xy_across_gaps`: across empty frames, z is measured and yx held (focus
+      finding's legacy rule).
+    - `accepts_competitor`: `estimate` also takes `competitor`, a second seed it refines
+      alongside `seed` (beads). For the others the engine runs both starts and keeps the
+      better score.
+    - `trace()`: what the last `estimate` did, read right after it (failed or not) for
+      the timepoint's record: `best_candidate`, the candidate a competition kept, and
+      `blocks`, what each block of a stack did. None when it does not apply.
+    """
+
+    uses_seed: bool = True
+    holds_xy_across_gaps: bool = False
+    accepts_competitor: bool = False
+
+    def trace(self) -> dict:
+        return {"best_candidate": None, "blocks": None}
 
 
 @runtime_checkable
@@ -136,7 +165,7 @@ def fit_pairs(
         raise EstimationError(str(error)) from error
 
 
-class ChainedEstimator:
+class ChainedEstimator(EstimatorBase):
     """Run estimators in sequence, each seeded by the previous result.
 
     Acquire-then-refine: e.g. a spectral matcher that can find the correspondence from a
@@ -144,8 +173,8 @@ class ChainedEstimator:
     `score_fn`, the best-scoring stage output is returned (a refinement that makes things
     worse is dropped); without one, the last stage's output.
 
-    With `names` (the blocks of a stack), each estimate leaves what every stage did in
-    `last_stages`: its transform, score, error and whether it won.
+    With `names` (the blocks of a stack), `trace()["blocks"]` holds what every stage of
+    the last estimate did: its transform, score, error and whether it won.
     """
 
     def __init__(
@@ -161,12 +190,12 @@ class ChainedEstimator:
         self.stages = list(stages)
         self.score_fn = score_fn
         self.names = names
-        self.last_stages: list[dict] | None = None
+        self._blocks: list[dict] | None = None
 
     @property
     def uses_seed(self) -> bool:
         """Only the first stage starts from the seed; the others from the stage before."""
-        return bool(getattr(self.stages[0], "uses_seed", True))
+        return self.stages[0].uses_seed
 
     @property
     def holds_xy_across_gaps(self) -> bool:
@@ -174,15 +203,17 @@ class ChainedEstimator:
 
         In a mixed stack, holding yx would drop what the other stages estimated.
         """
-        return all(getattr(stage, "holds_xy_across_gaps", False) for stage in self.stages)
+        return all(stage.holds_xy_across_gaps for stage in self.stages)
+
+    def trace(self) -> dict:
+        return {"best_candidate": None, "blocks": self._blocks}
 
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
     ) -> Transform:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
-        if self.names is not None:
-            self.last_stages = None  # a failed estimate leaves no earlier one's stages
+        self._blocks = None  # a failed estimate leaves no earlier one's blocks
         current = seed
         best: Transform | None = None
         best_score = -np.inf
@@ -221,31 +252,33 @@ class ChainedEstimator:
             return
         if winner is not None:
             stages[winner]["won"] = True
-        self.last_stages = stages
+        self._blocks = stages
 
 
-class CompetingEstimator:
+class CompetingEstimator(EstimatorBase):
     """Run several estimators on the same input and keep the best-scoring result.
 
-    An arm that raises `EstimationError` is skipped; only when every arm fails does the
-    whole estimate fail, with each arm's reason. With `escalate_below`, arms after the
-    first run only while the best score so far is below it. `last_winner` names the arm
-    whose result was returned.
+    A candidate that raises `EstimationError` is skipped; only when every candidate fails
+    does the whole estimate fail, with each one's reason. With `escalate_below`,
+    candidates after the first run only while the best score so far is below it.
+    `trace()["best_candidate"]` names the one whose result the last estimate returned.
     """
 
     def __init__(
         self,
-        arms: dict[str, TransformEstimator],
+        candidates: dict[str, TransformEstimator],
         score_fn: ScoreFn,
         escalate_below: float | None = None,
     ):
-        if not arms:
-            raise ValueError("CompetingEstimator needs at least one arm")
-        self.arms = dict(arms)
+        if not candidates:
+            raise ValueError("CompetingEstimator needs at least one candidate")
+        self.candidates = dict(candidates)
         self.score_fn = score_fn
         self.escalate_below = escalate_below
-        self.last_winner: str | None = None
-        self.last_scores: dict[str, float] = {}
+        self._best_candidate: str | None = None
+
+    def trace(self) -> dict:
+        return {"best_candidate": self._best_candidate, "blocks": None}
 
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, seed: Transform | None = None
@@ -253,20 +286,21 @@ class CompetingEstimator:
         mov = np.asarray(mov)
         ref = np.asarray(ref)
 
-        def run(arm):
+        def run(candidate):
             def attempt():
-                transform = arm.estimate(mov, ref, seed=seed)
+                transform = candidate.estimate(mov, ref, seed=seed)
                 return transform, self.score_fn(transform, mov, ref)
 
             return attempt
 
         chosen = select_best(
-            {name: run(arm) for name, arm in self.arms.items()}, stop_at=self.escalate_below
+            {name: run(c) for name, c in self.candidates.items()},
+            stop_at=self.escalate_below,
         )
-        self.last_winner, self.last_scores = chosen.name, chosen.scores
+        self._best_candidate = chosen.name
         if chosen.name is None:
             raise EstimationError(
-                "every arm failed: "
+                "every candidate failed: "
                 + "; ".join(f"{k}: {v}" for k, v in chosen.failures.items())
             )
         return chosen.transform

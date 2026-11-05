@@ -18,7 +18,7 @@ from numpy.typing import ArrayLike
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.core.transform import Transform
-from biahub.registration.estimators import EstimationError
+from biahub.registration.estimators import EstimationError, EstimatorBase
 from biahub.registration.methods.intensity.stackreg import StackregEstimator
 from biahub.settings import FocusSettings
 
@@ -62,7 +62,7 @@ def find_focus(
     return int(z)
 
 
-class FocusEstimator:
+class FocusEstimator(EstimatorBase):
     """TransformEstimator for same-channel drift: focus index for z, stackreg for yx.
 
     `axes` selects what is estimated: "z" (focus only), "xy" (stackreg on the in-focus

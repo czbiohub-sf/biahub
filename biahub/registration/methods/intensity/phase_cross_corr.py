@@ -13,7 +13,7 @@ from numpy.typing import ArrayLike
 from scipy.fftpack import next_fast_len
 
 from biahub.core.transform import Transform
-from biahub.registration.estimators import EstimationError
+from biahub.registration.estimators import EstimationError, EstimatorBase
 from biahub.registration.utils import match_shape, match_shape_origin
 from biahub.settings import PhaseCrossCorrSettings
 
@@ -248,7 +248,7 @@ def _refine_shift(ref_img, mov_img, shift, normalization, upsample_factor: int) 
     return shift + (np.stack(peak).astype(float) - centre) / upsample_factor
 
 
-class PCCEstimator:
+class PCCEstimator(EstimatorBase):
     """TransformEstimator using phase cross-correlation (rigid translation only).
 
     `phase_cross_corr(ref, mov)`'s shift is already the forward (moving -> reference)

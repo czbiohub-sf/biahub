@@ -12,6 +12,7 @@ from skimage.transform import EuclideanTransform, SimilarityTransform
 from waveorder.focus import focus_from_transverse_band
 
 from biahub.core.transform import Transform
+from biahub.registration.estimators import EstimatorBase
 
 NA_DETECTION_SOURCE = 1.35
 
@@ -336,7 +337,7 @@ def user_assisted_registration(
     return [tform.tolist()]
 
 
-class ManualEstimator:
+class ManualEstimator(EstimatorBase):
     """TransformEstimator via user-assisted (napari) point annotation.
 
     Interactive: `estimate()` opens a napari viewer and blocks on `input()` until you

@@ -516,7 +516,7 @@ def init_run(
         "frame_shape": [Z, Y, X],
         "voxel_um": list(mov_voxel_size),
         "propagated": propagated,
-        "uses_seed": bool(getattr(estimator, "uses_seed", True)),
+        "uses_seed": estimator.uses_seed,
         "interactive": "manual" in settings.method_names,
         "resources": {
             "estimate": resources(estimate_minutes),

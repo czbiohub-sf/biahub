@@ -8,8 +8,6 @@ initial-transform policy where it starts; the estimator registers that pair.
 
 from __future__ import annotations
 
-import inspect
-
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field, fields
 from typing import TYPE_CHECKING
@@ -57,8 +55,10 @@ class SeriesResult:
     # A stand-in decided while estimating (propagation: a failed timepoint returns the
     # seed it started from), with its source; used instead of the input seed.
     stand_ins: dict[int, tuple[Transform, str]] = field(default_factory=dict)
-    # A stack's blocks at each estimated t, from its record (see ChainedEstimator).
+    # What the estimator did at each estimated t (its `trace()`): a stack's blocks, and
+    # the candidate a competition kept.
     blocks: dict[int, list[dict]] = field(default_factory=dict)
+    best_candidate: dict[int, str] = field(default_factory=dict)
     # From a file: "file" (its transform kept as it is) or "file+refined".
     initialized_from: dict[int, str] = field(default_factory=dict)
     # With reference.anchor: each timepoint's centroid from its record (None: none found),
@@ -89,7 +89,7 @@ class TimepointRecord:
     stand_in: list | None = None  # propagation: what the next timepoint starts from
     stand_in_from: str | None = None
     initialized_from: str | None = None  # "file" or "file+refined" (from: file)
-    arm: str | None = None  # competing arms: the one that won
+    best_candidate: str | None = None  # competing candidates: the one kept
     blocks: list[dict] | None = None  # a stack: what each block did
     metrics: dict | None = None  # bead alignment metrics
     report: dict | None = None  # score.report metrics of the accepted estimate
@@ -125,6 +125,8 @@ class TimepointRecord:
             result.stand_ins[t] = (carried, self.stand_in_from or "initial")
         if self.blocks:
             result.blocks[t] = self.blocks
+        if self.best_candidate:
+            result.best_candidate[t] = self.best_candidate
         if self.initialized_from:
             result.initialized_from[t] = self.initialized_from
         if self.centroid is not None:
@@ -155,7 +157,6 @@ def estimate_series(
     """
     result = SeriesResult()
     for t in time_indices:
-        _forget_blocks(estimator)
         mov_t = np.asarray(mov[t])
         ref_t = np.asarray(reference_policy.reference_for(mov, t))
         if is_empty(mov_t) or is_empty(ref_t):
@@ -174,10 +175,14 @@ def estimate_series(
         else:
             transform = _gap_rule(estimator, reference_policy, mov, t, transform)
             estimate = (transform, float(score_fn(transform, mov_t, ref_t)))
+        trace = estimator.trace()
         if keep_initial:
             estimate, result.initialized_from[t] = _keep_initial(
-                estimator, estimate, seed, score_fn, mov_t, ref_t
+                estimate, seed, score_fn, mov_t, ref_t
             )
+            if result.initialized_from[t] == "file":
+                trace = None  # the kept seed is not the estimator's
+        _keep_trace(result, t, trace)
         if estimate is None:
             result.scores[t] = float("nan")
             result.errors[t] = error
@@ -188,19 +193,27 @@ def estimate_series(
     return result
 
 
-def _keep_initial(estimator, estimate, seed, score_fn, mov, ref) -> tuple[tuple, str]:
+def _keep_initial(estimate, seed, score_fn, mov, ref) -> tuple[tuple, str]:
     """Return the estimate if it scores strictly better than the seed as it is, else the seed.
 
     The seed is an earlier result (a seed file), so a run from it never ends worse than
     it: a failed or no better estimate keeps it. Returns ((transform, score), source),
-    source "file+refined" or "file". A kept seed was not produced by the stack,
-    so its blocks are forgotten.
+    source "file+refined" or "file".
     """
     kept = (seed, float(score_fn(seed, mov, ref)))
     if estimate is not None and is_higher(estimate[1], kept[1]):
         return estimate, "file+refined"
-    _forget_blocks(estimator)
     return kept, "file"
+
+
+def _keep_trace(result: SeriesResult, t: int, trace: dict | None) -> None:
+    """Keep what the estimator did at t (its `trace()`) for t's record."""
+    if trace is None:
+        return
+    if trace["blocks"] is not None:
+        result.blocks[t] = trace["blocks"]
+    if trace["best_candidate"] is not None:
+        result.best_candidate[t] = trace["best_candidate"]
 
 
 def _across_gap(reference_policy: ReferencePolicy, mov, t: int) -> bool:
@@ -220,9 +233,7 @@ def _hold_xy(transform: Transform) -> Transform:
 
 def _gap_rule(estimator, reference_policy, mov, t: int, transform: Transform) -> Transform:
     """Legacy focus-finding across a gap: z measured, yx held (see FocusEstimator)."""
-    if getattr(estimator, "holds_xy_across_gaps", False) and _across_gap(
-        reference_policy, mov, t
-    ):
+    if estimator.holds_xy_across_gaps and _across_gap(reference_policy, mov, t):
         return _hold_xy(transform)
     return transform
 
@@ -238,22 +249,26 @@ def _compares_with_itself(reference_policy: ReferencePolicy, mov, t: int) -> boo
     return False
 
 
-def _estimate_competing(estimator, mov, ref, seed, competitor, score_fn) -> Transform:
+def _estimate_competing(
+    estimator, mov, ref, seed, competitor, score_fn
+) -> tuple[Transform, dict]:
     """Estimate from `seed`, with `competitor` competing (ties to the seed).
 
     An estimator that takes a competitor refines both on its first pass (the legacy
     rule); any other estimator is run from both seeds and the better score is kept.
+    Returns the transform and the estimator's trace of the start that produced it.
     """
     if competitor is None:
-        return estimator.estimate(mov, ref, seed=seed)
-    if "competitor" in inspect.signature(estimator.estimate).parameters:
-        return estimator.estimate(mov, ref, seed=seed, competitor=competitor)
-    stages: dict[str, list | None] = {}
+        return estimator.estimate(mov, ref, seed=seed), estimator.trace()
+    if estimator.accepts_competitor:
+        transform = estimator.estimate(mov, ref, seed=seed, competitor=competitor)
+        return transform, estimator.trace()
+    traces: dict[str, dict] = {}
 
     def from_start(name: str, start: Transform):
         def attempt():
             transform = estimator.estimate(mov, ref, seed=start)
-            stages[name] = getattr(estimator, "last_stages", None)
+            traces[name] = estimator.trace()
             return transform, float(score_fn(transform, mov, ref))
 
         return attempt
@@ -269,15 +284,7 @@ def _estimate_competing(estimator, mov, ref, seed, competitor, score_fn) -> Tran
             "failed from both the previous result and the input seed: "
             + "; ".join(chosen.failures.values())
         )
-    if hasattr(estimator, "last_stages"):
-        estimator.last_stages = stages[chosen.name]
-    return chosen.transform
-
-
-def _forget_blocks(estimator) -> None:
-    """Clear a stack's record of its blocks: a timepoint not estimated has none."""
-    if getattr(estimator, "last_stages", None) is not None:
-        estimator.last_stages = None
+    return chosen.transform, traces[chosen.name]
 
 
 def estimate_propagated(
@@ -307,7 +314,6 @@ def estimate_propagated(
     previous: Transform | None = None  # what the next timepoint starts from
     previous_t: int | None = None  # the timepoint it came from (a stand-in's source)
     for t in time_indices:
-        _forget_blocks(estimator)
         if t in done:
             # Carry the chain on as the fresh run did: the reference frame restarts it, an
             # empty frame (no transform, no stand-in) leaves it alone.
@@ -332,16 +338,18 @@ def estimate_propagated(
                 seed = previous if previous is not None else input_seed
                 competitor = input_seed if previous is not None else None
                 try:
-                    transform = _estimate_competing(
+                    transform, trace = _estimate_competing(
                         estimator, mov_t, ref_t, seed, competitor, score_fn
                     )
                 except EstimationError as e:
+                    _keep_trace(result, t, estimator.trace())
                     result.scores[t] = float("nan")
                     result.errors[t] = f"{type(e).__name__}: {e}"
                     source = f"t={previous_t}" if previous is not None else "initial"
                     result.stand_ins[t] = (seed, source)
                     previous = seed
                 else:
+                    _keep_trace(result, t, trace)
                     transform = _gap_rule(estimator, reference_policy, mov, t, transform)
                     result.transforms[t] = transform
                     result.scores[t] = float(score_fn(transform, mov_t, ref_t))

@@ -4,10 +4,14 @@ import pytest
 from biahub.core.transform import Transform
 from biahub.registration.engine import repair
 from biahub.registration.engine.policies import FixedInitialTransform
-from biahub.registration.estimators import CandidateUnavailableError, EstimationError
+from biahub.registration.estimators import (
+    CandidateUnavailableError,
+    EstimationError,
+    EstimatorBase,
+)
 
 
-class _EchoEstimator:
+class _EchoEstimator(EstimatorBase):
     """Test double: estimate() just returns whatever seed it was given (or identity
     if none), so repair's candidate-selection logic can be tested without a real
     estimator or real image data."""
@@ -73,7 +77,7 @@ def test_repair_keeps_current_when_no_candidate_beats_it():
 def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
     target = np.array([10.0, 10.0, 10.0])
 
-    class _RaisingEstimator:
+    class _RaisingEstimator(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             if seed is not None and seed.matrix[0, 3] == 999.0:
                 raise EstimationError("simulated candidate failure")

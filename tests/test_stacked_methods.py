@@ -4,6 +4,7 @@ import pytest
 
 from pydantic import ValidationError
 
+from biahub.registration.estimators import EstimatorBase
 from biahub.settings import EstimateTransformSettings
 from biahub.utils.config import model_to_yaml, yaml_to_model
 
@@ -203,7 +204,7 @@ def test_a_stack_plans_for_its_heaviest_and_interactive_blocks(beads_plate, tmp_
 # --- what each block did ------------------------------------------------------------------
 
 
-class _Fixed:
+class _Fixed(EstimatorBase):
     """A stage that returns a fixed transform, or fails."""
 
     def __init__(self, transform=None, error=None):
@@ -233,8 +234,12 @@ def test_a_stack_remembers_each_blocks_transform_score_and_the_winner():
     )
     vol = np.zeros((4, 8, 8), np.float32)
     assert chain.estimate(vol, vol) is fine
-    first, second, third = chain.last_stages
-    assert [s["block"] for s in chain.last_stages] == ["1:pcc", "2:ants", "3:bead_matching"]
+    first, second, third = chain.trace()["blocks"]
+    assert [s["block"] for s in (first, second, third)] == [
+        "1:pcc",
+        "2:ants",
+        "3:bead_matching",
+    ]
     assert first["matrix"] == coarse.to_list() and first["score"] == 0.6
     assert (second["score"], second["won"], first["won"]) == (0.9, True, False)
     assert third["matrix"] is None and third["error"] == "too few matches"
@@ -246,12 +251,12 @@ def test_a_stack_remembers_each_blocks_transform_score_and_the_winner():
         names=["1:a", "2:b", "3:c"],
     )
     assert chain.estimate(vol, vol) is coarse
-    assert chain.last_stages[2]["error"] == "not run: an earlier block failed"
+    assert chain.trace()["blocks"][2]["error"] == "not run: an earlier block failed"
 
     # the method's own internal chains (no names) record nothing
     internal = ChainedEstimator([_Fixed(coarse)], score_fn=lambda t, m, r: 0.5)
     internal.estimate(vol, vol)
-    assert internal.last_stages is None
+    assert internal.trace()["blocks"] is None
 
 
 def test_every_timepoint_records_its_blocks_and_the_report_sums_them(beads_plate, tmp_path):
@@ -277,7 +282,7 @@ def test_every_timepoint_records_its_blocks_and_the_report_sums_them(beads_plate
     assert all("median_score" in s and "failed" in s for s in summary.values())
 
 
-class _Shift:
+class _Shift(EstimatorBase):
     """A block that moves its start by `d` voxels in x."""
 
     def __init__(self, d):
@@ -292,8 +297,8 @@ class _Shift:
 
 def test_propagated_blocks_are_the_winning_runs_and_empty_frames_have_none():
     # With transform.initial.propagate the chain runs twice per timepoint (from the
-    # previous result and from the input seed); the record kept the second run's blocks
-    # even when the first won, and an empty frame kept the previous timepoint's.
+    # previous result and from the input seed); the record keeps the winning run's
+    # blocks, and an empty frame has none.
     import numpy as np
 
     from biahub.core.transform import Transform
@@ -311,7 +316,7 @@ def test_propagated_blocks_are_the_winning_runs_and_empty_frames_have_none():
     seen = {}
 
     def on_timepoint(t, result):
-        seen[t] = (result.transforms.get(t), chain.last_stages)
+        seen[t] = (result.transforms.get(t), result.blocks.get(t))
 
     estimate_propagated(
         mov,
@@ -344,10 +349,10 @@ def test_bead_metrics_belong_to_the_run_and_need_a_final_beads_block():
 def test_a_focus_only_stack_keeps_the_across_gap_rule_and_a_mixed_one_does_not():
     from biahub.registration.estimators import ChainedEstimator
 
-    class _Focus:
+    class _Focus(EstimatorBase):
         holds_xy_across_gaps = True
 
-    class _Other:
+    class _Other(EstimatorBase):
         pass
 
     assert ChainedEstimator([_Focus(), _Focus()]).holds_xy_across_gaps

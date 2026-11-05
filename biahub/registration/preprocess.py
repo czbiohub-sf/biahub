@@ -15,6 +15,7 @@ from scipy import ndimage
 from scipy.ndimage import binary_erosion
 from skimage import filters
 
+from biahub.registration.estimators import EstimatorBase
 from biahub.settings import (
     MASK_BLOCKS,
     ClipPercentiles,
@@ -161,14 +162,14 @@ class RawVolumeScore:
         return self.score_fn(transform, mov, ref)
 
 
-class PreprocessedEstimator:
+class PreprocessedEstimator(EstimatorBase):
     """A method with a config's `preprocess:` blocks in front of it.
 
     Every estimate (timepoint jobs, repair, sweeps) goes through here, so the method always
     sees the same prepared volumes, and the reference / moving masks when there are any.
-    `estimate` keeps the method's signature, and its attributes (`uses_seed`, ...) read
-    through, so the engine treats it as the method itself. A method that scores its own
-    candidates gets `raw_score`, so those scores see the raw volumes.
+    `estimate` passes the method's extra arguments (`competitor`) on, and the members the
+    engine reads are the method's, so the engine treats it as the method itself. A method
+    that scores its own candidates gets `raw_score`, so those scores see the raw volumes.
     """
 
     def __init__(
@@ -201,5 +202,17 @@ class PreprocessedEstimator:
 
         self.estimate = estimate
 
-    def __getattr__(self, name):
-        return getattr(self.method, name)
+    @property
+    def uses_seed(self) -> bool:
+        return self.method.uses_seed
+
+    @property
+    def holds_xy_across_gaps(self) -> bool:
+        return self.method.holds_xy_across_gaps
+
+    @property
+    def accepts_competitor(self) -> bool:
+        return self.method.accepts_competitor
+
+    def trace(self) -> dict:
+        return self.method.trace()

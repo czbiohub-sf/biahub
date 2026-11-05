@@ -18,7 +18,7 @@ from biahub.registration.engine.policies import (
     PreviousFrame,
 )
 from biahub.registration.engine.series import estimate_series
-from biahub.registration.estimators import EstimationError
+from biahub.registration.estimators import EstimationError, EstimatorBase
 
 IDENTITY = Transform.identity(3)
 
@@ -29,7 +29,7 @@ def _constant_frames(n_t: int, scale: float = 1.0) -> np.ndarray:
     return np.stack([np.full((2, 2, 2), scale * t + 0.25, dtype=float) for t in range(n_t)])
 
 
-class _MeanShiftEstimator:
+class _MeanShiftEstimator(EstimatorBase):
     """Toy estimator whose answer depends on which reference it was handed: the shift
     from mov's mean to ref's mean. Records every call."""
 
@@ -44,7 +44,7 @@ class _MeanShiftEstimator:
         return Transform.from_translation([float(ref.mean() - mov.mean()), 0.0, 0.0])
 
 
-class _EchoEstimator:
+class _EchoEstimator(EstimatorBase):
     """Returns the seed it is given (identity when none)."""
 
     def estimate(self, mov, ref, seed=None):
@@ -178,7 +178,7 @@ def test_repair_touches_only_flagged_timepoints_and_journals_them():
 
 
 def test_repair_rescues_a_timepoint_whose_estimate_failed():
-    class _FailsUnseeded:
+    class _FailsUnseeded(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             if round(float(mov.mean())) == 2 and seed.is_identity:
                 raise EstimationError("too few matches")
@@ -221,7 +221,7 @@ def test_repair_replaces_a_transform_whose_score_is_nan():
             return 0.7
         return float("nan") if round(float(mov.mean())) == 1 else 0.9
 
-    class _EchoSeed:
+    class _EchoSeed(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             return seed
 
@@ -247,7 +247,7 @@ def test_repair_replaces_a_transform_whose_score_is_nan():
 def test_polish_improves_on_a_nan_score():
     better = Transform.from_translation([2.0, 0.0, 0.0])
 
-    class _Refines:
+    class _Refines(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             return better
 
@@ -280,7 +280,7 @@ def test_neighbour_consensus_initial_candidates_skips_flagged_neighbours():
     assert list(first) == ["t+1", "consensus_full", "initial"]
 
 
-class _StepEstimator:
+class _StepEstimator(EstimatorBase):
     """Moves the seed's x translation one step towards `target` per call."""
 
     def __init__(self, target: float):
@@ -315,7 +315,7 @@ def test_polish_is_capped_and_a_raising_round_keeps_the_accepted_transform():
     capped = polish(0, None, None, _StepEstimator(9.0), start, 0.0, _score_by_x, rounds=1)
     assert capped[1:] == (1.0, 1)
 
-    class _Raises:
+    class _Raises(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             raise EstimationError("too few matches")
 
@@ -361,7 +361,7 @@ def test_repair_polishes_only_accepted_repairs():
     assert list(result.repairs) == [5]
 
 
-class _FixedEstimator:
+class _FixedEstimator(EstimatorBase):
     def __init__(self, x: float):
         self.x = x
 
@@ -423,7 +423,7 @@ def test_sweep_competes_with_repair_from_the_pre_fallback_score():
 
 
 def test_sweep_skips_a_raising_trial_and_names_it():
-    class _Raises:
+    class _Raises(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             raise EstimationError("too few matches")
 
@@ -462,7 +462,7 @@ def test_transforms_for_file_absolute_frames_fill_with_the_input_seed():
     assert result.filled_from == {1: "initial"}
 
 
-class _StepX:
+class _StepX(EstimatorBase):
     """Moves its seed by +1 in x; fails on frames whose value is in `fail_on`."""
 
     def __init__(self, fail_on=()):
@@ -652,7 +652,7 @@ def test_previous_chain_keeps_the_movement_across_a_gap_of_empty_frames():
     assert x[2] == x[3] == x[1] and x[4] == -4.0
 
 
-class _FocusLike:
+class _FocusLike(EstimatorBase):
     """Step z = ref mean - mov mean (like a focus index), y = 5, x = 7 (like stackreg)."""
 
     holds_xy_across_gaps = True

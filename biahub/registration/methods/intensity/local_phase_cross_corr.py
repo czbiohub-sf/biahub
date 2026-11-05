@@ -13,12 +13,12 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
-from biahub.registration.estimators import EstimationError, fit_pairs
+from biahub.registration.estimators import EstimationError, EstimatorBase, fit_pairs
 from biahub.registration.metrics import tile_residuals
 from biahub.settings import LocalPhaseCrossCorrSettings
 
 
-class LocalPCCEstimator:
+class LocalPCCEstimator(EstimatorBase):
     """TransformEstimator from local phase cross-correlation: tile shifts fitted in yx.
 
     The moving volume, warped by the current transform, is phase-correlated with the

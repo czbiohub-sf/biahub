@@ -8,6 +8,7 @@ from biahub.core.transform import Transform
 from biahub.registration.estimators import (
     ChainedEstimator,
     EstimationError,
+    EstimatorBase,
     TransformEstimator,
 )
 from biahub.registration.methods.landmark.bead_matching import (
@@ -196,7 +197,7 @@ def test_vote_seed_correction_moves_a_drifted_seed_toward_the_truth_and_never_wo
 
 
 def test_chained_estimator_keeps_an_earlier_scored_stage_when_a_later_stage_fails():
-    class _Fixed:
+    class _Fixed(EstimatorBase):
         def __init__(self, transform, fail=False):
             self.transform, self.fail = transform, fail
 

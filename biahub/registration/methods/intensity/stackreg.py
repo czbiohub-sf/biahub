@@ -8,9 +8,10 @@ from numpy.typing import ArrayLike
 from pystackreg import StackReg
 
 from biahub.core.transform import Transform
+from biahub.registration.estimators import EstimatorBase
 
 
-class StackregEstimator:
+class StackregEstimator(EstimatorBase):
     """TransformEstimator using pystackreg (2D rigid/translation registration).
 
     `StackReg.register(ref, mov)` returns a matrix in (X, Y) axis order -- not this

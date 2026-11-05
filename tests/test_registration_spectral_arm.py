@@ -12,6 +12,7 @@ from biahub.registration.estimators import (
     ChainedEstimator,
     CompetingEstimator,
     EstimationError,
+    EstimatorBase,
     TransformEstimator,
 )
 from biahub.registration.methods.landmark.bead_matching import (
@@ -128,7 +129,7 @@ def test_a_matcher_that_cannot_run_is_an_estimation_error():
         estimator.estimate(volume, volume)
 
 
-class _FixedEstimator:
+class _FixedEstimator(EstimatorBase):
     def __init__(self, transform, fail=False):
         self.transform = transform
         self.fail = fail
@@ -164,20 +165,19 @@ def test_chained_estimator_seeds_each_stage_from_the_previous_and_keeps_the_best
     assert isinstance(chain, TransformEstimator)
 
 
-def test_competing_estimator_keeps_the_best_arm_and_skips_failed_ones():
+def test_competing_estimator_keeps_the_best_candidate_and_skips_failed_ones():
     target = np.array([10.0, 0.0, 0.0])
-    arms = {
+    candidates = {
         "broken": _FixedEstimator(IDENTITY, fail=True),
         "far": _FixedEstimator(Transform.from_translation([2.0, 0.0, 0.0])),
         "close": _FixedEstimator(Transform.from_translation([9.0, 0.0, 0.0])),
     }
-    competing = CompetingEstimator(arms, score_fn=_closeness_to(target))
+    competing = CompetingEstimator(candidates, score_fn=_closeness_to(target))
 
     result = competing.estimate(np.zeros((2, 2, 2)), np.zeros((2, 2, 2)))
 
-    assert result is arms["close"].transform
-    assert competing.last_winner == "close"
-    assert set(competing.last_scores) == {"far", "close"}
+    assert result is candidates["close"].transform
+    assert competing.trace() == {"best_candidate": "close", "blocks": None}
 
 
 def test_competing_estimator_escalates_only_below_the_threshold():
@@ -234,11 +234,11 @@ def test_build_beads_estimator_builds_the_competing_cascade_when_the_spectral_ar
     gated = build_beads_estimator(_beads_settings(spectral_arm="on_low_score"), "euclidean")
 
     assert isinstance(plain, NodeGraphEstimator)
-    assert isinstance(competing, CompetingEstimator) and list(competing.arms) == [
+    assert isinstance(competing, CompetingEstimator) and list(competing.candidates) == [
         "hungarian",
         "spectral+hungarian",
     ]
-    assert isinstance(competing.arms["spectral+hungarian"], ChainedEstimator)
+    assert isinstance(competing.candidates["spectral+hungarian"], ChainedEstimator)
     assert competing.escalate_below is None
     assert gated.escalate_below == _beads_settings().qc_settings.score_threshold
 
@@ -266,7 +266,7 @@ def test_spectral_arm_recovers_an_offset_beyond_the_hungarian_capture_range():
     competing = build_beads_estimator(settings, affine)
     transform = competing.estimate(mov, ref)
 
-    assert competing.last_winner == "spectral+hungarian"
+    assert competing.trace()["best_candidate"] == "spectral+hungarian"
     # Capture-range test, not a precision test: on integer peak positions the matcher's
     # fit lands within ~1 vox (the same precision the legacy pipeline has).
     np.testing.assert_allclose(transform.translation, [-a for a in applied_zyx], atol=1.5)

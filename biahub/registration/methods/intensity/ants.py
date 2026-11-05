@@ -25,7 +25,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
-from biahub.registration.estimators import EstimationError
+from biahub.registration.estimators import EstimationError, EstimatorBase
 from biahub.settings import AntsRegistrationSettings
 
 DEFAULT_ANTS_KWARGS = {
@@ -130,7 +130,7 @@ _ANTS_TRANSFORM_TYPE = {
 }
 
 
-class AntsEstimator:
+class AntsEstimator(EstimatorBase):
     """TransformEstimator using ANTs intensity-based optimization.
 
     One pass: ANTs registers `mov` onto `ref` starting from the seed (passed as its

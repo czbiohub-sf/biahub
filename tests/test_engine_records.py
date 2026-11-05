@@ -4,6 +4,7 @@ resume, finalize and the benchmark."""
 import numpy as np
 
 from biahub.core.transform import Transform
+from biahub.registration.estimators import EstimatorBase
 
 
 def test_a_timepoint_record_round_trips_and_ignores_keys_it_does_not_know():
@@ -42,7 +43,7 @@ def test_propagation_resume_keeps_the_transform_type():
     from biahub.registration.engine.policies import CrossChannel
     from biahub.registration.engine.series import TimepointRecord, estimate_propagated
 
-    class _Echo:
+    class _Echo(EstimatorBase):
         def estimate(self, mov, ref, seed=None):
             return seed
 
@@ -140,3 +141,72 @@ def test_bead_landmarks_find_the_estimates_settings_in_a_multi_position_run(tmp_
         model_to_yaml(settings, work_dir / ENGINE_SETTINGS_FILENAME)
     detection = _bead_detection(run.path, None)
     assert detection["moving"]["threshold_abs"] == 321
+
+
+class _Traced(EstimatorBase):
+    """Returns its seed shifted by `d` in x, scored by x; its trace names the call."""
+
+    def __init__(self, d=1.0, fail=False):
+        self.d, self.fail, self.calls = d, fail, 0
+
+    def estimate(self, mov, ref, seed=None):
+        from biahub.registration.estimators import EstimationError
+
+        self.calls += 1
+        if self.fail:
+            raise EstimationError("no beads")
+        start = seed if seed is not None else Transform.identity(3)
+        return Transform.from_translation([0.0, 0.0, self.d]) @ start
+
+    def trace(self):
+        return {"best_candidate": f"call{self.calls}", "blocks": [{"block": "1:x"}]}
+
+
+def _x_score(transform, mov, ref):
+    return float(transform.translation[2])
+
+
+def test_a_series_keeps_each_timepoints_trace_and_drops_it_where_nothing_was_estimated():
+    from biahub.registration.engine.policies import CrossChannel, FixedInitialTransform
+    from biahub.registration.engine.series import estimate_series
+
+    frames = np.ones((3, 2, 4, 4), np.float32)
+    frames[1] = 0  # an empty frame: not estimated, no trace
+    estimator = _Traced()
+    result = estimate_series(
+        frames,
+        CrossChannel(frames),
+        estimator,
+        FixedInitialTransform(Transform.identity(3)),
+        _x_score,
+        [0, 1, 2],
+    )
+    assert result.best_candidate == {0: "call1", 2: "call2"}
+    assert set(result.blocks) == {0, 2}
+
+    # a failed estimate keeps its trace (a stack's blocks say which failed)
+    failed = estimate_series(
+        frames, CrossChannel(frames), _Traced(fail=True),
+        FixedInitialTransform(Transform.identity(3)), _x_score, [0],
+    )  # fmt: skip
+    assert failed.best_candidate == {0: "call1"} and 0 in failed.errors
+
+    # an initial transform kept as it is (from a file) was not the estimator's: no trace
+    kept = estimate_series(
+        frames, CrossChannel(frames), _Traced(d=-1.0),
+        FixedInitialTransform(Transform.identity(3)), _x_score, [0], keep_initial=True,
+    )  # fmt: skip
+    assert kept.initialized_from == {0: "file"} and kept.best_candidate == {}
+
+
+def test_propagation_keeps_the_trace_of_the_start_that_won():
+    # run from the previous result (x=1 -> 2) and from the input seed (x=0 -> 1): the
+    # previous one wins, so t=1's trace is that first call's, not the later one's
+    from biahub.registration.engine.policies import CrossChannel
+    from biahub.registration.engine.series import estimate_propagated
+
+    frames = np.ones((2, 2, 4, 4), np.float32)
+    result = estimate_propagated(
+        frames, CrossChannel(frames), _Traced(), Transform.identity(3), _x_score, [0, 1],
+    )  # fmt: skip
+    assert result.best_candidate == {0: "call1", 1: "call2"}

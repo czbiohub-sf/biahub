@@ -283,9 +283,9 @@ def _estimate_timepoint_job(
         score=_finite_or_none(result.scores.get(t)),
         error=result.errors.get(t),
         initialized_from=result.initialized_from.get(t),
-        arm=getattr(estimator, "last_winner", None),
+        best_candidate=result.best_candidate.get(t),
         # a stack: what each block did (its transform, score, error) and which won
-        blocks=getattr(estimator, "last_stages", None),
+        blocks=result.blocks.get(t),
         metrics=_bead_metrics(settings, result, t, mov, ref, job.reference_policy),
         report=_report_metrics(
             settings,
@@ -354,8 +354,8 @@ def _estimate_propagated_job(
             error=result.errors.get(t),
             stand_in=stand_in[0].to_list() if stand_in else None,
             stand_in_from=stand_in[1] if stand_in else None,
-            arm=getattr(estimator, "last_winner", None),
-            blocks=getattr(estimator, "last_stages", None),
+            best_candidate=result.best_candidate.get(t),
+            blocks=result.blocks.get(t),
             metrics=_bead_metrics(settings, result, t, mov, ref, job.reference_policy),
             report=_report_metrics(
                 settings,

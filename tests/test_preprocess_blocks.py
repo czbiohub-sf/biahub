@@ -6,6 +6,7 @@ import yaml
 
 from pydantic import TypeAdapter, ValidationError
 
+from biahub.registration.estimators import EstimatorBase
 from biahub.registration.preprocess import apply_image_blocks, build_mask
 from biahub.settings import PreprocessBlocks
 
@@ -127,11 +128,13 @@ def test_a_box_outside_its_volume_is_refused():
 # --- applied before the method --------------------------------------------------------------
 
 
-class _Recording:
+class _Recording(EstimatorBase):
     """A method that records what it was given (and takes a competitor, like beads)."""
 
-    uses_seed = True
-    last_winner = "hungarian"
+    accepts_competitor = True
+
+    def trace(self):
+        return {"best_candidate": "hungarian", "blocks": None}
 
     def __init__(self):
         self.seen = {}
@@ -151,7 +154,6 @@ class _Recording:
 
 
 def test_the_method_gets_prepared_volumes_and_masks_and_keeps_its_interface():
-    import inspect
 
     from biahub.registration.preprocess import PreprocessedEstimator
 
@@ -170,9 +172,9 @@ def test_the_method_gets_prepared_volumes_and_masks_and_keeps_its_interface():
     assert inner.seen["ref_mask"][:, :8].all() and not inner.seen["ref_mask"][:, 8:].any()
     assert inner.seen["mov_mask"] is None
     assert (inner.seen["seed"], inner.seen["competitor"]) == ("s", "c")
-    # the engine reads the method's signature and attributes through the wrapper
-    assert "competitor" in inspect.signature(wrapped.estimate).parameters
-    assert (wrapped.uses_seed, wrapped.last_winner) == (True, "hungarian")
+    # the engine reads the method's members through the wrapper
+    assert (wrapped.uses_seed, wrapped.accepts_competitor) == (True, True)
+    assert wrapped.trace()["best_candidate"] == "hungarian"
 
 
 @pytest.mark.parametrize(
