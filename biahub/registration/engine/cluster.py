@@ -78,7 +78,7 @@ from biahub.registration.metrics import (
     intensity_centroid,
     raw_shift,
 )
-from biahub.registration.utils import resolve_time_indices
+from biahub.registration.utils import RunError, resolve_time_indices
 from biahub.settings import (
     EstimateTransformSettings,
 )
@@ -598,7 +598,7 @@ def run_timepoint_jobs(
 
     if step == "estimate" and plan["propagated"]:
         if timepoints is not None:
-            raise click.UsageError(
+            raise RunError(
                 "transform.initial.propagate estimates the whole series in one job, in "
                 "order; drop --timepoints"
             )
@@ -632,7 +632,7 @@ def run_timepoint_jobs(
     wanted = available if timepoints is None else list(timepoints)
     unknown = sorted(set(wanted) - set(available))
     if unknown:
-        raise click.UsageError(
+        raise RunError(
             f"{step}: timepoints {unknown} are not in this run's {step} list {available}"
         )
     flagged = _flags(output_dir)["flagged"] if step == "repair" else None

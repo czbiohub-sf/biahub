@@ -7,6 +7,7 @@ from iohub import open_ome_zarr
 
 from biahub.apply_transform import apply_transform, apply_transform_cli
 from biahub.estimate_crop import largest_box, overlap_slices, shared_crop
+from biahub.registration.utils import RunError
 from biahub.settings import TransformEntry, TransformSettings
 from biahub.utils.config import model_to_yaml
 
@@ -905,7 +906,7 @@ def test_a_time_selection_outside_the_store_is_refused_up_front(
     # IndexError deep in a job.
     positions, config = two_position_stabilization
     output = tmp_path / "out.zarr"
-    with pytest.raises(click.UsageError, match=message):
+    with pytest.raises(RunError, match=message):
         apply_transform(positions, config, output, time_indices=time_indices, cluster="debug")
     assert not output.exists()
 

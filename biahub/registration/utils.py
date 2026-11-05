@@ -5,6 +5,9 @@
   volumes to one FFT shape); `pad_to_shape` and `center_crop` are its two halves.
 - `resolve_time_indices`: the timepoints a `time_indices` setting names, checked
   against the store.
+- `RunError`: a run refused or unable to go on (settings that do not fit the data, a
+  missing or mismatched run folder). The library raises it; each command shows it as a
+  usage error (`biahub.cli.parsing.refusals_as_usage_errors`).
 
 Transforms live in `biahub.core.transform`, cropping in `biahub.estimate_crop`, the
 initial transform from the two grids in `ShapesInitialTransform` (`engine.policies`).
@@ -135,6 +138,14 @@ def match_shape_origin(in_shape: tuple[int, ...], out_shape: tuple[int, ...]) ->
     return leading_pad - crop_start
 
 
+class RunError(ValueError):
+    """A run refused or unable to go on.
+
+    Settings that do not fit the data, a missing or mismatched run folder. Not a
+    command-line error: each command converts it to one.
+    """
+
+
 def resolve_time_indices(time_indices, n_t: int) -> list[int]:
     """Return the timepoints a `time_indices` setting names: 'all', one index, or a list.
 
@@ -145,10 +156,10 @@ def resolve_time_indices(time_indices, n_t: int) -> list[int]:
         return list(range(n_t))
     indices = [time_indices] if isinstance(time_indices, int) else list(time_indices)
     if not indices:
-        raise click.UsageError("time_indices selects no timepoints")
+        raise RunError("time_indices selects no timepoints")
     outside = sorted({t for t in indices if not 0 <= t < n_t})
     if outside:
-        raise click.UsageError(
+        raise RunError(
             f"time_indices {outside} out of range: the store has {n_t} timepoints "
             f"(0-{n_t - 1})"
         )

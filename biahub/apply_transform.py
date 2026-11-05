@@ -33,6 +33,7 @@ from biahub.cli.parsing import (
     pair_reference_positions,
     position_key,
     reference_position_dirpaths,
+    refusals_as_usage_errors,
     resume,
     sbatch_filepath,
     sbatch_to_submitit,
@@ -471,6 +472,7 @@ def apply_transform(
 @monitor(short=False)
 @init_only()
 @resume()
+@refusals_as_usage_errors
 def apply_transform_cli(
     moving_position_dirpaths: list[Path],
     reference_position_dirpaths: list[Path],

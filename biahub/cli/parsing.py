@@ -368,3 +368,22 @@ def num_processes() -> Callable:
         )(f)
 
     return decorator
+
+
+def refusals_as_usage_errors(command: Callable) -> Callable:
+    """Show the library's refusals (`RunError`) as usage errors: message, exit code 2.
+
+    Goes directly above the command's `def`, under its click decorators.
+    """
+    import functools
+
+    from biahub.registration.utils import RunError
+
+    @functools.wraps(command)
+    def run(*args, **kwargs):
+        try:
+            return command(*args, **kwargs)
+        except RunError as error:
+            raise click.UsageError(str(error)) from error
+
+    return run

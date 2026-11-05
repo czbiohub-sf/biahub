@@ -18,14 +18,13 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-import click
-
 from iohub import open_ome_zarr
 
 from biahub.registration.engine.series import (
     SeriesResult,
     TimepointRecord,
 )
+from biahub.registration.utils import RunError
 from biahub.settings import (
     EstimateTransformSettings,
 )
@@ -160,7 +159,7 @@ def _start_run(
         previous = json.loads(manifest_path.read_text())
         changed = sorted(k for k in fingerprint if previous.get(k) != fingerprint[k])
         if changed:
-            raise click.UsageError(
+            raise RunError(
                 f"--resume: {', '.join(changed)} changed since the run in {output_dir}; "
                 "rerun without --resume"
             )
@@ -169,7 +168,7 @@ def _start_run(
         (output_dir / name).is_dir() and any((output_dir / name).iterdir())
         for name in ("timepoints", "repairs", "sweeps")
     ):
-        raise click.UsageError(
+        raise RunError(
             f"--resume: no {RUN_MANIFEST_FILENAME} in {output_dir}, so its records cannot be "
             "checked against these settings and inputs; rerun without --resume"
         )
@@ -266,7 +265,7 @@ def _initial_transforms_from_file(
 
     transforms = load_transform_settings(initial_transform_file)
     if transforms.per_position and key not in transforms.positions:
-        raise click.UsageError(
+        raise RunError(
             f"transform.initial.file {initial_transform_file} has no transforms for position "
             f"{key} (it has {sorted(transforms.positions)})"
         )
@@ -277,21 +276,21 @@ def _run_settings(output_dir: Path) -> EstimateTransformSettings:
     """Return the settings `init_run` resolved for this run."""
     path = Path(output_dir) / ENGINE_SETTINGS_FILENAME
     if not path.exists():
-        raise click.UsageError(f"no run in {output_dir}: run with --init first")
+        raise RunError(f"no run in {output_dir}: run with --init first")
     return yaml_to_model(path, EstimateTransformSettings)
 
 
 def _run_plan(output_dir: Path) -> dict:
     path = Path(output_dir) / RUN_PLAN_FILENAME
     if not path.exists():
-        raise click.UsageError(f"no run in {output_dir}: run with --init first")
+        raise RunError(f"no run in {output_dir}: run with --init first")
     return json.loads(path.read_text())
 
 
 def _flags(output_dir: Path) -> dict:
     path = Path(output_dir) / FLAGS_FILENAME
     if not path.exists():
-        raise click.UsageError(f"no flags in {output_dir}: run --step flag first")
+        raise RunError(f"no flags in {output_dir}: run --step flag first")
     return json.loads(path.read_text())
 
 

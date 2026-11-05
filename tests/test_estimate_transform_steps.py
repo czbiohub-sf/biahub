@@ -127,7 +127,8 @@ def test_the_steps_refuse_what_init_did_not_start(
     common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
 
     result = _cli("--step", "estimate", *common)
-    assert result.exit_code != 0 and "run with --init first" in result.output
+    # the engine refuses with RunError; the command shows it as a usage error (exit 2)
+    assert result.exit_code == 2 and "run with --init first" in result.output
     result = _cli("--init", "--step", "flag", *common)
     assert result.exit_code != 0 and "separate calls" in result.output
 
@@ -135,7 +136,7 @@ def test_the_steps_refuse_what_init_did_not_start(
     _ok("--step", "estimate", *common)
     _ok("--step", "flag", *common)
     result = _cli("--step", "repair", "--timepoints", "0", *common)  # only t=2 is flagged
-    assert result.exit_code != 0 and "not in this run's repair list" in result.output
+    assert result.exit_code == 2 and "not in this run's repair list" in result.output
     result = _cli("--step", "flag", "--timepoints", "0", *common)
     assert result.exit_code != 0 and "--timepoints goes with" in result.output
 
@@ -371,3 +372,21 @@ def test_a_half_written_record_is_redone_not_fatal(
     record.write_text('{"t": 1, "matrix": [[1.0, 0')  # truncated
     _ok("--step", "estimate", "--timepoints", "1", "--resume", *common)
     assert json.loads(record.read_text())["matrix"] is not None
+
+
+def test_the_engine_refuses_with_a_library_error_not_a_command_line_one(tmp_path):
+    import click
+
+    from biahub.registration.engine.disk import _flags, _run_plan, _run_settings
+    from biahub.registration.utils import RunError, resolve_time_indices
+
+    assert not issubclass(RunError, click.ClickException)
+    with pytest.raises(RunError, match="out of range"):
+        resolve_time_indices([5], 3)
+    with pytest.raises(RunError, match="selects no timepoints"):
+        resolve_time_indices([], 3)
+    for read in (_run_settings, _run_plan):
+        with pytest.raises(RunError, match="run with --init first"):
+            read(tmp_path)
+    with pytest.raises(RunError, match="run --step flag first"):
+        _flags(tmp_path)

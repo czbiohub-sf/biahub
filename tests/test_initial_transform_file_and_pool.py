@@ -14,6 +14,7 @@ from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
 from biahub.estimate_transform import estimate_transform
+from biahub.registration.utils import RunError
 from biahub.settings import (
     DetectPeaksSettings,
     TransformEntry,
@@ -171,7 +172,6 @@ def test_an_initial_file_refuses_another_source(extra, message):
 
 
 def test_a_changed_initial_transform_file_is_a_different_run(three_positions, tmp_path):
-    import click
 
     initial_transform_file = _plate_file(tmp_path, SHIFTS["0"])
     config = _config(
@@ -181,7 +181,7 @@ def test_a_changed_initial_transform_file_is_a_different_run(three_positions, tm
     run = dict(reference_position_dirpaths=three_positions[:1], cluster="debug")
     estimate_transform(three_positions[:1], config, output, **run)
     _plate_file(tmp_path, SHIFTS["2"])  # same name, other content
-    with pytest.raises(click.UsageError, match="changed"):
+    with pytest.raises(RunError, match="changed"):
         estimate_transform(three_positions[:1], config, output, resume=True, **run)
 
 

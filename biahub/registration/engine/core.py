@@ -89,7 +89,7 @@ from biahub.registration.preprocess import (
     apply_image_blocks,
     blocks_footprint,
 )
-from biahub.registration.utils import resolve_time_indices
+from biahub.registration.utils import RunError, resolve_time_indices
 from biahub.settings import (
     AnchorSettings,
     EstimateTransformSettings,
@@ -242,7 +242,7 @@ def build_estimator(
             pre_affine_fliplr=manual.affine_fliplr,
         )
     else:
-        raise click.UsageError(f"unknown method '{settings.method}'")
+        raise ValueError(f"unknown method '{settings.method}'")
     if settings.preprocess:
         estimator = PreprocessedEstimator(estimator, settings.preprocess, method_score)
     return estimator, score_fn, initial_transform
@@ -449,7 +449,7 @@ def init_run(
     if settings.reference.frame == "cross":
         beyond = [t for t in time_indices if t >= ref_T]
         if beyond:
-            raise click.UsageError(
+            raise RunError(
                 f"timepoints {beyond} are past the reference store, which has {ref_T} "
                 f"timepoints ({target})"
             )
@@ -836,7 +836,7 @@ def chain_to_first_frame(
     F_t = F_{t-1} @ (t -> t-1). That needs every link, hence contiguous timepoints.
     """
     if list(time_indices) != list(range(time_indices[0], time_indices[-1] + 1)):
-        raise click.UsageError(
+        raise RunError(
             "reference 'previous' needs contiguous time_indices (each timepoint is chained "
             f"through the one before it); got {time_indices}"
         )

@@ -32,6 +32,7 @@ from biahub.cli.parsing import (
     pair_reference_positions,
     position_key,
     reference_position_dirpaths,
+    refusals_as_usage_errors,
     resume,
     sbatch_filepath,
 )
@@ -652,6 +653,7 @@ def estimate_transform_step(
     help="Timepoints for --step estimate / repair / sweep, comma-separated (e.g. 5 or "
     "5,6); default: every timepoint the step has.",
 )
+@refusals_as_usage_errors
 def estimate_transform_cli(
     moving_position_dirpaths: list[Path],
     reference_position_dirpaths: list[Path],

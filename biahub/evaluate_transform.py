@@ -19,6 +19,7 @@ from biahub.cli.parsing import (
     output_filepath,
     position_key,
     reference_position_dirpaths,
+    refusals_as_usage_errors,
 )
 from biahub.registration.benchmark import block_candidates, evaluate_candidates
 from biahub.settings import load_transform_settings
@@ -190,6 +191,7 @@ def _parse_tags(tags) -> dict:
     multiple=True,
     help="name=value, a constant column (e.g. --tag case=dragonfly); repeat for several.",
 )
+@refusals_as_usage_errors
 def evaluate_transform_cli(
     moving_position_dirpaths,
     reference_position_dirpaths,
