@@ -53,7 +53,7 @@ source_kind = "human"
 ```
 
 The sample sheet has these columns, one row per well (`well` is `<row>/<col>`, e.g.
-`C/2`):
+`C/2`). `<BIAHUB>/settings/example_dca_metadata.csv` is a filled example:
 
 ```
 dataset,well,cell_line,marker,organelle,perturbation,moi,time_interval_min,hours_post_perturbation
