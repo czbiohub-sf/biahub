@@ -365,7 +365,7 @@ def test_repair_polishes_only_accepted_repairs():
     )
 
     repair = result.repairs[5]
-    assert repair.accepted and repair.reseed_score == pytest.approx(0.3)
+    assert repair.accepted and repair.repair_transform_score == pytest.approx(0.3)
     assert repair.polish_rounds == 2 and repair.source == "fix+polish2"
     assert result.scores[5] == pytest.approx(0.5)
     assert result.transforms[5].translation[0] == 3.0
@@ -463,8 +463,8 @@ def test_transforms_for_file_previous_treats_a_missing_step_as_identity():
 
 
 def test_transforms_for_file_absolute_frames_fill_with_the_input_initial_transform():
-    # As the legacy pipeline did when refinement failed: the run's initial transform (e.g. the
-    # approximate transform), not a neighbour's transform.
+    # As the legacy pipeline did when refinement failed: the run's initial transform (e.g.
+    # from the two grids' shapes), not a neighbour's transform.
     from biahub.registration.engine import SeriesResult
 
     result = SeriesResult(transforms={0: _shift_x(5), 2: _shift_x(7)})

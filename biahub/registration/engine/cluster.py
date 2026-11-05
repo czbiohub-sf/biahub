@@ -438,7 +438,7 @@ def _repair_timepoint_job(
         candidate_scores={k: _finite_or_none(v) for k, v in outcome.scores.items()},
         candidate_failures=outcome.failures,
         polish_rounds=outcome.polish_rounds,
-        reseed_score=_finite_or_none(outcome.reseed_score),
+        repair_transform_score=_finite_or_none(outcome.repair_transform_score),
         report=_report_metrics(
             settings,
             outcome.transform if outcome.accepted else None,

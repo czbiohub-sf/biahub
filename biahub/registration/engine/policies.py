@@ -231,7 +231,7 @@ class FixedInitialTransform:
 
 
 class ShapesInitialTransform:
-    """`transform.initial: {from: shapes}`: the approximate transform from the two grids.
+    """`transform.initial: {from: shapes}`: the initial transform from the two grids.
 
     The moving grid, flipped left-right (`fliplr`) and turned by `rotate90` quarter
     turns in yx, then rescaled by the voxel-size ratio (z, and yx from the last axis)

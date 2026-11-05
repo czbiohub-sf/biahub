@@ -12,7 +12,7 @@ Pipeline overview
    (Hungarian or descriptor-based) with geometric consistency filtering.
 3. **Transform estimation** (`transform_from_matches`): Fit an affine/euclidean/similarity
    transform from matched bead pairs.
-4. **Iterative refinement** (`NodeGraphEstimator.estimate`): Compose the approximate
+4. **Iterative refinement** (`NodeGraphEstimator.estimate`): Compose the initial
    transform with bead-based corrections, re-detect peaks, and score until convergence.
 
 Key conventions

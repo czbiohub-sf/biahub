@@ -210,7 +210,8 @@ class PassResult:
     scores: dict[str, float] = field(default_factory=dict)  # every candidate that ran
     failures: dict[str, str] = field(default_factory=dict)  # candidate -> "Type: message"
     polish_rounds: int = 0  # polish rounds that improved the accepted candidate
-    reseed_score: float | None = None  # the accepted candidate's score before polish
+    # the accepted repair candidate's score, before polish refined it
+    repair_transform_score: float | None = None
     # score.report metrics of the accepted transform
     report: dict[str, float | None] | None = None
 
@@ -231,7 +232,7 @@ class PassRecord:
     candidate_scores: dict[str, float | None]
     candidate_failures: dict[str, str]
     polish_rounds: int = 0
-    reseed_score: float | None = None
+    repair_transform_score: float | None = None
     report: dict | None = None
 
     @classmethod
@@ -258,7 +259,7 @@ class PassRecord:
             },
             failures=self.candidate_failures,
             polish_rounds=self.polish_rounds,
-            reseed_score=self.reseed_score,
+            repair_transform_score=self.repair_transform_score,
             report=self.report,
         )
 
@@ -457,7 +458,7 @@ def repair_timepoint(
         score_fn=lambda transform, m=mov_t, r=ref_t: score_fn(transform, m, r),
     )
     if outcome.accepted and polish_rounds:
-        outcome.reseed_score = outcome.score
+        outcome.repair_transform_score = outcome.score
         outcome.transform, outcome.score, outcome.polish_rounds = polish(
             t,
             mov_t,

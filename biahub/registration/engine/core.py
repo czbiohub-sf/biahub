@@ -276,8 +276,8 @@ def _one_transform_per_timepoint(
 ) -> list[Transform]:
     """Return one transform per requested timepoint.
 
-    The accepted transform, else the timepoint's initial transform (e.g. the approximate
-    transform, or a file's own for that timepoint), as the legacy pipeline returned when
+    The accepted transform, else the timepoint's initial transform (e.g. the one
+    from the two grids, or a file's own for that timepoint), as the legacy pipeline returned when
     refinement failed. Each stand-in is recorded in `result.filled_from`.
     """
     if isinstance(initial, Transform):
@@ -322,7 +322,7 @@ def _report(result: SeriesResult, time_indices: list[int], run_id: str) -> dict:
             str(t): {
                 **_pass_report(r),
                 "polish_rounds": r.polish_rounds,
-                "reseed_score": _finite_or_none(r.reseed_score),
+                "repair_transform_score": _finite_or_none(r.repair_transform_score),
             }
             for t, r in result.repairs.items()
         },
@@ -658,20 +658,24 @@ def finalize_run(
         if outcome is None:
             continue
         result.repairs[t] = outcome
-        reseed_score = outcome.score if outcome.reseed_score is None else outcome.reseed_score
+        repair_transform_score = (
+            outcome.score
+            if outcome.repair_transform_score is None
+            else outcome.repair_transform_score
+        )
         journal.record(
             t=t,
             pass_name="repair",
             before_score=result.scores[t],
-            after_score=reseed_score,
+            after_score=repair_transform_score,
             accepted=outcome.accepted,
             failures=outcome.failures,
         )
-        if outcome.reseed_score is not None:
+        if outcome.repair_transform_score is not None:
             journal.record(
                 t=t,
                 pass_name="polish",
-                before_score=reseed_score,
+                before_score=repair_transform_score,
                 after_score=outcome.score,
                 accepted=outcome.polish_rounds > 0,
             )

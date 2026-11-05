@@ -1432,7 +1432,7 @@ class InitialTransformSettings(MyBaseModel):
 
     `from: matrix` -- `matrix` (4x4) in `direction`: "inverse" (reference -> moving, the
     convention of every transform on disk) or "forward" (moving -> reference).
-    `from: shapes` -- the approximate transform from the two stores' shapes and voxel
+    `from: shapes` -- the initial transform from the two stores' shapes and voxel
     sizes (their OME-NGFF scale), after `rotate90` quarter turns in yx and `fliplr`.
     `from: file` -- each position and timepoint's transform in a transforms `file` (an
     earlier result, e.g. a pooled plate transform): the estimate from it is kept only

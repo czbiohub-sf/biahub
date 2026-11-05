@@ -146,7 +146,7 @@ def user_assisted_registration(
     source_zyx_ants = ants.from_numpy(source_channel_volume.astype(np.float32))
     target_zyx_ants = ants.from_numpy(target_channel_volume.astype(np.float32))
 
-    # the approximate transform from the two grids (flip, rotate, rescale) pre-aligns the
+    # the initial transform from the two grids (flip, rotate, rescale) pre-aligns the
     # source for display; imported here: the engine imports this module
     from biahub.registration.engine.policies import ShapesInitialTransform
 

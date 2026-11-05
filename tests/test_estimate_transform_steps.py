@@ -342,7 +342,7 @@ def test_a_stale_repair_does_not_replace_a_better_redone_estimate(
             {
                 "t": 2, "accepted": True, "source": "t-1", "score": 0.3,
                 "matrix": shift.tolist(), "candidate_scores": {"t-1": 0.3},
-                "candidate_failures": {}, "polish_rounds": 0, "reseed_score": 0.3,
+                "candidate_failures": {}, "polish_rounds": 0, "repair_transform_score": 0.3,
             }
         )
     )  # fmt: skip
