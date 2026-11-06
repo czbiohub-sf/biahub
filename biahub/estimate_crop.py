@@ -22,7 +22,8 @@ from biahub.cli.parsing import (
 )
 from biahub.cli.slurm import wait_for_jobs_to_finish
 from biahub.core.transform import Transform
-from biahub.settings import ConcatenateSettings
+from biahub.registration.preprocess import build_mask
+from biahub.settings import ConcatenateSettings, MaskCircle
 from biahub.utils.cluster import (
     apply_sbatch_overrides,
     estimate_resources,
@@ -259,7 +260,7 @@ def estimate_crop_one_position(
     if lf_mask.ndim != 5 or ls_mask.ndim != 5:
         raise ValueError("Both phase_data and fluor_data must be 5D arrays.")
 
-    # Ensure data dimensions are the same
+    # Both volumes cut to the shape they share (the same shape, normally)
     lf_shape = lf_mask.shape[-3:]
     ls_shape = ls_mask.shape[-3:]
     if lf_shape != ls_shape:
@@ -267,9 +268,9 @@ def estimate_crop_one_position(
             "WARNING: Phase and fluorescence datasets should have the same shape, got"
             f" phase shape: {lf_shape}, fluorescence shape: {ls_shape}"
         )
-        _max_zyx_dims = np.asarray([lf_shape, ls_shape]).min(axis=0)
-        lf_mask = lf_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]]
-        ls_mask = ls_mask[..., : _max_zyx_dims[0], : _max_zyx_dims[1], : _max_zyx_dims[2]]
+    Z, Y, X = np.minimum(lf_shape, ls_shape)
+    lf_mask = lf_mask[..., :Z, :Y, :X]
+    ls_mask = ls_mask[..., :Z, :Y, :X]
 
     # Concatenate the data arrays along the channel axis
     data = np.concatenate([lf_mask, ls_mask], axis=1)
@@ -283,7 +284,7 @@ def estimate_crop_one_position(
 
     if len(valid_T) == 0:
         click.echo("No valid data found for current position, will not crop.")
-        return tuple(zip((0, 0, 0), _max_zyx_dims, strict=True))
+        return ([0, int(Z)], [0, int(Y)], [0, int(X)])
     valid_data = data[valid_T, valid_C]
 
     # Compute a mask where all voxels are non-zero along time and channel dimensions
@@ -294,18 +295,15 @@ def estimate_crop_one_position(
         click.echo(f"Applying circular mask of radius {lf_mask_radius} to phase channel.")
         if not (0 < lf_mask_radius <= 1):
             raise ValueError(
-                "lf_mask_radius must be a fraction of image width (0 < lf_mask_radius <= 1)."
+                "lf_mask_radius is a fraction of the half-width of the shorter yx axis "
+                "(0 < lf_mask_radius <= 1)"
             )
 
-        lf_mask = np.zeros(lf_mask.shape[-2:], dtype=bool)
-
-        y, x = np.ogrid[: lf_mask.shape[-2], : lf_mask.shape[-1]]
-        center = (lf_mask.shape[-2] // 2, lf_mask.shape[-1] // 2)
-        radius = int(lf_mask_radius * min(center))
-
-        lf_mask[(x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2] = True
-        lf_mask_cropped = lf_mask[: _max_zyx_dims[1], : _max_zyx_dims[2]]
-        combined_mask = combined_mask * lf_mask_cropped
+        # the preprocess block's circle, on the phase field it belongs to, then cut to
+        # the shared shape like the volumes
+        circle = MaskCircle(target=["reference"], radius=lf_mask_radius)
+        phase_circle = build_mask(lf_shape, [circle], "reference")
+        combined_mask = combined_mask * phase_circle[:Z, :Y, :X]
 
     # Compute overlapping region
     z_slice, y_slice, x_slice = find_lir(combined_mask)
