@@ -92,7 +92,10 @@ so):
 - `estimate-transform-ants.yml`: registration without usable beads (intensity-based, e.g.
   fluorescence onto virtual staining); its header lists the fields to decide.
 - `estimate-transform-manual.yml`: a hand-picked registration in napari (plain CLI only).
-- `estimate-transform-focus-finding.yml`, `estimate-transform-pcc.yml`: stabilization.
+- `estimate-transform-nuclei_matching.yml`: nuclei registration (DragonFly DAPI onto virtual-stained nuclei).
+- `estimate-transform-shapes.yml`: the registration the stores' metadata implies (a geometry check,
+  or a first block).
+- `estimate-transform-focus_finding.yml`, `estimate-transform-phase_cross_corr.yml`: stabilization.
 
 If the project has an old `estimate-registration` / `estimate-stabilization` config,
 convert it instead: `biahub convert-settings -c <old>.yml -o <new>.yml` (it keeps the initial transform,

@@ -1,0 +1,34 @@
+# biahub estimate-transform -- nuclei registration of a DragonFly dataset (DAPI onto the
+# virtual-stained nuclei of the label-free channel), as the 2025_04_18 organelle-box
+# registration ran it:
+#   nuclei_matching            -- detects nuclei in both volumes and matches them; fits the
+#                                 transform type in yx and a z shift
+#   transform.initial          -- nuclei must start within the matcher's reach (a few µm):
+#                                 the previous result of the same setup, or a coarse block
+#                                 (e.g. phase_cross_corr) before this one
+#   score: correlation         -- intensity score; the bead metrics need beads
+moving:
+  channel: 2-Prime_DAPI
+reference:
+  frame: cross
+  channel: nuclei_prediction
+method: nuclei_matching
+nuclei_matching: {}
+transform:
+  type: similarity
+  initial:
+    from: matrix
+    direction: inverse
+    matrix:
+    - [1.0, 0.0, 0.0, -7.620655]
+    - [0.0, 1.049576, 0.008255, -51.196336]
+    - [0.0, -0.008255, 1.049576, -42.929198]
+    - [0.0, 0.0, 0.0, 1.0]
+score:
+  metric: correlation
+  report:
+  - correlation
+  - mutual_information
+time_indices: all
+fallback:
+  repair: null

@@ -17,7 +17,7 @@
 //
 //   # stabilization: one transform list per position, applied to the same positions
 //   nextflow run registration_wf.nf -profile slurm \
-//       --moving <data.zarr> --estimate_config estimate-transform-focus-finding.yml \
+//       --moving <data.zarr> --estimate_config estimate-transform-focus_finding.yml \
 //       --estimate_positions '*/*/*' --apply --output <dir> -resume
 //
 //   # apply an existing transforms file (e.g. after substitute-transforms)

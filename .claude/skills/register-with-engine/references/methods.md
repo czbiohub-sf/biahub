@@ -4,12 +4,13 @@
 
 | Job | Method | Notes |
 |---|---|---|
-| fluorescence -> label-free registration on a beads well | `beads` | the default; graph matching on detected beads, optional spectral candidate (`spectral`) for large offsets |
+| fluorescence -> label-free registration on a beads well | `bead_matching` | the default; graph matching on detected beads, optional spectral candidate (`spectral`) for large offsets; `templates/estimate-transform-bead_matching.yml` |
+| fluorescence -> label-free registration on cells, nuclei in both (e.g. DAPI onto virtual-stained nuclei) | `nuclei_matching` | detects and matches nuclei; needs a start within a few µm (an earlier result, or a coarse block first); `templates/estimate-transform-nuclei_matching.yml` |
 | registration without usable beads (e.g. fluorescence onto virtual staining) | `ants` | intensity-based; see "ANTs" below; `templates/estimate-transform-ants.yml` |
 | a single hand-picked registration | `manual` | napari point annotation on one timepoint (`time_indices: <t>`), applied to all; `templates/estimate-transform-manual.yml` |
-| stabilization of a channel over time (drift) | `phase_cross_corr` | translation only; crop with `center_crop_xy` |
-| stabilization of phase (focus z + stackreg yx) | `focus_finding` | what the A549 projects used (`label-free/2-stabilize`) |
-| the registration the two stores' metadata implies (voxel sizes, camera turn and flip) | `shapes` | reads no pixels: `shapes: {rotate90: -1, fliplr: false}` (mantis light-sheet); a first block before a fine method, or a quick check of the geometry |
+| stabilization of a channel over time (drift) | `phase_cross_corr` | translation only; crop with `center_crop_xy`; `templates/estimate-transform-phase_cross_corr.yml` |
+| stabilization of phase (focus z + stackreg yx) | `focus_finding` | what the A549 projects used (`label-free/2-stabilize`); `templates/estimate-transform-focus_finding.yml` |
+| the registration the two stores' metadata implies (voxel sizes, camera turn and flip) | `shapes` | reads no pixels: `shapes: {rotate90: -1, fliplr: false}` (mantis light-sheet); a first block before a fine method, or a quick check of the geometry; `templates/estimate-transform-shapes.yml` |
 
 `reference.frame`: `cross` (another channel at the same timepoint: registration), `first`
 or `previous` (the channel's own first / previous frame with data: stabilization).
@@ -28,7 +29,7 @@ blocks default to both; a mask names its volume), and runs in that volume's own 
 | `mask_box: {target: [reference], box: [all, [y0, y1], [x0, x1]]}` | mask | only part of the field is informative (cells in one region, a damaged corner); keep it large and spread out -- scale and rotation are poorly constrained from a small region |
 
 Image blocks apply to every method; mask blocks only to methods that can use them (`ants`;
-the config refuses them for the others). Sobel before `beads` would break bead detection:
+the config refuses them for the others). Sobel before `bead_matching` would break bead detection:
 image blocks are for intensity methods unless there is a reason.
 
 ## Score and report: `score`
