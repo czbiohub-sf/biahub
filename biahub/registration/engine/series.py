@@ -141,13 +141,12 @@ def estimate_series(
     score_fn: ScoreFn,
     time_indices: Iterable[int],
     on_timepoint: OnTimepoint | None = None,
-    keep_initial: bool = False,
 ) -> SeriesResult:
     """One estimate per timepoint, in the given order (propagation: `estimate_propagated`).
 
     An `EstimationError` records nan plus the message for that timepoint and moves on.
-    With `keep_initial` (an initial transform from a file, an earlier result) it competes
-    as it is (`_keep_initial`).
+    An initial transform the policy keeps unless beaten (from a file, an earlier result)
+    competes as it is (`_keep_initial`).
     """
     result = SeriesResult()
     for t in time_indices:
@@ -170,7 +169,7 @@ def estimate_series(
             transform = _gap_rule(estimator, reference_policy, mov, t, transform)
             estimate = (transform, float(score_fn(transform, mov_t, ref_t)))
         trace = estimator.trace()
-        if keep_initial:
+        if initial_policy.keep_unless_beaten:
             estimate, result.initialized_from[t] = _keep_initial(
                 estimate, initial_transform, score_fn, mov_t, ref_t
             )

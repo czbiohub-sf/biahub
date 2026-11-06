@@ -57,7 +57,6 @@ from biahub.registration.engine.fallback import (
     sweep_timepoint,
 )
 from biahub.registration.engine.policies import (
-    FixedInitialTransform,
     InitialTransformPolicy,
     ReferencePolicy,
 )
@@ -272,10 +271,9 @@ def _estimate_timepoint_job(
         mov,
         job.reference_policy,
         estimator,
-        FixedInitialTransform(job.initial.initial_for(t)),
+        job.initial,
         score_fn,
         [t],
-        keep_initial=job.initial.keep_unless_beaten,
     )
     record = TimepointRecord(
         t=t,

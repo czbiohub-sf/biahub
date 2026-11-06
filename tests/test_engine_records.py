@@ -167,7 +167,11 @@ def _x_score(transform, mov, ref):
 
 
 def test_a_series_keeps_each_timepoints_trace_and_drops_it_where_nothing_was_estimated():
-    from biahub.registration.engine.policies import CrossChannel, FixedInitialTransform
+    from biahub.registration.engine.policies import (
+        CrossChannel,
+        FileInitialTransform,
+        FixedInitialTransform,
+    )
     from biahub.registration.engine.series import estimate_series
 
     frames = np.ones((3, 2, 4, 4), np.float32)
@@ -191,10 +195,11 @@ def test_a_series_keeps_each_timepoints_trace_and_drops_it_where_nothing_was_est
     )  # fmt: skip
     assert failed.best_candidate == {0: "call1"} and 0 in failed.errors
 
-    # an initial transform kept as it is (from a file) was not the estimator's: no trace
+    # an initial transform kept as it is (from a file: the policy says so) was not the
+    # estimator's: no trace
     kept = estimate_series(
         frames, CrossChannel(frames), _Traced(d=-1.0),
-        FixedInitialTransform(Transform.identity(3)), _x_score, [0], keep_initial=True,
+        FileInitialTransform({0: Transform.identity(3)}), _x_score, [0],
     )  # fmt: skip
     assert kept.initialized_from == {0: "file"} and kept.best_candidate == {}
 
