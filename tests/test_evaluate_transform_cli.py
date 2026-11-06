@@ -195,14 +195,33 @@ def test_a_stabilization_is_evaluated_against_its_reference_frame(tmp_path):
         ),
         transforms,
     )
-    output = tmp_path / "evaluation.csv"
-    args = ["evaluate-transform", "-m", str(position), "-r", str(position)]
-    args += ["-c", str(transforms), "-o", str(output), "--tile-px", "64", "--t", "1"]
-    args += ["--reference-t", "0"]
-    result = CliRunner().invoke(cli, args)
-    assert result.exit_code == 0, result.output
-    tiles = {r["candidate"]: float(r["tiles_median_um"]) for r in _rows(output)}
-    assert tiles["transforms"] < 0.05 < tiles["unregistered"]
+    # with -r, and without: a stabilization's reference is its own positions
+    for reference in (["-r", str(position)], []):
+        output = tmp_path / f"evaluation{len(reference)}.csv"
+        args = ["evaluate-transform", "-m", str(position), *reference]
+        args += ["-c", str(transforms), "-o", str(output), "--tile-px", "64", "--t", "1"]
+        args += ["--reference-t", "0"]
+        result = CliRunner().invoke(cli, args)
+        assert result.exit_code == 0, result.output
+        tiles = {r["candidate"]: float(r["tiles_median_um"]) for r in _rows(output)}
+        assert tiles["transforms"] < 0.05 < tiles["unregistered"]
+
+
+def test_a_registration_file_needs_its_reference_positions(tmp_path):
+    transforms = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=np.eye(4).tolist())],
+        ),
+        transforms,
+    )
+    positions = _plate(tmp_path)
+    args = ["evaluate-transform", "-m", str(positions[0]), "-c", str(transforms)]
+    result = CliRunner().invoke(cli, [*args, "-o", str(tmp_path / "e.csv")])
+    assert result.exit_code == 2 and "needs the reference positions (-r)" in result.output
 
 
 def test_a_blank_position_is_reported_not_left_as_empty_rows(tmp_path):

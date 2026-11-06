@@ -66,7 +66,7 @@ def _bead_detection(run_dir: Path, threshold: float | None) -> dict:
 
 def evaluate_transform(
     moving_position_dirpaths: list[Path],
-    reference_position_dirpaths: list[Path],
+    reference_position_dirpaths: list[Path] | None,
     transforms_filepath: Path,
     output_filepath: Path,
     moving_channel: str | None = None,
@@ -86,6 +86,14 @@ def evaluate_transform(
     tables from several runs can be joined.
     """
     transforms = load_transform_settings(transforms_filepath)
+    if not reference_position_dirpaths:
+        if transforms.reference_channel is not None:
+            raise click.UsageError(
+                f"a registration onto {transforms.reference_channel!r} needs the reference "
+                "positions (-r)"
+            )
+        # a stabilization's reference is the moving positions themselves
+        reference_position_dirpaths = moving_position_dirpaths
     keys = [position_key(p) for p in moving_position_dirpaths]
     # positions the file has no list for (held out from a per-position estimate): each
     # estimated position's transform is a candidate there, named after it
@@ -142,7 +150,7 @@ def _parse_tags(tags) -> dict:
 
 @click.command("evaluate-transform")
 @moving_position_dirpaths()
-@reference_position_dirpaths()
+@reference_position_dirpaths(required=False)
 @config_filepath()
 @output_filepath()
 @click.option(
