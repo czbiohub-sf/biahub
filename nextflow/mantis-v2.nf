@@ -526,7 +526,9 @@ workflow {
     //
     // A QC verdict cannot fail the pipeline: `imaging-qc gate` exits 0 whether
     // positions pass or fail, recording the verdict in each store's own
-    // `tables/qc/` tables and a QC_SUMMARY line. Only a broken config or a
+    // `tables/qc/` tables and a QC_SUMMARY line (printed by finalize_stage, so
+    // it is in nextflow/slurm_output/qc/*finalize_stage*.out, not in
+    // .nextflow.log). Only a broken config or a
     // genuine compute error exits non-zero, which is what should stop a run.
     qc_report_dir = params.qc_report_dir ?: "${out}/qc/report"
 

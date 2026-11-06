@@ -659,8 +659,14 @@ directory (`<DATASET>_rerun`) over relaunching in place.
    `labels/tracks_nuclei` (`tracks_` plus the track config's `labels`; both
    uint32 (T, 1, Z, Y, X) at the image's full Z), `tracks.geff` and
    `tracks_<row>_<col>_<fov>.csv`, and report them beside the image data.
-3. If QC ran, report its verdict: the `QC_SUMMARY` line from the
-   pipeline log (`pass=`/`fail=`/`gates_fail=`), and point at the report at
+3. If QC ran, report its verdict: the `QC_SUMMARY` line per store
+   (`pass=`/`fail=`/`gates_fail=`). It is NOT in `.nextflow.log`: the
+   `qc_compute_wf:finalize_stage` task prints it, so it lands only in that
+   task's SLURM log,
+   `<OUTPUT>/nextflow/slurm_output/qc/nf-qc_compute_wf_finalize_stage_(<store>)_<jobid>.out`
+   (e.g. `grep -h QC_SUMMARY <OUTPUT>/nextflow/slurm_output/qc/*finalize_stage*.out`).
+   Retries and relaunches leave older files, so take the newest one per store.
+   Point at the report at
    `<OUTPUT>/qc/report/index.html` — one page, one tab: the assembled store
    (A549's includes the cell counts). A gate failure does NOT fail the run:
    `imaging-qc gate` exits 0 either way, so a failing verdict is only visible
