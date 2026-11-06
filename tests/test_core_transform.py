@@ -193,3 +193,24 @@ def test_scaling_rotation_and_flip_constructors_keep_the_centre_where_it_belongs
         Transform.from_rotation_yx(90, start).matrix,
         Transform.from_rotation_yx(90, start, start).matrix,
     )
+
+
+def test_on_grid_is_the_same_transform_on_another_grid():
+    # a point of the new grid, mapped there, lands where the transform sends it in the
+    # old coordinates: index i of the new grid sits at scale * i + offset
+    rng = np.random.default_rng(3)
+    matrix = np.eye(4)
+    matrix[:3, :3] += 0.1 * rng.standard_normal((3, 3))
+    matrix[:3, 3] = 10 * rng.standard_normal(3)
+    transform = Transform(matrix, transform_type="affine")
+    scale, offset = np.array([1.0, 4.0, 4.0]), np.array([0.0, 1.5, 1.5])
+    on_grid = transform.on_grid(scale, offset)
+    points = rng.uniform(0, 50, size=(20, 3))
+    old = points * scale + offset
+    mapped_old = old @ matrix[:3, :3].T + matrix[:3, 3]
+    mapped_new = points @ on_grid.matrix[:3, :3].T + on_grid.matrix[:3, 3]
+    np.testing.assert_allclose(mapped_new * scale + offset, mapped_old, atol=1e-9)
+    assert on_grid.transform_type == "affine"
+    # one scale for every axis, no offset: a 2-voxel shift is 1 voxel on a 2x coarser grid
+    shift = Transform.from_translation([2.0, 4.0, -6.0]).on_grid(2)
+    np.testing.assert_allclose(shift.translation, [1.0, 2.0, -3.0])

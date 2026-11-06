@@ -96,9 +96,9 @@ def display_volumes(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> tup
     factor = max(1, int(np.ceil(max(ref.shape[1:]) / DISPLAY_PX)))
     small_mov, small_ref = _shrink_yx(mov, factor), _shrink_yx(ref, factor)
     # small index d sits at full index factor * d + (factor - 1) / 2 in y and x
-    to_full = np.diag([1.0, factor, factor, 1.0])
-    to_full[1:3, 3] = (factor - 1) / 2
-    small = Transform(np.linalg.inv(to_full) @ np.asarray(transform.matrix) @ to_full)
+    small = transform.on_grid(
+        (1, factor, factor), offset=(0, (factor - 1) / 2, (factor - 1) / 2)
+    )
     return prepare_pair(small, small_mov, small_ref, "intensity").warped, small_ref, factor
 
 

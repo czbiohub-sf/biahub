@@ -73,9 +73,8 @@ class LocalPCCEstimator(EstimatorBase):
         correction_um = np.eye(4)
         correction_um[1:3, 1:3] = yx[:2, :2]
         correction_um[1:3, 3] = yx[:2, 2]
-        to_vox = np.diag([*(1.0 / self.ref_um), 1.0])
-        from_vox = np.diag([*self.ref_um, 1.0])
-        correction = to_vox @ correction_um @ from_vox  # on the reference grid
+        # fitted in µm; the reference grid's voxel k sits at ref_um * k µm
+        correction = Transform(correction_um).on_grid(self.ref_um)
         return Transform(
-            correction @ np.asarray(current.matrix), transform_type=self.transform_type
+            correction.matrix @ current.matrix, transform_type=self.transform_type
         )

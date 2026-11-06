@@ -116,11 +116,10 @@ def overlap_mask(
     cheap.
     """
     f = max(1, int(downsample))
-    scale = np.diag([1.0 / f, 1.0 / f, 1.0 / f, 1.0])
-    coarse = scale @ np.asarray(inverse_matrix, dtype=float) @ np.linalg.inv(scale)
-    return Transform.from_inverse(coarse).coverage(
-        _coarse(source_shape_zyx, f), _coarse(target_shape_zyx, f)
-    )
+    coarse = Transform.from_inverse(inverse_matrix).on_grid(
+        f
+    )  # the same warp, f times coarser
+    return coarse.coverage(_coarse(source_shape_zyx, f), _coarse(target_shape_zyx, f))
 
 
 def largest_box(mask: np.ndarray) -> Slices:

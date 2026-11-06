@@ -422,6 +422,21 @@ class Transform:
         """Compose transforms using @ operator."""
         return self.compose(other)
 
+    def on_grid(self, scale, offset=0.0) -> Transform:
+        """Return this transform in the coordinates of another grid.
+
+        Index `i` of the other grid sits at `scale * i + offset` in this transform's
+        coordinates (per axis, or one number for all). A grid `f` times coarser has
+        `scale = f`; a transform fitted in µm, wanted in voxels, has `scale` = the voxel
+        size. A point mapped by the result lands where this transform sends it.
+        """
+        to_here = np.eye(self.ndim + 1)
+        to_here[: self.ndim, : self.ndim] = np.diag(np.broadcast_to(scale, self.ndim))
+        to_here[: self.ndim, self.ndim] = np.broadcast_to(offset, self.ndim)
+        return Transform(
+            np.linalg.inv(to_here) @ self._matrix @ to_here, transform_type=self._type
+        )
+
     # ==================== Application Methods ====================
 
     def apply_points(self, points: NDArray[np.floating]) -> NDArray[np.floating]:
