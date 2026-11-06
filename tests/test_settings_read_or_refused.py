@@ -19,3 +19,13 @@ def test_another_methods_block_is_refused():
     with pytest.raises(ValidationError, match="belong in the blocks"):
         _settings(method=[{"phase_cross_corr": {}}, {"ants": {}}], phase_cross_corr={})
     _settings(phase_cross_corr={})  # its own block is fine
+
+
+def test_the_neighbour_window_is_given_with_neighbours_and_only_there():
+    # window defaulted to 6 (a hidden choice: how many frames on each side), and was
+    # accepted by every frame though only neighbours reads it
+    with pytest.raises(ValidationError, match="'neighbours' needs its window"):
+        _settings(reference={"frame": "neighbours"})
+    with pytest.raises(ValidationError, match="window is read only by frame neighbours"):
+        _settings(reference={"frame": "first", "window": 4})
+    assert _settings(reference={"frame": "neighbours", "window": 4}).reference.window == 4

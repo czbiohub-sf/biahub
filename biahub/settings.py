@@ -1833,8 +1833,8 @@ class ReferenceSettings(MyBaseModel):
 
     frame: ReferenceFrame = "cross"
     channel: str | None = None
-    # frames on each side of t for `frame: neighbours` (read by no other frame)
-    window: PositiveInt = 6
+    # frames on each side of t for `frame: neighbours`: given there, and only there
+    window: PositiveInt | None = None
     anchor: AnchorSettings | None = None
     leftover_motion: LeftoverMotionSettings | None = None
 
@@ -1846,6 +1846,15 @@ class ReferenceSettings(MyBaseModel):
             raise ValueError(
                 f"reference frame '{self.frame}' aligns the moving channel onto itself; "
                 "drop reference.channel"
+            )
+        if self.frame == "neighbours" and self.window is None:
+            raise ValueError(
+                "reference frame 'neighbours' needs its window: frames on each side of t "
+                "(e.g. window: 6)"
+            )
+        if self.frame != "neighbours" and self.window is not None:
+            raise ValueError(
+                f"reference.window is read only by frame neighbours; got '{self.frame}'"
             )
         if self.anchor is not None and self.frame != "neighbours":
             raise ValueError(

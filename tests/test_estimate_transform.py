@@ -95,7 +95,9 @@ def _write_config(
         reference=reference
         if isinstance(reference, ReferenceSettings)
         else ReferenceSettings(
-            frame=reference, channel=target if reference == "cross" else None
+            frame=reference,
+            channel=target if reference == "cross" else None,
+            window=6 if reference == "neighbours" else None,
         ),
         method=method,
         transform={
@@ -1195,7 +1197,7 @@ def test_a_stabilization_reports_its_leftover_motion_against_unregistered(tmp_pa
     config = _write_config(
         tmp_path,
         source="GFP",
-        reference=ReferenceSettings(frame="neighbours", leftover_motion={}),
+        reference=ReferenceSettings(frame="neighbours", window=6, leftover_motion={}),
         method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
