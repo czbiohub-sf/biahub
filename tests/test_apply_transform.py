@@ -329,7 +329,7 @@ def test_apply_transform_cli_takes_moving_and_reference_position_paths(
             "-o",
             str(output),
             "--keep-overhang",
-            "--time-indices",
+            "--timepoints",
             "0,2",
             "--cluster",
             "debug",
@@ -339,7 +339,7 @@ def test_apply_transform_cli_takes_moving_and_reference_position_paths(
     assert result.exit_code == 0, result.output
     with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
         assert out.channel_names == ["Phase3D", "GFP"]
-        assert out.data.shape[0] == 2  # --time-indices 0,2
+        assert out.data.shape[0] == 2  # --timepoints 0,2
 
 
 def test_transform_settings_matrix_for_uses_own_entry_else_nearest_earlier():

@@ -66,7 +66,7 @@ def _instead(command: str, *options) -> None:
 
 
 def _time_indices_arg(time_indices) -> str:
-    """Return `--time-indices` as apply-transform takes it: 'all', one index, or 'a,b,c'."""
+    """Return `--timepoints` as apply-transform takes it: 'all', one index, or 'a,b,c'."""
     if isinstance(time_indices, (list, tuple)):
         return ",".join(str(t) for t in time_indices)
     return str(time_indices)
@@ -281,7 +281,7 @@ def register_alias(
         None if keep_overhang else ("--crop-to-overlap", True),
         None
         if options.get("time_indices", "all") == "all"
-        else ("--time-indices", _time_indices_arg(options["time_indices"])),
+        else ("--timepoints", _time_indices_arg(options["time_indices"])),
         None
         if options.get("interpolation", "linear") == "linear"
         else ("--interpolation", options["interpolation"]),
@@ -331,7 +331,7 @@ def stabilize_alias(
         ("-o", output_dirpath),
         None
         if options.get("time_indices", "all") == "all"
-        else ("--time-indices", _time_indices_arg(options["time_indices"])),
+        else ("--timepoints", _time_indices_arg(options["time_indices"])),
     )
     apply_transform(
         input_position_dirpaths,

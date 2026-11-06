@@ -384,7 +384,7 @@ def transform_settings_from_legacy(
     notes = []
     if legacy.time_indices != "all":
         notes.append(
-            f"time_indices {legacy.time_indices!r} dropped: pass --time-indices to apply-transform"
+            f"time_indices {legacy.time_indices!r} dropped: pass --timepoints to apply-transform"
         )
     if legacy.output_ome_zarr_version is not None:
         notes.append(

@@ -454,7 +454,8 @@ def apply_transform(
 @config_filepath()
 @output_dirpath()
 @click.option(
-    "--time-indices",
+    "--timepoints",
+    "time_indices",
     default="all",
     show_default=True,
     help="Timepoints to write: 'all', one index, or a comma-separated list (e.g. 0,82,239).",
