@@ -238,9 +238,9 @@ def animate_evaluation(
     from biahub.registration.evaluate import display_volumes
 
     path = Path(path)
+    every_warped, small_ref, _factor = display_volumes(list(transforms.values()), mov, ref)
     columns = []
-    for name, transform in transforms.items():
-        warped, small_ref, _factor = display_volumes(transform, mov, ref)
+    for (name, transform), warped in zip(transforms.items(), every_warped, strict=True):
         corner, ref_corner = _corner_pair(transform, mov, ref, zoom_px)
         columns.append((name, warped, small_ref, corner, ref_corner))
     mov_limits = _limits(columns[0][1].max(axis=0))
@@ -312,8 +312,9 @@ def _build_check(mov, ref, transform, ref_um, phase=None, full_resolution=False,
         original = Transform.identity(3).apply(moving, reference=reference)
         downsample = 1
     else:
-        registered, reference, downsample = display_volumes(transform, mov, ref)
-        original, _ref, _factor = display_volumes(Transform.identity(3), mov, ref)
+        (registered, original), reference, downsample = display_volumes(
+            [transform, Transform.identity(3)], mov, ref
+        )
     scale = (ref_um[0], ref_um[1] * downsample, ref_um[2] * downsample)
 
     viewer = napari.Viewer(title="registration check", show=show)

@@ -83,23 +83,28 @@ def _shrink_yx(volume: np.ndarray, factor: int) -> np.ndarray:
     return blocks.mean(axis=(2, 4), dtype=np.float32)
 
 
-def display_volumes(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> tuple:
-    """Return (warped moving, reference, downsample) averaged down in yx for display.
+def display_volumes(transforms: list[Transform], mov: ArrayLike, ref: ArrayLike) -> tuple:
+    """Return ([warped moving per transform], reference, downsample), averaged down in yx.
 
-    Both volumes shrink to at most `DISPLAY_PX` a side and the moving one is warped there
-    by the transform expressed on the small grid, so a tilt or z shift shows as it would at
-    full size, for a fraction of the warp's cost. Full-size pixel = downsample * small
-    pixel + (downsample - 1) / 2.
+    Both volumes shrink once to at most `DISPLAY_PX` a side and the moving one is warped
+    there by each transform expressed on the small grid, so a tilt or z shift shows as it
+    would at full size, for a fraction of the warp's cost. Full-size pixel = downsample *
+    small pixel + (downsample - 1) / 2.
     """
     mov = np.nan_to_num(np.asarray(mov, dtype=np.float32))
     ref = np.nan_to_num(np.asarray(ref, dtype=np.float32))
     factor = max(1, int(np.ceil(max(ref.shape[1:]) / DISPLAY_PX)))
     small_mov, small_ref = _shrink_yx(mov, factor), _shrink_yx(ref, factor)
-    # small index d sits at full index factor * d + (factor - 1) / 2 in y and x
-    small = transform.on_grid(
-        (1, factor, factor), offset=(0, (factor - 1) / 2, (factor - 1) / 2)
-    )
-    return prepare_pair(small, small_mov, small_ref, "intensity").warped, small_ref, factor
+    warped = []
+    for transform in transforms:
+        if transform.is_identity and small_mov.shape == small_ref.shape:
+            warped.append(small_mov)  # the unregistered pair: nothing to warp
+            continue
+        # small index d sits at full index factor * d + (factor - 1) / 2 in y and x
+        offset = (factor - 1) / 2
+        small = transform.on_grid((1, factor, factor), offset=(0, offset, offset))
+        warped.append(small.apply(small_mov, reference=small_ref))
+    return warped, small_ref, factor
 
 
 def display_projections(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> dict:
@@ -107,8 +112,9 @@ def display_projections(transform: Transform, mov: ArrayLike, ref: ArrayLike) ->
 
     For the views only, from `display_volumes` (`downsample` converts back to full size).
     """
-    registered, small_ref, factor = display_volumes(transform, mov, ref)
-    unregistered, _ref, _factor = display_volumes(Transform.identity(3), mov, ref)
+    (registered, unregistered), small_ref, factor = display_volumes(
+        [transform, Transform.identity(3)], mov, ref
+    )
     return {
         "reference": small_ref.max(axis=0),
         "registered": registered.max(axis=0),
