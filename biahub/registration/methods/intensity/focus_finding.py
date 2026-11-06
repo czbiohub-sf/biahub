@@ -20,28 +20,16 @@ from waveorder.focus import focus_from_transverse_band
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimationError, EstimatorBase
 from biahub.registration.methods.intensity.stackreg import StackregEstimator
+from biahub.registration.utils import center_window_yx
 from biahub.settings import FocusSettings
 
 FocusAxes = Literal["z", "xy", "xyz"]
 
 
-def center_crop_yx_origin(
-    yx_shape: tuple[int, int], crop_xy: tuple[int, int]
-) -> tuple[int, int]:
-    """Return the (y, x) start of `center_crop_yx`'s crop in a plane of `yx_shape`."""
-    y, x = yx_shape
-    cx, cy = min(crop_xy[0], x), min(crop_xy[1], y)
-    return y // 2 - cy // 2, x // 2 - cx // 2
-
-
 def center_crop_yx(zyx: np.ndarray, crop_xy: tuple[int, int]) -> np.ndarray:
     """Centre crop of at most `crop_xy` (X, Y) pixels, the legacy `center_crop_xy` convention."""
-    _, y, x = zyx.shape
-    cx, cy = min(crop_xy[0], x), min(crop_xy[1], y)
-    y0, x0 = center_crop_yx_origin(
-        (y, x), crop_xy
-    )  # the stop is start + size: odd sizes keep it
-    return zyx[:, y0 : y0 + cy, x0 : x0 + cx]
+    ys, xs = center_window_yx(zyx.shape[-2:], crop_xy)
+    return zyx[:, ys, xs]
 
 
 def find_focus(
@@ -132,8 +120,12 @@ class FocusEstimator(EstimatorBase):
             # stackreg maps the moving crop onto the reference crop; the crops start at each
             # volume's own centre, so map back through both origins.
             on_crops = self._stackreg.estimate(mov_yx, ref_yx)
-            ref_origin = center_crop_yx_origin(ref.shape[-2:], self.center_crop_xy)
-            mov_origin = center_crop_yx_origin(mov.shape[-2:], self.center_crop_xy)
+            ref_origin = [
+                s.start for s in center_window_yx(ref.shape[-2:], self.center_crop_xy)
+            ]
+            mov_origin = [
+                s.start for s in center_window_yx(mov.shape[-2:], self.center_crop_xy)
+            ]
             yx = (
                 Transform.from_translation(ref_origin)
                 @ on_crops

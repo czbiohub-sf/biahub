@@ -14,7 +14,7 @@ from scipy.fftpack import next_fast_len
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimationError, EstimatorBase
-from biahub.registration.utils import match_shape, match_shape_origin
+from biahub.registration.utils import center_window_yx, match_shape, match_shape_origin
 from biahub.settings import PhaseCrossCorrSettings
 
 
@@ -326,11 +326,7 @@ def pcc_crop(
     Z, Y, X = shape_zyx
     y_idx, x_idx = slice(0, Y), slice(0, X)
     if settings.center_crop_xy:
-        # A crop larger than the axis takes the whole axis (a negative start would wrap);
-        # the stop is start + size, so an odd size keeps its last pixel.
-        cx, cy = (min(c, n) for c, n in zip(settings.center_crop_xy, (X, Y), strict=True))
-        x0, y0 = X // 2 - cx // 2, Y // 2 - cy // 2
-        x_idx, y_idx = slice(x0, x0 + cx), slice(y0, y0 + cy)
+        y_idx, x_idx = center_window_yx((Y, X), settings.center_crop_xy)
     if settings.X_slice != "all":
         x_idx = slice(settings.X_slice[0], settings.X_slice[1])
     if settings.Y_slice != "all":

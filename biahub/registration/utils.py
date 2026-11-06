@@ -3,6 +3,7 @@
 - Shape matching: `match_shape` pads (reflect) or centre-crops a volume to a shape, and
   `match_shape_origin` says where its origin lands (phase correlation resizes both
   volumes to one FFT shape); `pad_to_shape` and `center_crop` are its two halves.
+  `center_window_yx`: the centred window a `center_crop_xy` setting asks for.
 - `resolve_time_indices`: the timepoints a `time_indices` setting names, checked
   against the store.
 - `RunError`: a run refused or unable to go on (settings that do not fit the data, a
@@ -89,6 +90,18 @@ def center_crop(
             f"center crop: input shape {arr.shape}, output shape {shape}, slicing {slicing}"
         )
     return arr[slicing]
+
+
+def center_window_yx(yx_shape: tuple[int, int], crop_xy) -> tuple[slice, slice]:
+    """Return the centred window of at most `crop_xy` (X, Y) pixels in a (y, x) plane.
+
+    As (y, x) slices. A crop larger than an axis takes the whole axis; the stop is the
+    start plus the size, so an odd size keeps its last pixel.
+    """
+    y, x = yx_shape
+    cx, cy = min(crop_xy[0], x), min(crop_xy[1], y)
+    y0, x0 = y // 2 - cy // 2, x // 2 - cx // 2
+    return slice(y0, y0 + cy), slice(x0, x0 + cx)
 
 
 def match_shape(
