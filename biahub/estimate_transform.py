@@ -691,7 +691,7 @@ def estimate_transform_cli(
     \b
     Stabilization (a channel onto its own first / previous timepoint):
     >>> biahub estimate-transform -m data.zarr/0/0/0 \\
-        -c estimate-transform-stabilize.yml -o ./transforms.yml
+        -c estimate-transform-phase_cross_corr.yml -o ./transforms.yml
 
     \b
     Retry an interrupted run, keeping finished timepoints:

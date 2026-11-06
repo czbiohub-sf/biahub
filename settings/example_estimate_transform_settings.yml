@@ -2,9 +2,8 @@
 # Registration: the moving channel onto the reference channel at every timepoint
 # (reference.frame: cross). Stabilization: drop reference.channel and set reference.frame to
 # first or previous -- the moving channel aligned onto its own first / previous timepoint.
-# Only the block of the chosen `method` is needed: method beads / ants / phase_cross_corr /
-# manual / focus_finding uses the block beads / ants / phase_cross_corr / manual /
-# focus_finding.
+# Only the block of the chosen `method` is needed, named as the method (bead_matching,
+# nuclei_matching, ants, phase_cross_corr, focus_finding, manual, shapes).
 # `fallback` holds what used to be hidden constants: the adaptive flagging line, the
 # repair candidates tried, in order, for flagged timepoints (then polished), and the
 # optional parameter sweep, which competes with repair on the same flagged timepoints.
@@ -142,16 +141,16 @@ fallback:
     max_timepoints: null
     polish_rounds: 3
   # Off unless given. Each sub-grid is a cross product of dotted paths into this config;
-  # the trials are the union of the sub-grids. This is production's default beads grid
+  # the trials are the union of the sub-grids. This is production's default bead_matching grid
   # (17 trials, about 1-2 min each per flagged timepoint).
   sweep: null
   # sweep:
   #   max_timepoints: 25
   #   grid:
-  #   - beads.hungarian_match_settings.cost_threshold: [0.05, 0.10]
-  #     beads.hungarian_match_settings.cost_matrix_settings.weights.dist: [0.25, 1.0]
-  #     beads.filter_matches_settings.max_distance_quantile: [0.95, 0.99]
-  #   - beads.algorithm: [spectral]
-  #     beads.spectral_match_settings.sigma: [1.0, 3.0, 5.0]
-  #     beads.spectral_match_settings.rel_cut: [0.35, 0.65, 0.80]
+  #   - bead_matching.hungarian_match_settings.cost_threshold: [0.05, 0.10]
+  #     bead_matching.hungarian_match_settings.cost_matrix_settings.weights.dist: [0.25, 1.0]
+  #     bead_matching.filter_matches_settings.max_distance_quantile: [0.95, 0.99]
+  #   - bead_matching.algorithm: [spectral]
+  #     bead_matching.spectral_match_settings.sigma: [1.0, 3.0, 5.0]
+  #     bead_matching.spectral_match_settings.rel_cut: [0.35, 0.65, 0.80]
 verbose: true

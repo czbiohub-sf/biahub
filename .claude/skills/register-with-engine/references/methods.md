@@ -72,7 +72,7 @@ capped at 48 h; set an sbatch time limit for large volumes). This is the legacy
 maps it for beads only.
 
 Beads matching is deterministic but depends on where it starts: on a drifting series,
-`previous_timepoint` finds better correspondences at hard timepoints.
+`transform.initial.propagate` finds better correspondences at hard timepoints.
 
 ## Stabilization: `reference.frame: first` or `previous`
 

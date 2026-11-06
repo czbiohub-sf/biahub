@@ -190,7 +190,8 @@ the per-timepoint records `<run>/timepoints/<t>.json`:
 ## 9b. Evaluate
 
 Scores rank candidates; they do not say how far off a registration is. Measure it in µm,
-independently of the score, with `biahub.registration.evaluate` (a library, no CLI), on
+independently of the score, with `biahub evaluate-transform` (or
+`biahub.registration.evaluate` in Python), on
 one timepoint of the position it was estimated on and of one or two held-out positions
 (for a beads registration, sample wells: real structure, as the data will be used):
 

@@ -6,7 +6,7 @@
 |---|---|---|
 | many records with `job failed: ... CANCELLED ... DUE TO TIME LIMIT` | the partition is busy, or volumes are large | relaunch with `--resume` and an sbatch file setting `#SBATCH --time=...` |
 | the plain CLI exits 3 after `jobs failed (their timepoints hold stand-ins ...)` | a job crashed, e.g. `job failed: UncompletedJobError: ... OOM Killed` (the default sizing is too small for large ANTs volumes) | the transforms file holds the initial transform at those timepoints: do not apply it. Relaunch with `--resume` and an sbatch file with more memory (`#SBATCH --mem-per-cpu=...`) |
-| the sequential (`previous_timepoint`) job cancelled part-way | its time limit was too short for T | relaunch with `--resume` and a longer limit; finished timepoints are kept and the chain continues |
+| the sequential (`transform.initial.propagate`) job cancelled part-way | its time limit was too short for T | relaunch with `--resume` and a longer limit; finished timepoints are kept and the chain continues |
 | `Input/output error` / `Stale file handle` reading the stores | the filesystem, not biahub | check the mount on the node and a compute node (`srun ... ls <path>`); report to HPC; nothing to fix in the run |
 | `--resume: settings_sha256 changed` | the config or inputs changed since the run | rerun without `--resume` into a fresh output directory |
 | Nextflow stops with `Error executing process > '...'` | a task failed with a non-signal exit (a real error, not preemption) | read that task's `.command.err` (work dir in the message) or its log under `<out>/nextflow/slurm_output/`; fix, then relaunch the same script (`-resume` reruns only what failed) |

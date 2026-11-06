@@ -1556,7 +1556,7 @@ class SweepSettings(MyBaseModel):
     """Sweep pass: re-estimate flagged timepoints under alternative method settings.
 
     `grid` is a list of sub-grids; each maps a dotted path into the estimate config (e.g.
-    `beads.hungarian_match_settings.cost_threshold`) to the values to try. The trials are
+    `bead_matching.hungarian_match_settings.cost_threshold`) to the values to try. The trials are
     the union of each sub-grid's cross product, so parameters that are inert together
     (hungarian vs spectral) are swept without paying for their product. Paths are checked
     when the config loads. Each flagged timepoint keeps the best of its original, repaired
