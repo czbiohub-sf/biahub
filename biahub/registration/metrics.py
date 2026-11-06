@@ -201,20 +201,7 @@ def gradient_correlation(
     Edges exist in every modality even when intensities do not correlate; cheaper than
     mutual information and adequate when both channels show the same structures.
     """
-    warped, ref, mask = _overlap_pair(transform, mov, ref)
-    if mask.sum() < 2:
-        return float("nan")
-    if prepare is not None:
-        warped, ref = prepare(warped, ref, mask)
-    mask = away_from_padding(mask, _footprint(prepare, sobel=True))
-    if mask.sum() < 2:
-        return float("nan")
-    a = filters.sobel(warped)[mask]
-    b = filters.sobel(ref)[mask]
-    a = a - a.mean()
-    b = b - b.mean()
-    denominator = np.sqrt((a * a).sum() * (b * b).sum())
-    return float((a * b).sum() / denominator) if denominator > 0 else float("nan")
+    return correlation_score(transform, mov, ref, sobel_filter=True, prepare=prepare)
 
 
 def residual_shift(
@@ -411,9 +398,7 @@ def correlation_score(
     magnitudes instead, for cross-modality pairs registered that way. `prepare(warped,
     ref, overlap)` (the score's blocks) runs after the overlap is found, before comparing.
     """
-    ref = np.asarray(ref, dtype=np.float32)
-    warped = transform.apply(np.asarray(mov, dtype=np.float32), reference=ref)
-    mask = (warped != 0) & (ref != 0)
+    warped, ref, mask = _overlap_pair(transform, mov, ref)
     if mask.sum() < 2:
         return float("nan")
     if prepare is not None:
