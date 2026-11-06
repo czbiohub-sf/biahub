@@ -380,12 +380,12 @@ def estimate_crop_one_position(
 def estimate_crop(
     config_filepath: str,
     output_filepath: str,
-    lf_mask_radius: float = 0.95,
+    lf_mask_radius: float | None = None,
     sbatch_filepath: str = None,
     local: bool = False,
 ):
     """
-    Estimate a crop region where both phase and fluorescene volumes are non-zero.
+    Estimate a crop region where both phase and fluorescence volumes are non-zero.
 
     Parameters
     ----------
@@ -529,13 +529,17 @@ def estimate_crop(
 @click.option(
     "--lf-mask-radius",
     type=float,
-    help="(Optional) Radius of the circular mask given as fraction of image width to apply to the phase channel.",
+    help=(
+        "Also crop to a circle on the phase channel, of this radius as a fraction of the "
+        "half-width of the shorter yx axis (e.g. 0.95, to leave out a bright well edge). "
+        "Left out: no circle."
+    ),
     required=False,
 )
 def estimate_crop_cli(
     config_filepath: str,
     output_filepath: str,
-    lf_mask_radius: float = 0.95,
+    lf_mask_radius: float | None = None,
     sbatch_filepath: str = None,
     local: bool = False,
 ):
