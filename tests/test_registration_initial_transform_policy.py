@@ -92,7 +92,9 @@ def test_a_shapes_initial_transform_takes_the_voxel_sizes_it_is_given():
     coarse = ShapesInitialTransform(
         shape, shape, (2.0, 0.5, 0.5), um, rotate90=0, fliplr=False
     )
-    np.testing.assert_allclose(np.diag(coarse.inverse_matrix)[:3], (0.5, 1.0, 1.0))
+    np.testing.assert_allclose(
+        np.diag(coarse.initial_for(0).invert().matrix)[:3], (0.5, 1.0, 1.0)
+    )
 
 
 def test_a_shapes_initial_transform_is_the_same_for_every_t_and_composes_flip_rotation_scale():
@@ -113,7 +115,9 @@ def test_a_shapes_initial_transform_is_the_same_for_every_t_and_composes_flip_ro
     )  # flip first, then rotate, then scale (moving -> reference)
     for t in (0, 7):
         np.testing.assert_allclose(policy.initial_for(t).matrix, forward, atol=1e-12)
-    np.testing.assert_allclose(policy.inverse_matrix, np.linalg.inv(forward), atol=1e-12)
+    np.testing.assert_allclose(
+        policy.initial_for(0).invert().matrix, np.linalg.inv(forward), atol=1e-12
+    )
     assert policy.initial_for(0).transform_type == "affine"
     assert isinstance(policy, InitialTransformPolicy)
 

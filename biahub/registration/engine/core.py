@@ -469,12 +469,13 @@ def init_run(
         )
         settings.transform.initial = InitialTransformSettings(
             from_="matrix",
-            matrix=shapes.inverse_matrix.tolist(),
+            matrix=shapes.transform.invert().matrix.tolist(),
             direction="inverse",
             propagate=init.propagate,
         )
         click.echo(
-            f"Computed initial transform from the store shapes:\n{shapes.inverse_matrix}"
+            "Computed initial transform from the store shapes:\n"
+            f"{shapes.transform.invert().matrix}"
         )
     estimator, _score_fn, _initial_transform = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size

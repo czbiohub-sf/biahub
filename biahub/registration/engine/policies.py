@@ -252,8 +252,6 @@ class ShapesInitialTransform:
         method = ShapesEstimator(
             mov_voxel_size, ref_voxel_size, rotate90, fliplr, transform_type
         )
-        # reference -> moving, as on disk (init_run shows it)
-        self.inverse_matrix = method.inverse_matrix(mov_shape, ref_shape)
         self.transform = method.transform_for(mov_shape, ref_shape)
 
     def initial_for(self, t: int) -> Transform:

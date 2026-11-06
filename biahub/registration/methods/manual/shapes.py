@@ -54,24 +54,17 @@ class ShapesEstimator(EstimatorBase):
             mov_voxel_size, ref_voxel_size, settings.rotate90, settings.fliplr, transform_type
         )
 
-    def inverse_matrix(self, mov_shape: tuple, ref_shape: tuple) -> np.ndarray:
-        """Return the reference -> moving matrix (the direction on disk) for two shapes."""
+    def transform_for(self, mov_shape: tuple, ref_shape: tuple) -> Transform:
+        """Return the forward (moving -> reference) transform for two shapes."""
         mov_shape, ref_shape = tuple(mov_shape[-3:]), tuple(ref_shape[-3:])
         scale_z = self.mov_voxel_size[-3] / self.ref_voxel_size[-3]
         scale_yx = self.mov_voxel_size[-1] / self.ref_voxel_size[-1]
-        flip = Transform.from_flip_x(mov_shape, ref_shape).matrix if self.fliplr else np.eye(4)
-        forward = (
-            Transform.from_scaling((scale_z, scale_yx, scale_yx), ref_shape, ref_shape).matrix
-            @ Transform.from_rotation_yx(90 * self.rotate90, mov_shape, ref_shape).matrix
-            @ flip
-        )
-        return np.linalg.inv(forward)
-
-    def transform_for(self, mov_shape: tuple, ref_shape: tuple) -> Transform:
-        """Return the forward (moving -> reference) transform for two shapes."""
-        return Transform.from_inverse(
-            self.inverse_matrix(mov_shape, ref_shape), self.transform_type
-        )
+        forward = Transform.from_scaling(
+            (scale_z, scale_yx, scale_yx), ref_shape, ref_shape
+        ) @ Transform.from_rotation_yx(90 * self.rotate90, mov_shape, ref_shape)
+        if self.fliplr:  # the flip happens first
+            forward = forward @ Transform.from_flip_x(mov_shape, ref_shape)
+        return Transform(forward.matrix, transform_type=self.transform_type)
 
     def estimate(
         self, mov: ArrayLike, ref: ArrayLike, initial_transform: Transform | None = None
