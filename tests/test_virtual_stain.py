@@ -1,12 +1,14 @@
 import numpy as np
 import pytest
+import torch
 
 from iohub.core.registry import set_default_implementation
 from iohub.ngff import open_ome_zarr
 from iohub.ngff.utils import create_empty_plate
+from viscy_transforms import NormalizeSampled
 
 from biahub.utils.config import settings_fingerprint
-from biahub.virtual_stain import _write_timepoints
+from biahub.virtual_stain import _normalize_timepoint, _write_timepoints
 
 T, C, Z, Y, X = 3, 2, 4, 8, 8
 
@@ -102,6 +104,56 @@ def test_write_timepoints_batches_by_time_shard(tmp_path, implementation):
     calls = []
     _write_timepoints(_predictor(calls), position, T, resume=True, resume_token="a")
     assert calls == []
+
+
+def _norm_meta():
+    """Statistics shaped like ``viscy_data.read_norm_meta`` output (float tensors)."""
+
+    def stats(value):
+        return {"median": torch.tensor(float(value)), "iqr": torch.tensor(2.0)}
+
+    return {
+        "Phase3D": {
+            "fov_statistics": stats(10),
+            "dataset_statistics": stats(20),
+            "timepoint_statistics": {str(t): stats(100 + t) for t in range(T)},
+        }
+    }
+
+
+def _normalize_sampled(level):
+    return NormalizeSampled(keys=["Phase3D"], level=level, subtrahend="median", divisor="iqr")
+
+
+@pytest.mark.parametrize(
+    "level, base, per_t",
+    [
+        ("fov_statistics", 10, 0),
+        ("dataset_statistics", 20, 0),
+        ("timepoint_statistics", 100, 1),
+    ],
+    ids=["fov", "dataset", "timepoint"],
+)
+def test_normalize_timepoint_uses_each_timepoints_statistics(level, base, per_t):
+    """Regression for #283: timepoint_statistics raised KeyError: 'median'."""
+    normalize = _normalize_sampled(level)
+    norm_meta = _norm_meta()
+    for t in range(T):
+        source = torch.full((1, 1, Z, Y, X), 200.0)
+        normalized = _normalize_timepoint(normalize, "Phase3D", source, norm_meta, t)
+        expected = (200.0 - (base + per_t * t)) / 2.0
+        torch.testing.assert_close(normalized, torch.full_like(source, expected))
+    # The stored metadata is not mutated.
+    assert set(norm_meta["Phase3D"]["timepoint_statistics"]) == {"0", "1", "2"}
+
+
+def test_unresolved_timepoint_statistics_raise_keyerror():
+    """The failure #283 reported, so the test above is known to guard it."""
+    source = torch.full((1, 1, Z, Y, X), 200.0)
+    with pytest.raises(KeyError, match="median"):
+        _normalize_sampled("timepoint_statistics")(
+            {"Phase3D": source, "norm_meta": _norm_meta()}
+        )
 
 
 def test_settings_fingerprint_of_mapping_ignores_key_order():
