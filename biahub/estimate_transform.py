@@ -652,7 +652,9 @@ def estimate_transform_step(
     "only the rest (e.g. after jobs hit their time limit). Refused if the settings or "
     "inputs changed since that run."
 )
-@init_only()
+@init_only(
+    help="Only start the run (its folder, settings and plan, printed as PLAN:) and exit."
+)
 @click.option(
     "--step",
     type=click.Choice(STEPS),

@@ -451,7 +451,9 @@ def apply_transform(
 @click.command("apply-transform")
 @moving_position_dirpaths()
 @reference_position_dirpaths(required=False)
-@config_filepath()
+@config_filepath(
+    help="The transforms file (estimate-transform's output, or one written by hand)."
+)
 @output_dirpath()
 @click.option(
     "--timepoints",

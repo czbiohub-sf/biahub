@@ -151,7 +151,9 @@ def _parse_tags(tags) -> dict:
 @click.command("evaluate-transform")
 @moving_position_dirpaths()
 @reference_position_dirpaths(required=False)
-@config_filepath()
+@config_filepath(
+    help="The transforms file (estimate-transform's output, or one written by hand)."
+)
 @output_filepath()
 @click.option(
     "--moving-channel", default=None, help="Default: the file's first moving channel."
@@ -222,8 +224,15 @@ def evaluate_transform_cli(
     and position: tile and point medians, residual scale and rotation, z and where it
     came from. Pass held-out positions to see whether the transform carries.
 
-    >> biahub evaluate-transform -m moving.zarr/A/1/0 -r reference.zarr/A/1/0 -c out/transforms.yml -o out/evaluation.csv --landmarks nuclei
-    """
+    \b
+    >>> biahub evaluate-transform -m moving.zarr/A/1/0 -r reference.zarr/A/1/0 \\
+        -c out/transforms.yml -o out/evaluation.csv --landmarks nuclei
+
+    \b
+    A stabilization (no reference channel) is evaluated against its own positions:
+    >>> biahub evaluate-transform -m data.zarr/A/1/0 -c out/transforms.yml \\
+        -o out/evaluation.csv --t 5 --reference-t 0
+    """  # noqa: D301
     rows = evaluate_transform(
         moving_position_dirpaths,
         reference_position_dirpaths,
