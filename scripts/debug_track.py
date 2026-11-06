@@ -1,13 +1,77 @@
 import os
 import shutil
 from pathlib import Path
-from biahub.settings import TrackingSettings
-import napari
+from biahub.settings import ProjectionSettings, TrackingSettings
+import numpy as np
 from iohub import open_ome_zarr
 from rich import print
-from biahub.track import run_ultrack, resolve_z_slice, load_data, run_preprocessing_pipeline, fill_empty_frames_from_csv
+from biahub.project import _FLOAT_METHODS, _find_focus_per_t, project_zyx, resolve_z_indices
+from biahub.track import check_input_dimensionality, load_data
+from biahub.tracking.methods.ultrack import detect_foreground_segmentation, run_ultrack
+from biahub.tracking.preprocess import fill_empty_frames_from_csv, run_preprocessing_pipeline
 from ultrack import MainConfig
 from biahub.utils.config import update_model
+
+
+def find_focus(position_path, projection, pixel_size, num_workers=8):
+    """Return the in-focus plane of every timepoint, as `biahub project` finds it.
+
+    None when no channel projects around the focus. With ``per: fov`` every
+    timepoint takes the median plane over T.
+    """
+    if not projection.uses_focus:
+        return None
+    focus_channel = projection.focus.channel
+    with open_ome_zarr(position_path) as dataset:
+        store_channels = dataset.channel_names
+        T = dataset.data.shape[0]
+    if focus_channel not in store_channels:
+        raise ValueError(
+            f"Focus channel {focus_channel!r} is not in {position_path} "
+            f"({store_channels}); set focus_store_path to a store that has it."
+        )
+    focus_per_t = _find_focus_per_t(
+        position_path,
+        store_channels.index(focus_channel),
+        projection.focus,
+        pixel_size,
+        num_workers=num_workers,
+    )
+    if projection.focus.per == "fov":
+        focus_per_t = np.full(T, int(round(float(np.median(focus_per_t)))))
+    print(f"Focus on {focus_channel}: {focus_per_t.tolist()}")
+    return focus_per_t
+
+
+def project_fov(position_path, channel_names, projection, focus_per_t=None):
+    """Project one FOV's channels to (T, Y, X) in memory with the `biahub project` API.
+
+    The same per-channel projection `biahub project` writes to a 2D plate, without
+    writing a store: reduce every timepoint's Z-stack around ``focus_per_t`` (from
+    :func:`find_focus`) where a channel projects around the focus.
+    """
+    missing = [name for name in channel_names if name not in projection.channels]
+    if missing:
+        raise ValueError(f"No projection set for channels {missing}.")
+    # Like `biahub project`, every channel is float32 when any projection is mean/sum.
+    methods = {plan.method for plan in projection.channels.values()}
+    as_float = bool(methods & set(_FLOAT_METHODS))
+
+    with open_ome_zarr(position_path) as dataset:
+        store_channels = dataset.channel_names
+        T, _, Z, _, _ = dataset.data.shape
+        data_dict = {}
+        for name in channel_names:
+            plan = projection.channels[name]
+            c = store_channels.index(name)
+            frames = []
+            for t in range(T):
+                focus_z = None if focus_per_t is None else int(focus_per_t[t])
+                z_indices = resolve_z_indices(plan, Z, focus_z)
+                frames.append(project_zyx(np.asarray(dataset.data[t, c]), plan.method, z_indices))
+            data = np.stack(frames)
+            data_dict[name] = data.astype(np.float32, copy=False) if as_float else data
+    return data_dict
 
 
 def main():
@@ -17,6 +81,13 @@ def main():
     This script loads a single field of view (FOV), applies preprocessing,
     runs tracking with specified parameters, and visualizes results in Napari.
     Useful for tuning tracking parameters before running on full datasets.
+
+    It uses the foreground + contour path of `biahub track`
+    (segmentation_method: foreground_contour). Track does not select or project
+    Z-planes, so for 2D tracking of a 3D store this script projects the FOV in
+    memory with the `biahub project` API (see `projection` below), the way the
+    mantis-v2 pipeline projects the plate before tracking. A store that is
+    already projected (Z=1) is tracked as is.
     """
 
     # ============================================================================
@@ -25,14 +96,14 @@ def main():
     
     # Define the tracking configuration with all parameters
     config = {
-        # Z-slice range to process: [-1, -1] means use central slices
-        "z_range": [-1, -1],
-        
-        # Target channel for tracking (used for visualization)
+        # Track a foreground mask and contour map computed from input_images
+        "segmentation_method": "foreground_contour",
+
+        # Name of the label image the tracks are written to
         "target_channel": "nuclei_prediction",
-        
-        # Tracking mode: "2D" or "3D"
-        "mode": "2D",
+
+        # Tracking dimensionality: "2D" needs a Z=1 input, "3D" a Z>1 input
+        "output_mode": "2D",
         
         # Field of view pattern to match in the dataset
         "fov": "*/*/*",
@@ -43,16 +114,13 @@ def main():
         # Input image configurations - defines data sources and preprocessing pipelines
         "input_images": [
             {
-                # First input: Load raw data from Zarr store
+                # First input: Load data from Zarr store.
+                ### CHANGE THIS VALUE - a projected (Z=1) plate, or a 3D store that
+                # this script projects with `projection` below (2D tracking).
                 "path": "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_06_26_A549_G3BP1_ZIKV/1-preprocess/label-free/2-stabilize/virtual-stain/2025_06_26_A549_G3BP1_ZIKV.zarr",
                 "channels": {
                     # Nuclei channel preprocessing pipeline
                     "nuclei_prediction": [
-                        {
-                            "function": "np.mean",  # Average across Z-axis
-                            "kwargs": {"axis": 1},
-                            "per_timepoint": False
-                        },
                         {
                             "function": "ultrack.imgproc.normalize",  # Normalize intensity
                             "kwargs": {"gamma": 0.7},
@@ -61,11 +129,6 @@ def main():
                     ],
                     # Membrane channel preprocessing pipeline
                     "membrane_prediction": [
-                        {
-                            "function": "np.mean",  # Average across Z-axis
-                            "kwargs": {"axis": 1},
-                            "per_timepoint": False
-                        },
                         {
                             "function": "ultrack.imgproc.normalize",  # Normalize intensity
                             "kwargs": {"gamma": 0.7},
@@ -90,7 +153,7 @@ def main():
                     # Contour map for boundary refinement
                     "contour": [
                         {
-                            "function": "biahub.cli.track.mem_nuc_contour",
+                            "function": "biahub.track.mem_nuc_contour",
                             "input_channels": ["nuclei_prediction", "membrane_prediction"],
                             "kwargs": {},
                             "per_timepoint": False
@@ -128,7 +191,25 @@ def main():
     }
 
     # Convert dictionary to TrackingSettings model for validation
-    config = TrackingSettings(**config)    
+    config = TrackingSettings(**config)
+
+    # Z projection of the input_images channels (a `biahub project` config), used
+    # when the input is 3D and output_mode is 2D. Same window as
+    # nextflow/configs/a549/project.yml: mean over 60 planes starting 20 below the
+    # Phase3D in-focus plane, found per timepoint. To project without focus, use
+    # e.g. {"method": "mean"} (the whole stack) and drop `focus`.
+    projection = ProjectionSettings(
+        channels={
+            "nuclei_prediction": {"method": "mean", "z": {"center": "focus", "below": 20, "above": 40}},
+            "membrane_prediction": {"method": "mean", "z": {"center": "focus", "below": 20, "above": 40}},
+        },
+        focus={"channel": "Phase3D", "per": "timepoint"},
+    )
+
+    ### CHANGE THIS VALUE - the plate the focus channel is read from, when it is not
+    # in input_images[0] (a virtual-stain store usually has no Phase3D; the
+    # assembled or label-free plate does). None reads it from input_images[0].
+    focus_store_path = None
 
     # ============================================================================
     # DATASET AND PATH SETUP
@@ -137,8 +218,6 @@ def main():
     ### CHANGE THIS VALUE - Set your dataset name here
     dataset = "2025_06_26_A549_G3BP1_ZIKV"
     
-    # Construct paths for virtual staining data
-    vs_path = f"{dataset}.zarr/B/1/000000"
     root = Path(f"/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/{dataset}")
     
     # Output directory for tracking results
@@ -159,20 +238,43 @@ def main():
     # Get dataset metadata (shape and scale)
     with open_ome_zarr(input_images[0].path / Path(*position_key)) as vs_ds:
         T, C, Z, Y, X = vs_ds.data.shape  # Time, Channels, Z, Y, X dimensions
-        scale = tuple(float(s) for s in vs_ds.scale[-2:])  # Physical scale (Y, X)
+        full_scale = tuple(float(s) for s in vs_ds.scale)
     
-    # Resolve which Z-slices to use for tracking
-    z_slices, Z = resolve_z_slice(config.z_range, Z)
-    fov = "_".join(position_key)  # Create FOV identifier string
+    # Track does not select Z-planes: project a 3D input for 2D tracking
+    project_input = config.output_mode == "2D" and Z > 1
+    if not project_input:
+        check_input_dimensionality(config.output_mode, Z)
+    # Physical scale used for tracking: (Y, X) in 2D, (Z, Y, X) in 3D
+    scale = full_scale[-2:] if config.output_mode == "2D" else full_scale[-3:]
+    fov = "/".join(position_key)  # FOV identifier, as in the blank-frames CSV
 
     print(f"Processing FOV: {fov}")
     print(f"Data shape: T={T}, C={C}, Z={Z}, Y={Y}, X={X}")
     print(f"Scale: {scale}")
-    print(f"Z-slices: {z_slices}")
 
-    # Load and preprocess the data
-    print("Loading data...")
-    data_dict = load_data(position_key, input_images, z_slices)
+    # Load (and, for a 3D input, project) the data
+    if project_input:
+        focus_store = Path(focus_store_path) if focus_store_path else input_images[0].path
+        focus_per_t = find_focus(
+            focus_store / Path(*position_key), projection, pixel_size=full_scale[-1]
+        )
+        # Every input with a path is loaded (and projected), as in `biahub track`
+        data_dict = {}
+        for image in input_images:
+            if image.path is None:
+                continue
+            print(f"Projecting data from {image.path}...")
+            data_dict.update(
+                project_fov(
+                    image.path / Path(*position_key),
+                    list(image.channels),
+                    projection,
+                    focus_per_t,
+                )
+            )
+    else:
+        print("Loading data...")
+        data_dict = load_data(position_key, input_images)
     
     print("Running preprocessing pipeline...")
     data_dict = run_preprocessing_pipeline(data_dict, input_images)
@@ -189,12 +291,7 @@ def main():
     print(f"Available channels: {channel_names}")
     
     # Extract foreground mask and contour gradient map for tracking
-    if "foreground" in channel_names and "contour" in channel_names:
-        foreground_mask, contour_gradient_map = data_dict["foreground"], data_dict["contour"]
-    elif "foreground_contour" in channel_names:
-        foreground_mask, contour_gradient_map = data_dict["foreground_contour"]
-    else:
-        raise ValueError("Foreground and contour channels are required for tracking.")
+    foreground_mask, contour_gradient_map = detect_foreground_segmentation(data_dict)
     
     print(f"Foreground mask shape: {foreground_mask.shape}")
     print(f"Contour gradient map shape: {contour_gradient_map.shape}")
@@ -208,16 +305,24 @@ def main():
     tracking_cfg = update_model(default_config, config.tracking_config)
     
     # Create temporary directory for tracking database
-    databaset_path = output_dirpath / f"{dataset}_config_tracking/{fov}"
-    os.makedirs(databaset_path, exist_ok=True)
+    database_path = output_dirpath / f"{dataset}_config_tracking" / "_".join(position_key)
+    os.makedirs(database_path, exist_ok=True)
 
     print("Running Ultrack tracking...")
-    tracking_labels, tracks_df, graph = run_ultrack(tracking_cfg, foreground_mask, contour_gradient_map, scale, databaset_path)
+    tracking_labels, tracks_df, graph = run_ultrack(
+        tracking_config=tracking_cfg,
+        database_path=database_path,
+        min_sibling_length=config.min_sibling_length,
+        detection=foreground_mask,
+        edges=contour_gradient_map,
+        scale=scale,
+        overwrite=True,
+    )
     
     # Clean up temporary tracking database
-    shutil.rmtree(databaset_path)
+    shutil.rmtree(database_path)
     
-    print(f"Tracking complete!")
+    print("Tracking complete!")
     print(f"Number of tracks: {len(tracks_df['track_id'].unique())}")
     print(f"Number of timepoints: {len(tracks_df['t'].unique())}")
  
@@ -225,6 +330,8 @@ def main():
     # VISUALIZATION
     # ============================================================================
     
+    import napari
+
     # Setup visualization parameters
     kwargs = dict(scale=scale, blending="additive")
     
@@ -236,16 +343,18 @@ def main():
     viewer.add_image(data_dict["membrane_prediction"], name="VS membrane Preprocessed", colormap="magma", **kwargs)
     
     # Add segmentation and tracking results
-    viewer.add_labels(foreground_mask, name="Foreground ", **kwargs)
-    viewer.add_image(contour_gradient_map, name="Contourn ", colormap="magma", **kwargs)
+    viewer.add_labels(foreground_mask, name="Foreground", **kwargs)
+    viewer.add_image(contour_gradient_map, name="Contour", colormap="magma", **kwargs)
     viewer.add_labels(tracking_labels, name="Tracking Segments", scale=scale)
     
     # Add tracks with graph visualization
+    # Tracks carry a time column: (t, y, x) in 2D, (t, z, y, x) in 3D
+    track_columns = ["track_id", "t", "y", "x"] if config.output_mode == "2D" else ["track_id", "t", "z", "y", "x"]
     viewer.add_tracks(
-        tracks_df[["track_id", "t", "y", "x"]],
+        tracks_df[track_columns],
         graph=graph,
         name="Tracks",
-        scale=scale,
+        scale=(1, *scale),
         colormap="hsv",
         blending="opaque",
     )
