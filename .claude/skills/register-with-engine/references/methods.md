@@ -196,3 +196,9 @@ result" above).
 The bead-overlap score counts beads within `qc_settings.score_centroid_mask_radius` (6 voxels)
 and quantizes at ~1/N beads: it cannot see misregistration below that radius, and score
 differences of one bead are noise.
+It divides the matched beads by the smaller of the two bead counts, so beads only one
+channel shows do not count against it: on the mantis 2024_10_31 beads well a correct
+registration matches 15 of 16 moving and 21 reference beads, 0.94 (0.71 over the
+reference count, which would flag it). The cost: a transform that pushed most moving beads
+out of view could still score high. On DragonFly and mantis beads, shifting a correct
+transform by up to 160 voxels dropped the score to 0, never above.
