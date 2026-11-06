@@ -204,3 +204,18 @@ def test_a_selected_position_missing_from_a_substitute_is_named():
     )
     with pytest.raises(click.UsageError, match=r"sub.yml.*A/1/1"):
         substitute_transforms(base, [("sub.yml", sub)], positions=("A/1/1",))
+
+
+def test_a_transforms_file_without_a_method_does_not_claim_bead_matching():
+    # TransformSettings.method defaulted to bead_matching, so any file without the key
+    # (written by hand, or by another tool) said beads had estimated it
+    import numpy as np
+
+    from biahub.settings import TransformEntry, TransformSettings
+
+    settings = TransformSettings(
+        direction="forward",
+        moving_channels=["GFP"],
+        transforms=[TransformEntry(matrix=np.eye(4).tolist())],
+    )
+    assert settings.method is None

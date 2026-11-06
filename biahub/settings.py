@@ -2306,7 +2306,9 @@ class TransformSettings(MyBaseModel):
     direction: TransformDirection
     moving_channels: list[str]
     reference_channel: str | None = None  # None: stabilization onto the moving store's grid
-    method: str = "bead_matching"
+    # The method that estimated the series; None: not recorded (written by hand, or by
+    # another tool).
+    method: str | None = None
     # What the matrices are relative to: 'previous' means each was chained onto the first
     # frame (cumulative). None: not recorded (files written before this field).
     reference_frame: Literal["cross", "first", "previous", "neighbours"] | None = None

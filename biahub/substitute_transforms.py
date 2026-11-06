@@ -58,14 +58,14 @@ def _substitute_list(
                 f"(it has {min(by_t)}..{max(by_t)}); pass --allow-new to add it"
             )
         old = by_t.get(t)
-        method = entry.method or sub.method
+        method = entry.method or sub.method or "method not recorded"
         by_t[t] = TransformEntry(
             t=t,
             matrix=sub._as(entry.matrix, base.direction).tolist(),  # in the base's direction
             score=entry.score,
             report=entry.report,
             repaired_from=entry.repaired_from,
-            method=method if method != base.method else None,
+            method=method if method not in (base.method, "method not recorded") else None,
             # a stand-in stays one, so apply-transform still reports it
             status=entry.status,
             filled_from=entry.filled_from,
@@ -74,7 +74,8 @@ def _substitute_list(
         before = (
             "new"
             if old is None
-            else f"{old.method or base.method} (score {old.score if old.score is not None else 'n/a'})"
+            else f"{old.method or base.method or 'method not recorded'} "
+            f"(score {old.score if old.score is not None else 'n/a'})"
         )
         log.append(
             f"{where} t={t}: {before} -> {method} (score {entry.score if entry.score is not None else 'n/a'}) from {source}"
