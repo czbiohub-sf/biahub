@@ -15,6 +15,26 @@ from scipy.spatial import cKDTree
 from biahub.core.transform import Transform
 
 
+def _densest_votes(points, ref_peaks, ref_tree, capture_radius, cluster_radius, min_votes):
+    """Let every point vote for its displacement to each reference peak within reach.
+
+    Returns the densest `cluster_radius`-ball of votes: its votes, their (point index,
+    peak index) pairs and its size -- or None when fewer than `min_votes` were cast.
+    """
+    votes, pairs = [], []
+    for i, p in enumerate(points):
+        for j in ref_tree.query_ball_point(p, r=capture_radius):
+            votes.append(ref_peaks[j] - p)
+            pairs.append((i, j))
+    if len(votes) < min_votes:
+        return None
+    votes = np.asarray(votes)
+    vote_tree = cKDTree(votes)
+    counts = np.array([len(vote_tree.query_ball_point(v, r=cluster_radius)) for v in votes])
+    members = vote_tree.query_ball_point(votes[np.argmax(counts)], r=cluster_radius)
+    return votes[members], np.asarray(pairs)[members], len(members)
+
+
 def vote_icp_register(
     mov_peaks: ArrayLike,
     ref_peaks: ArrayLike,
@@ -56,34 +76,26 @@ def vote_icp_register(
     info = {"iterations": 0, "converged": False, "n_inliers": 0, "capture_radius": radius}
     fitted_once = False
     for iteration in range(1, max_iterations + 1):
-        votes, pair_indices = [], []
-        for i, p in enumerate(mapped):
-            for j in ref_tree.query_ball_point(p, r=radius):
-                votes.append(ref_peaks[j] - p)
-                pair_indices.append((i, j))
-        votes = np.asarray(votes)
-        if len(votes) < min_votes:
-            break
-        vote_tree = cKDTree(votes)
-        counts = np.array(
-            [len(vote_tree.query_ball_point(v, r=cluster_radius)) for v in votes]
+        cluster = _densest_votes(
+            mapped, ref_peaks, ref_tree, radius, cluster_radius, min_votes
         )
-        members = vote_tree.query_ball_point(votes[np.argmax(counts)], r=cluster_radius)
-        inlier_mov = np.array([pair_indices[m][0] for m in members])
-        inlier_ref = np.array([pair_indices[m][1] for m in members])
+        if cluster is None:
+            break
+        cluster_votes, pairs, n_inliers = cluster
+        inlier_mov, inlier_ref = pairs[:, 0], pairs[:, 1]
         # A full affine needs a margin over its degrees of freedom; with fewer inliers the
         # translation update is the only fit that cannot hallucinate.
-        if len(members) >= ndim + 3:
+        if n_inliers >= ndim + 3:
             new = Transform.fit(
                 ref_peaks[inlier_ref], mov_peaks[inlier_mov], transform_type
             ).invert()
         else:
             # the mapped peaks move by the votes' mean displacement
-            new = Transform.from_translation(votes[members].mean(axis=0)) @ transform
+            new = Transform.from_translation(cluster_votes.mean(axis=0)) @ transform
         new_mapped = new.apply_points(mov_peaks)
         step = float(np.mean(np.linalg.norm(new_mapped - mapped, axis=1)))
         transform, mapped, fitted_once = new, new_mapped, True
-        info.update(iterations=iteration, n_inliers=int(len(members)), capture_radius=radius)
+        info.update(iterations=iteration, n_inliers=n_inliers, capture_radius=radius)
         radius = max(min_capture_radius, radius * radius_decay)
         if step < convergence_translation:
             info["converged"] = True
@@ -108,16 +120,10 @@ def vote_drift(
     """
     mov_peaks = np.asarray(mov_peaks, dtype=float)
     ref_peaks = np.asarray(ref_peaks, dtype=float)
-    ref_tree = cKDTree(ref_peaks)
-    votes, pairs = [], []
-    for p in mov_peaks:
-        for j in ref_tree.query_ball_point(p, r=capture_radius):
-            votes.append(ref_peaks[j] - p)
-            pairs.append((p, ref_peaks[j]))
-    if len(votes) < min_votes:
+    cluster = _densest_votes(
+        mov_peaks, ref_peaks, cKDTree(ref_peaks), capture_radius, cluster_radius, min_votes
+    )
+    if cluster is None:
         return None, [], 0
-    votes = np.asarray(votes)
-    vote_tree = cKDTree(votes)
-    counts = np.array([len(vote_tree.query_ball_point(v, r=cluster_radius)) for v in votes])
-    members = vote_tree.query_ball_point(votes[np.argmax(counts)], r=cluster_radius)
-    return votes[members].mean(axis=0), [pairs[m] for m in members], int(counts.max())
+    cluster_votes, pairs, size = cluster
+    return cluster_votes.mean(axis=0), [(mov_peaks[i], ref_peaks[j]) for i, j in pairs], size
