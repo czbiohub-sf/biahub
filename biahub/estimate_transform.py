@@ -387,6 +387,12 @@ class _Run:
                 self.keys, reference_position_dirpaths
             )
         else:
+            frame = self.settings.reference.frame
+            if reference_position_dirpaths:
+                click.echo(
+                    f"reference frame '{frame}' aligns the moving channel onto itself: the "
+                    "reference positions (-r) are not read"
+                )
             self.reference_for = dict(zip(self.keys, self.movings, strict=True))
 
     def start(self) -> None:
@@ -680,8 +686,8 @@ def estimate_transform_cli(
     `apply-transform` (forward matrices with their scores). The run's report, journal and
     per-timepoint records (what --resume continues from) go in a folder named after the
     output (`-o reg/transforms.yml` -> `reg/transforms/`). One SLURM job per timepoint,
-    then one per flagged timepoint for repair. With `reference.frame: first` or `previous`
-    the moving channel is stabilized against itself and `-r` is not needed.
+    then one per flagged timepoint for repair. With `reference.frame: first`, `previous` or
+    `neighbours` the moving channel is stabilized against itself and `-r` is not read.
 
     \b
     Registration (moving channel onto the reference channel):

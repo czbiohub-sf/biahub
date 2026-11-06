@@ -1330,3 +1330,24 @@ def test_an_estimate_plans_memory_for_the_larger_of_the_two_grids(tmp_path):
     plan = init_run(small, large, settings, tmp_path / "run")["resources"]["estimate"]
     gb_per_reference_volume = 120 * 1024 * 1024 * 4 / 2**30
     assert plan["mem_gb"] >= 10 * gb_per_reference_volume
+
+
+def test_reference_positions_given_for_a_stabilization_are_said_to_be_unread(
+    beads_plate, tmp_path, capsys
+):
+    # -r was silently ignored when the reference frame is the moving channel itself
+    from biahub.estimate_transform import estimate_transform
+
+    config = _write_config(tmp_path, reference="first", method="phase_cross_corr")
+    output = tmp_path / "out" / "transforms.yml"
+    estimate_transform(
+        [beads_plate],
+        config,
+        output,
+        reference_position_dirpaths=[beads_plate],
+        cluster="debug",
+    )
+    assert (
+        "reference frame 'first' aligns the moving channel onto itself"
+        in capsys.readouterr().out
+    )
