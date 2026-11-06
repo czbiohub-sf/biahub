@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ants
 import click
 import napari
 import numpy as np
@@ -84,8 +83,9 @@ def user_assisted_registration(
 
     Returns
     -------
-    ArrayLike
-        The estimated 4x4 affine transformation matrix for registering the source channel to the target channel.
+    Transform
+        The forward (source -> target) transform fitted to the clicked points, composed
+        with the pre-alignment.
 
     Notes
     -----
@@ -142,11 +142,6 @@ def user_assisted_registration(
         )
 
     # Add layers to napari with and transform
-    # Rotate the image if needed here
-    # Convert to ants objects
-    source_zyx_ants = ants.from_numpy(source_channel_volume.astype(np.float32))
-    target_zyx_ants = ants.from_numpy(target_channel_volume.astype(np.float32))
-
     # the shapes method's answer (flip, rotate, rescale) pre-aligns the source for display
     shapes = ShapesEstimator(
         source_channel_voxel_size,
@@ -158,11 +153,10 @@ def user_assisted_registration(
         (target_channel_Z, target_channel_Y, target_channel_X),
     )
     compound_affine = shapes.matrix  # moving -> reference
-    tx_manual = shapes.to_ants().invert()
     # the focus slice in reference planes, for the viewer
     scaling_factor_z = source_channel_voxel_size[-3] / target_channel_voxel_size[-3]
 
-    source_zxy_pre_reg = tx_manual.apply_to_image(source_zyx_ants, reference=target_zyx_ants)
+    source_pre_aligned = shapes.apply(source_channel_volume, reference=target_channel_volume)
 
     # Get a napari viewer
     viewer = napari.Viewer()
@@ -173,7 +167,7 @@ def user_assisted_registration(
     )
 
     source_layer = viewer.add_image(
-        source_zxy_pre_reg.numpy(),
+        source_pre_aligned,
         name=f"source_{source_channel_name}",
         blending="additive",
         colormap="green",
@@ -300,16 +294,13 @@ def user_assisted_registration(
         )  # Insert 0 in the third entry of each row
         manual_estimated_transform = euclidian_transform @ compound_affine
 
-    tx_manual = Transform(manual_estimated_transform).to_ants().invert()
-
-    source_zxy_manual_reg = tx_manual.apply_to_image(
-        source_zyx_ants, reference=target_zyx_ants
-    )
+    clicked = Transform(manual_estimated_transform)  # moving -> reference
+    source_registered = clicked.apply(source_channel_volume, reference=target_channel_volume)
 
     click.echo("\nShowing registered source image in magenta")
     viewer.grid.enabled = False
     viewer.add_image(
-        source_zxy_manual_reg.numpy(),
+        source_registered,
         name=f"registered_{source_channel_name}",
         colormap="magenta",
         blending="additive",
@@ -319,24 +310,19 @@ def user_assisted_registration(
     viewer.layers.remove(points_target_channel)
     source_layer.visible = False
 
-    # Ants affine transforms
-    tform = Transform.from_ants(tx_manual).matrix
-    click.echo(f"Estimated affine transformation matrix:\n{tform}\n")
+    click.echo(f"Estimated transform (forward, moving -> reference):\n{clicked.matrix}\n")
     input("Press <Enter> to close the viewer and exit...")
     viewer.close()
 
-    return [tform.tolist()]
+    return clicked
 
 
 class ManualEstimator(EstimatorBase):
     """TransformEstimator via user-assisted (napari) point annotation.
 
     Interactive: `estimate()` opens a napari viewer and blocks on `input()` until you
-    annotate matching points. `user_assisted_registration` builds its transform
-    correctly (skimage point-fit composed with the pre-alignment matrix, true
-    moving -> reference), then explicitly inverts it before returning -- so, like
-    ants.py:estimate(), its return value is the reference -> moving ("inverse") direction.
-    Invert once more here to satisfy the TransformEstimator contract.
+    annotate matching points; `user_assisted_registration` returns the forward
+    (moving -> reference) transform fitted to them, composed with the pre-alignment.
     """
 
     # Ignores the initial transform: repair from other initial transforms would return
@@ -366,7 +352,7 @@ class ManualEstimator(EstimatorBase):
     ) -> Transform:
         # No initial transform support -- napari display could pre-align with it, but
         # that's not implemented, and the point-fit itself doesn't take an initial guess.
-        (inverse_matrix,) = user_assisted_registration(
+        return user_assisted_registration(
             source_channel_volume=np.asarray(mov),
             source_channel_name=self.source_channel_name,
             source_channel_voxel_size=self.source_channel_voxel_size,
@@ -377,4 +363,3 @@ class ManualEstimator(EstimatorBase):
             pre_affine_90degree_rotation=self.pre_affine_90degree_rotation,
             pre_affine_fliplr=self.pre_affine_fliplr,
         )
-        return Transform(matrix=np.asarray(inverse_matrix)).invert()

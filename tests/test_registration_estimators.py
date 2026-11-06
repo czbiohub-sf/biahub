@@ -516,16 +516,15 @@ def test_manual_estimator_satisfies_protocol():
     assert isinstance(estimator, TransformEstimator)
 
 
-def test_manual_estimator_inverts_user_assisted_registrations_inverse_output(monkeypatch):
-    # user_assisted_registration returns a inverse (reference -> moving) matrix, per its own
-    # explicit internal .invert() before returning -- see estimators.py's docstring.
-    inverse_matrix = np.eye(4)
-    inverse_matrix[:3, 3] = [1.0, 2.0, 3.0]
+def test_manual_estimator_returns_the_forward_transform_the_annotation_built(monkeypatch):
+    # user_assisted_registration returns the forward (moving -> reference) Transform it
+    # fitted to the clicked points; the estimator passes it on as it is
+    clicked = Transform.from_translation([1.0, 2.0, 3.0])
     captured_kwargs = {}
 
     def fake_user_assisted_registration(**kwargs):
         captured_kwargs.update(kwargs)
-        return [inverse_matrix.tolist()]
+        return clicked
 
     monkeypatch.setattr(
         "biahub.registration.methods.manual.manual.user_assisted_registration",
@@ -543,7 +542,7 @@ def test_manual_estimator_inverts_user_assisted_registrations_inverse_output(mon
     )
     transform = estimator.estimate(mov, ref)
 
-    np.testing.assert_allclose(transform.matrix, np.linalg.inv(inverse_matrix))
+    assert transform is clicked
     assert captured_kwargs["source_channel_name"] == "GFP"
     assert captured_kwargs["target_channel_name"] == "Phase3D"
     assert captured_kwargs["target_channel_voxel_size"] == (0.5, 0.5, 0.5)

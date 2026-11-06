@@ -8,6 +8,7 @@ from scipy.ndimage import shift as ndi_shift
 
 import biahub.registration.engine.cluster as cluster
 
+from biahub.core.transform import Transform
 from biahub.estimate_transform import estimate_transform
 from biahub.registration.utils import RunError
 from biahub.settings import (
@@ -545,13 +546,13 @@ def test_repair_is_skipped_for_a_method_that_ignores_initial_transforms(tmp_path
 def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     beads_plate, tmp_path, monkeypatch
 ):
-    inverse = np.eye(4)
-    inverse[:3, 3] = APPLIED_SHIFT_ZYX  # the annotation tool returns the inverse matrix
+    # the annotation tool returns the forward Transform it fitted
+    clicked = Transform.from_translation([-a for a in APPLIED_SHIFT_ZYX])
     calls = []
 
     def fake_user_assisted_registration(**kwargs):
         calls.append(kwargs)
-        return (inverse,)
+        return clicked
 
     monkeypatch.setattr(
         "biahub.registration.methods.manual.manual.user_assisted_registration",
