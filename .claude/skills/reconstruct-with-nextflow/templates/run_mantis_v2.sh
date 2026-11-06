@@ -54,9 +54,12 @@ BIAHUB_PROJECT=""          # e.g. /hpc/mydata/<user>/biahub
 OUTPUT_DIR=""
 
 # The 0-convert plate, for acquisitions with no HCS plate (neuromast /
-# zebrafish / dynatrack). Leave empty to read the raw store directly. Resolved
-# after OUTPUT_DIR below, so it may reference it.
-CONVERTED_ZARR=""          # e.g. ${OUTPUT_DIR}/0-convert/${DATASET}.zarr
+# zebrafish / dynatrack). Usually leave it empty: the script then uses
+# ${OUTPUT_DIR}/0-convert/${DATASET}.zarr when that exists, and the raw store
+# otherwise. Set it only for a plate somewhere else, as a full path. It is
+# expanded right here, before OUTPUT_DIR gets its default below, so do not build
+# it from ${OUTPUT_DIR} unless OUTPUT_DIR is set explicitly above.
+CONVERTED_ZARR=""          # e.g. /hpc/projects/<project>/<dataset>/0-convert/<dataset>.zarr
 
 # Delete the intermediates once the last step (QC) finishes: the flat-field,
 # deskew, reconstruct and virtual-stain directories, the final stores'
