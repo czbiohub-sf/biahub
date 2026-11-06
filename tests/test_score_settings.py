@@ -255,3 +255,23 @@ def test_a_clip_after_a_filter_does_not_sample_the_filters_padding_edge():
     for dz in (2, 8):
         mov = ndi_shift(ref, (dz, 0, 0), order=0, mode="constant", cval=0.0)
         assert score(Transform.from_translation([-dz, 0.0, 0.0]), mov, ref) > 0.9999
+
+
+def test_the_run_scores_each_transform_of_a_pair_once(monkeypatch):
+    # a stack scored its winner, then the series scored it again; so did a propagated
+    # run for the start that won (an intensity score: 4-22 s on a 60 x 1024 x 1024 pair)
+    from biahub.registration.engine.core import _score_fn
+
+    mov, ref = _pair()
+    score = _score_fn(_settings("ants", score={"metric": "correlation"}))
+    near, far = Transform.identity(3), Transform.from_translation([0.0, 0.0, 1.0])
+    first = [score(near, mov, ref), score(far, mov, ref)]
+    warps = []
+    real = Transform.apply
+    monkeypatch.setattr(
+        Transform, "apply", lambda self, *a, **k: warps.append(1) or real(self, *a, **k)
+    )
+    again = [score(Transform.identity(3), mov, ref), score(far, mov, ref)]
+    assert warps == [] and again == first
+    score(near, mov.copy(), ref)  # another moving volume is scored
+    assert len(warps) == 1

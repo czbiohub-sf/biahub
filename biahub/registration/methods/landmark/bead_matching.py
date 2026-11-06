@@ -25,9 +25,6 @@ Key conventions
 
 from __future__ import annotations
 
-import weakref
-
-from collections import OrderedDict
 from pathlib import Path
 
 import click
@@ -55,6 +52,7 @@ from biahub.registration.estimators import (
     TransformEstimator,
     fit_pairs,
 )
+from biahub.registration.utils import Remembered, transform_key
 from biahub.settings import (
     BeadsMatchSettings,
     DetectPeaksSettings,
@@ -384,30 +382,11 @@ def detect_beads(
 # score, the moving volume under the transform being scored), keyed on the volumes'
 # identity -- checked through weak references, so a freed array is never mistaken for a
 # new one at the same address -- and on the detection settings. Only peaks are kept.
-_PEAKS: OrderedDict = OrderedDict()
-_PEAKS_KEPT = 16
-
-
-def _remembered(volumes: tuple, extra: tuple, compute):
-    try:
-        refs = tuple(weakref.ref(v) for v in volumes)
-    except TypeError:  # a volume without weak references (e.g. a list): not remembered
-        return compute()
-    key = (tuple(id(v) for v in volumes), extra)
-    hit = _PEAKS.get(key)
-    if hit is not None and all(r() is v for r, v in zip(hit[0], volumes, strict=True)):
-        _PEAKS.move_to_end(key)
-        return hit[1]
-    peaks = compute()
-    peaks.flags.writeable = False  # shared: a caller must not change it
-    _PEAKS[key] = (refs, peaks)
-    while len(_PEAKS) > _PEAKS_KEPT:
-        _PEAKS.popitem(last=False)
-    return peaks
+_PEAKS = Remembered(16)
 
 
 def _detect(volume, settings: DetectPeaksSettings) -> np.ndarray:
-    return np.asarray(
+    peaks = np.asarray(
         detect_peaks(
             np.asarray(volume),
             block_size=settings.block_size,
@@ -416,27 +395,22 @@ def _detect(volume, settings: DetectPeaksSettings) -> np.ndarray:
             min_distance=settings.min_distance,
         )
     )
+    peaks.flags.writeable = False  # shared: a caller must not change it
+    return peaks
 
 
 def bead_peaks(volume: np.ndarray, settings: DetectPeaksSettings) -> np.ndarray:
     """Return the bead peaks of `volume` (detected once per volume and settings)."""
-    return _remembered(
-        (volume,), (settings.model_dump_json(),), lambda: _detect(volume, settings)
-    )
-
-
-def _warp_key(transform) -> bytes | str:
-    matrix = getattr(transform, "matrix", None)  # PREWARPED: the volume as it is
-    return "as is" if matrix is None else np.asarray(matrix).tobytes()
+    return _PEAKS((volume,), (settings.model_dump_json(),), lambda: _detect(volume, settings))
 
 
 def warped_bead_peaks(
     transform: Transform, mov: np.ndarray, ref: np.ndarray, settings: DetectPeaksSettings
 ) -> np.ndarray:
     """Return the bead peaks of `mov` warped onto `ref`'s grid (once per transform)."""
-    return _remembered(
+    return _PEAKS(
         (mov, ref),
-        (_warp_key(transform), settings.model_dump_json()),
+        (transform_key(transform), settings.model_dump_json()),
         lambda: _detect(transform.apply(mov, reference=ref), settings),
     )
 

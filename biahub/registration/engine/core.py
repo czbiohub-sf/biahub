@@ -89,7 +89,12 @@ from biahub.registration.preprocess import (
     apply_image_blocks,
     blocks_footprint,
 )
-from biahub.registration.utils import RunError, resolve_time_indices
+from biahub.registration.utils import (
+    Remembered,
+    RunError,
+    resolve_time_indices,
+    transform_key,
+)
 from biahub.settings import (
     AnchorSettings,
     EstimateTransformSettings,
@@ -159,7 +164,25 @@ def _score_fn(settings: EstimateTransformSettings) -> ScoreFn:
 
         # how far the blocks reach: the score leaves that margin by the empty padding
         prepare.footprint = blocks_footprint(blocks)
-    return _metric_fn(settings, settings.effective_score_metric, prepare)
+    return _scored_once(_metric_fn(settings, settings.effective_score_metric, prepare))
+
+
+# The run's recent scores: a stack's winner, a propagated run's winning start and a kept
+# initial transform are scored by the estimator, then again by the series.
+_SCORES = Remembered(16)
+
+
+def _scored_once(score_fn: ScoreFn) -> ScoreFn:
+    """Return `score_fn`, computed once per transform of a (moving, reference) pair."""
+
+    def score(transform, mov, ref):
+        return _SCORES(
+            (mov, ref),
+            (score_fn, transform_key(transform)),
+            lambda: score_fn(transform, mov, ref),
+        )
+
+    return score
 
 
 def _final(settings: EstimateTransformSettings) -> EstimateTransformSettings:

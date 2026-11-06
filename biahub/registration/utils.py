@@ -9,11 +9,17 @@
 - `RunError`: a run refused or unable to go on (settings that do not fit the data, a
   missing or mismatched run folder). The library raises it; each command shows it as a
   usage error (`biahub.cli.parsing.refusals_as_usage_errors`).
+- `Remembered`: the last few results computed on given arrays (bead peaks, scores), so
+  a job does not compute one twice; `transform_key` names a transform in its key.
 
 Transforms live in `biahub.core.transform`, cropping in `biahub.estimate_crop`, the
 initial transform from the two grids in the shapes method (`methods/manual/shapes.py`).
 Shapes are ZYX.
 """
+
+import weakref
+
+from collections import OrderedDict
 
 import click
 import numpy as np
@@ -178,3 +184,40 @@ def resolve_time_indices(time_indices, n_t: int) -> list[int]:
             f"(0-{n_t - 1})"
         )
     return indices
+
+
+class Remembered:
+    """The last `kept` results computed on given arrays, found again by the arrays' identity.
+
+    A result is reused only while the very arrays it was computed on are alive (they are
+    held by weak reference), so a new array at a freed one's address is not mistaken for
+    it. Arrays changed in place are not noticed: keep a result only for arrays a job
+    reads, never writes.
+    """
+
+    def __init__(self, kept: int):
+        self.kept = kept
+        self._results: OrderedDict = OrderedDict()
+
+    def __call__(self, arrays: tuple, extra: tuple, compute):
+        """Return `compute()` for `arrays` and `extra` (hashable), computed once."""
+        try:
+            refs = tuple(weakref.ref(a) for a in arrays)
+        except TypeError:  # an array without weak references (e.g. a list): not remembered
+            return compute()
+        key = (tuple(id(a) for a in arrays), extra)
+        hit = self._results.get(key)
+        if hit is not None and all(r() is a for r, a in zip(hit[0], arrays, strict=True)):
+            self._results.move_to_end(key)
+            return hit[1]
+        result = compute()
+        self._results[key] = (refs, result)
+        while len(self._results) > self.kept:
+            self._results.popitem(last=False)
+        return result
+
+
+def transform_key(transform) -> bytes | str:
+    """Name `transform` in a `Remembered` key: its matrix (PREWARPED: the volume as it is)."""
+    matrix = getattr(transform, "matrix", None)
+    return "as is" if matrix is None else np.asarray(matrix).tobytes()
