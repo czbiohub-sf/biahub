@@ -25,6 +25,9 @@ Key conventions
 
 from __future__ import annotations
 
+import weakref
+
+from collections import OrderedDict
 from pathlib import Path
 
 import click
@@ -377,6 +380,67 @@ def detect_beads(
     return np.array(refined, dtype=float).reshape(-1, 3)
 
 
+# Peaks a job detects in the same volume more than once (the reference at every pass and
+# score, the moving volume under the transform being scored), keyed on the volumes'
+# identity -- checked through weak references, so a freed array is never mistaken for a
+# new one at the same address -- and on the detection settings. Only peaks are kept.
+_PEAKS: OrderedDict = OrderedDict()
+_PEAKS_KEPT = 16
+
+
+def _remembered(volumes: tuple, extra: tuple, compute):
+    try:
+        refs = tuple(weakref.ref(v) for v in volumes)
+    except TypeError:  # a volume without weak references (e.g. a list): not remembered
+        return compute()
+    key = (tuple(id(v) for v in volumes), extra)
+    hit = _PEAKS.get(key)
+    if hit is not None and all(r() is v for r, v in zip(hit[0], volumes, strict=True)):
+        _PEAKS.move_to_end(key)
+        return hit[1]
+    peaks = compute()
+    peaks.flags.writeable = False  # shared: a caller must not change it
+    _PEAKS[key] = (refs, peaks)
+    while len(_PEAKS) > _PEAKS_KEPT:
+        _PEAKS.popitem(last=False)
+    return peaks
+
+
+def _detect(volume, settings: DetectPeaksSettings) -> np.ndarray:
+    return np.asarray(
+        detect_peaks(
+            np.asarray(volume),
+            block_size=settings.block_size,
+            threshold_abs=settings.threshold_abs,
+            nms_distance=settings.nms_distance,
+            min_distance=settings.min_distance,
+        )
+    )
+
+
+def bead_peaks(volume: np.ndarray, settings: DetectPeaksSettings) -> np.ndarray:
+    """Return the bead peaks of `volume` (detected once per volume and settings)."""
+    return _remembered(
+        (volume,), (settings.model_dump_json(),), lambda: _detect(volume, settings)
+    )
+
+
+def _warp_key(transform) -> bytes | str:
+    matrix = getattr(transform, "matrix", None)  # PREWARPED: the volume as it is
+    return "as is" if matrix is None else np.asarray(matrix).tobytes()
+
+
+def warped_bead_peaks(
+    transform: Transform, mov: np.ndarray, ref: np.ndarray, settings: DetectPeaksSettings
+) -> np.ndarray:
+    """Return the bead peaks of `mov` warped onto `ref`'s grid (once per transform)."""
+    return _remembered(
+        (mov, ref),
+        (_warp_key(transform), settings.model_dump_json()),
+        lambda: _detect(transform.apply(mov, reference=ref), settings),
+    )
+
+
 class BeadNodeDetector:
     """Detects bead centroids as local-maxima peaks -- today's only node source."""
 
@@ -384,13 +448,7 @@ class BeadNodeDetector:
         self.settings = settings
 
     def detect(self, array: ArrayLike) -> ArrayLike:
-        return detect_peaks(
-            np.asarray(array),
-            block_size=self.settings.block_size,
-            threshold_abs=self.settings.threshold_abs,
-            nms_distance=self.settings.nms_distance,
-            min_distance=self.settings.min_distance,
-        )
+        return bead_peaks(np.asarray(array), self.settings)
 
 
 class NodeGraphEstimator(EstimatorBase):

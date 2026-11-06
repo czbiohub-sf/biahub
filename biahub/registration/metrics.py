@@ -32,7 +32,11 @@ from biahub.core.nodes.solvers import mutual_nearest
 from biahub.core.transform import Transform, polar, rotation_angles
 from biahub.registration.estimators import ScoreFn
 from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
-from biahub.registration.methods.landmark.bead_matching import overlap_score, peaks_from_beads
+from biahub.registration.methods.landmark.bead_matching import (
+    bead_peaks,
+    overlap_score,
+    warped_bead_peaks,
+)
 from biahub.registration.preprocess import SOBEL_FOOTPRINT, away_from_padding
 from biahub.settings import BeadsMatchSettings
 
@@ -64,19 +68,13 @@ def bead_alignment_metrics(
     None when peaks cannot be detected on either side.
     """
     radius = beads_match_settings.qc_settings.score_centroid_mask_radius
-    ref = np.asarray(ref)
-    warped = transform.apply(np.asarray(mov), reference=ref)
-    peaks = peaks_from_beads(
-        mov=warped,
-        ref=ref,
-        mov_peaks_settings=beads_match_settings.source_peaks_settings,
-        ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose=False,
-    )
-    if peaks is None:
-        return None
-    mov_peaks, ref_peaks = (np.asarray(p, dtype=float) for p in peaks)
-    if len(mov_peaks) == 0 or len(ref_peaks) == 0:
+    mov, ref = np.asarray(mov), np.asarray(ref)
+    # each warp and detection once per job (a score, the report and the record ask again)
+    mov_peaks = warped_bead_peaks(
+        transform, mov, ref, beads_match_settings.source_peaks_settings
+    ).astype(float)
+    ref_peaks = bead_peaks(ref, beads_match_settings.target_peaks_settings).astype(float)
+    if len(mov_peaks) < 2 or len(ref_peaks) < 2:  # too few to pair
         return None
     distances, nearest = cKDTree(mov_peaks).query(ref_peaks, distance_upper_bound=radius)
     paired = np.isfinite(distances)
