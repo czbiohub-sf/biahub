@@ -145,17 +145,18 @@ def test_shapes_reads_no_pixels_so_preprocess_blocks_are_refused():
 
 def test_the_flip_happens_on_the_moving_grid_when_the_widths_differ():
     # The flip comes first, on moving coordinates: it pivots on the moving grid's centre.
-    # Pivoting on the reference grid's sent moving x=0 to x=250 of a 200-wide grid.
+    # Pivoting on the reference grid's sent moving x=0 to x=250 of a 200-wide grid. Centres
+    # are (n - 1) / 2: moving x 49.5 lands on reference x 99.5.
     from biahub.registration.methods.manual.shapes import ShapesEstimator
 
     mov_shape, ref_shape = (5, 100, 100), (5, 100, 200)
     flipped = ShapesEstimator((1, 1, 1), (1, 1, 1), rotate90=0, fliplr=True).transform_for(
         mov_shape, ref_shape
     )
-    points = np.array([[2.0, 50.0, 50.0], [2.0, 50.0, 0.0], [2.0, 50.0, 100.0]])
+    points = np.array([[2.0, 49.5, 49.5], [2.0, 49.5, 0.0], [2.0, 49.5, 99.0]])
     np.testing.assert_allclose(
         flipped.apply_points(points),
-        [[2.0, 50.0, 100.0], [2.0, 50.0, 150.0], [2.0, 50.0, 50.0]],
+        [[2.0, 49.5, 99.5], [2.0, 49.5, 149.0], [2.0, 49.5, 50.0]],
     )
 
 

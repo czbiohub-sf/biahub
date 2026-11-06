@@ -1089,6 +1089,8 @@ def test_timepoints_outside_the_files_range_are_named_with_the_entry_they_reuse(
         ),
         config,
     )
-    apply_transform([position], config, tmp_path / "out.zarr", keep_overhang=True, cluster="debug")
+    apply_transform(
+        [position], config, tmp_path / "out.zarr", keep_overhang=True, cluster="debug"
+    )
     out = capsys.readouterr().out
     assert "outside the transforms file's timepoints (0-1): t=[2] use the entry of t=1" in out

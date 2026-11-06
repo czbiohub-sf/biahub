@@ -187,9 +187,10 @@ class Transform:
 
     @staticmethod
     def _yx_centres(start_shape: tuple, end_shape: tuple | None) -> tuple:
-        cy_start, cx_start = np.array(start_shape)[-2:] / 2
+        """Return the yx centres of two grids: (n - 1) / 2, voxel centres being 0 .. n - 1."""
+        cy_start, cx_start = (np.array(start_shape)[-2:] - 1) / 2
         cy_end, cx_end = (
-            (cy_start, cx_start) if end_shape is None else np.array(end_shape)[-2:] / 2
+            (cy_start, cx_start) if end_shape is None else (np.array(end_shape)[-2:] - 1) / 2
         )
         return cy_start, cx_start, cy_end, cx_end
 
@@ -238,7 +239,7 @@ class Transform:
     @classmethod
     def from_flip_x(cls, shape: tuple) -> Transform:
         """Flip x (left-right) within a grid, about its own x centre (3D, forward)."""
-        _, cx = np.array(shape)[-2:] / 2
+        _, cx = (np.array(shape)[-2:] - 1) / 2  # voxel centres run 0 .. n - 1
         matrix = np.array(
             [
                 [1, 0, 0, 0],
