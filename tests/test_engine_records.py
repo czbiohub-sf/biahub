@@ -279,3 +279,17 @@ def test_the_frame_that_starts_the_chain_is_identity_not_an_estimate_against_its
         FixedInitialTransform(Transform.identity(3)), lambda t, m, r: 1.0, [0, 1, 2],
     )  # fmt: skip
     assert result.transforms[0].is_identity and _Counting.calls == 2
+
+
+def test_a_fresh_run_clears_the_previous_runs_flags(tmp_path):
+    # _start_run removed the record folders but left flags.json: a --step repair right
+    # after a fresh --init read the previous run's flags
+    from biahub.registration.engine.disk import FLAGS_FILENAME, _start_run
+    from biahub.settings import EstimateTransformSettings
+
+    settings = EstimateTransformSettings(
+        moving={"channel": "GFP"}, reference={"frame": "first"}, method="phase_cross_corr"
+    )
+    (tmp_path / FLAGS_FILENAME).write_text('{"flagged": [3], "repair": [3], "sweep": []}')
+    _start_run(tmp_path, settings, tmp_path / "mov", None, resume=False)
+    assert not (tmp_path / FLAGS_FILENAME).exists()

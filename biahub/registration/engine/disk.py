@@ -174,6 +174,8 @@ def _start_run(
         )
     for name in ("timepoints", "repairs", "sweeps"):
         shutil.rmtree(output_dir / name, ignore_errors=True)
+    # the flags were the earlier run's verdict on its own records
+    (output_dir / FLAGS_FILENAME).unlink(missing_ok=True)
     _write_json(manifest_path, fingerprint, indent=2)
 
 
