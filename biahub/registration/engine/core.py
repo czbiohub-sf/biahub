@@ -12,6 +12,7 @@ their submission `cluster`.
 from __future__ import annotations
 
 import json
+import os
 
 from collections.abc import Iterable
 from pathlib import Path
@@ -394,6 +395,12 @@ def _sweep_minutes(n_trials: int) -> int:
 # MaxRSS, 12 jobs), i.e. ~22 volumes; 30 leaves ~30% headroom. The other methods fit in 10.
 RAM_VOLUMES_PER_JOB = {"ants": 30}
 DEFAULT_RAM_VOLUMES_PER_JOB = 10
+# CPUs per estimate job: ANTs' optimizer runs ITK threads, one per CPU (`use_task_threads`);
+# the other methods are single-threaded.
+CPUS_PER_JOB = {"ants": 8}
+DEFAULT_CPUS_PER_JOB = 2
+# SLURM's smallest useful memory request per CPU, in GB.
+MIN_GB_PER_CPU = 4
 
 
 def _estimate_job_resources(
@@ -405,16 +412,16 @@ def _estimate_job_resources(
     median holds its frames and the median). `at_least`: volumes a later step of the
     job holds on its own, once the method's are freed (leftover motion's raw shift).
     """
-    # Bead matching is single-threaded; ANTs' optimizer uses ITK threads.
-    _, num_cpus, min_gb_per_cpu = estimate_resources(
-        shape=(1, 2, *zyx_shape), max_num_cpus=8 if method == "ants" else 4
-    )
+    # in CI the suite runs serially (as estimate_resources does)
+    in_ci = os.environ.get("CI") == "true"
+    num_cpus = 1 if in_ci else CPUS_PER_JOB.get(method, DEFAULT_CPUS_PER_JOB)
     gb_per_volume = np.prod(zyx_shape) * np.dtype(np.float32).itemsize / 2**30
     volumes = max(
         RAM_VOLUMES_PER_JOB.get(method, DEFAULT_RAM_VOLUMES_PER_JOB) + extra_volumes, at_least
     )
     job_gb = gb_per_volume * volumes
-    return num_cpus, int(max(min_gb_per_cpu, np.ceil(job_gb / num_cpus)))
+    gb_per_cpu = max(MIN_GB_PER_CPU, np.ceil(gb_per_volume), np.ceil(job_gb / num_cpus))
+    return num_cpus, int(gb_per_cpu)
 
 
 def init_run(

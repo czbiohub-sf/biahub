@@ -787,6 +787,21 @@ def test_an_ants_estimate_is_sized_for_its_measured_peak_memory():
     assert beads_cpus * beads_gb < cpus * gb_ram_per_cpu  # beads keeps its smaller footprint
 
 
+def test_an_ants_estimate_gets_cpus_for_its_threads(monkeypatch):
+    # ITK sizes its threads from the job's CPUs; a made-up 2-volume shape once capped
+    # every method at 2, so ANTs ran on 2 threads. The single-threaded methods keep 2.
+    from biahub.registration.engine.core import _estimate_job_resources
+
+    monkeypatch.delenv("CI", raising=False)
+    shape = (66, 2048, 2048)
+    assert _estimate_job_resources("ants", shape)[0] == 8
+    assert _estimate_job_resources("bead_matching", shape)[0] == 2
+    ants_gb = _estimate_job_resources("ants", shape)
+    assert ants_gb[0] * ants_gb[1] >= 1.25 * 22.6  # the job's RAM, now over more CPUs
+    monkeypatch.setenv("CI", "true")  # the suite runs serially
+    assert _estimate_job_resources("ants", shape)[0] == 1
+
+
 def test_image_blocks_run_before_the_method_end_to_end(beads_plate, tmp_path):
     # A clip that keeps every value changes nothing: the run matches one without blocks.
     (tmp_path / "a").mkdir()
