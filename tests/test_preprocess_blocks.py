@@ -244,7 +244,7 @@ def test_a_methods_own_score_judges_the_raw_volumes(monkeypatch):
         reference={"frame": "cross", "channel": "Phase3D"},
         method="bead_matching",
         bead_matching=BeadsMatchSettings(
-            source_peaks_settings=peaks, target_peaks_settings=peaks
+            moving_peaks_settings=peaks, reference_peaks_settings=peaks
         ),
         preprocess=[{"clip_percentiles": {"low": 0, "high": 99.9}}],
     )

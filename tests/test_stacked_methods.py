@@ -121,7 +121,7 @@ def beads_plate(tmp_path):
 
 PEAKS = {"threshold_abs": 100, "nms_distance": 4, "min_distance": 0, "block_size": [8, 8, 8]}
 BEADS_BLOCK = {
-    "bead_matching": {"source_peaks_settings": PEAKS, "target_peaks_settings": PEAKS}
+    "bead_matching": {"moving_peaks_settings": PEAKS, "reference_peaks_settings": PEAKS}
 }
 
 

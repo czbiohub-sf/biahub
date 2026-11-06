@@ -79,7 +79,7 @@ reconstruct its own folder, since they share the transfer-function file name).
 
 Use `--well` if given; otherwise `references/datasets.md`. Verify rather than assume: a
 previous `1-register/estimate-registration*.sh` names it, or run bead detection on one
-timepoint of the candidate with the template's `source_peaks_settings` and confirm tens of
+timepoint of the candidate with the template's `moving_peaks_settings` and confirm tens of
 peaks (a sample well gives none or a few). Without beads, pick one FOV with clear structure
 in both channels for `ants`, and plan the initial transform (`references/methods.md`, "ANTs").
 

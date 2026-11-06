@@ -219,7 +219,7 @@ def _bead_estimator():
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
     beads_match_settings = BeadsMatchSettings(
-        source_peaks_settings=peaks_settings, target_peaks_settings=peaks_settings
+        moving_peaks_settings=peaks_settings, reference_peaks_settings=peaks_settings
     )
     return NodeGraphEstimator(
         mov_detector=BeadNodeDetector(peaks_settings),

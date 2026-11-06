@@ -144,8 +144,8 @@ def nuclei_estimator(
     """
     matching = BeadsMatchSettings(
         algorithm=settings.algorithm,
-        source_peaks_settings=None,
-        target_peaks_settings=None,
+        moving_peaks_settings=None,
+        reference_peaks_settings=None,
         hungarian_match_settings=settings.hungarian_match_settings,
         spectral_match_settings=settings.spectral_match_settings,
         match_descriptor_settings=settings.match_descriptor_settings,

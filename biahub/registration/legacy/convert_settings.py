@@ -30,6 +30,7 @@ from pydantic import Field, NonNegativeInt, PositiveFloat, field_validator, mode
 
 from biahub.cli.parsing import config_filepaths, output_filepath
 from biahub.settings import (
+    LEGACY_BEAD_KEYS,
     AffineTransformSettings,
     AntsRegistrationSettings,
     BeadsMatchSettings,
@@ -89,6 +90,13 @@ class LegacyAntsRegistrationSettings(MyBaseModel):
     clip: bool = False
 
 
+def _with_new_bead_keys(beads):
+    """Return a legacy `beads_match_settings` with today's names for its two detections."""
+    if not isinstance(beads, dict):
+        return beads
+    return {LEGACY_BEAD_KEYS.get(k, k): v for k, v in beads.items()}
+
+
 class EstimateRegistrationSettings(MyBaseModel):
     target_channel_name: str
     source_channel_name: str
@@ -104,6 +112,11 @@ class EstimateRegistrationSettings(MyBaseModel):
     manual_registration_settings: ManualRegistrationSettings | None = None
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
     verbose: bool = False
+
+    @field_validator("beads_match_settings", mode="before")
+    @classmethod
+    def rename_bead_keys(cls, beads):
+        return _with_new_bead_keys(beads)
 
     @model_validator(mode="after")
     def set_defaults_and_validate(self) -> EstimateRegistrationSettings:
@@ -137,6 +150,11 @@ class EstimateStabilizationSettings(MyBaseModel):
     )
     eval_transform_settings: EvalTransformSettings | None = None
     verbose: bool = False
+
+    @field_validator("beads_match_settings", mode="before")
+    @classmethod
+    def rename_bead_keys(cls, beads):
+        return _with_new_bead_keys(beads)
 
     @model_validator(mode="after")
     def set_defaults_and_validate(self) -> EstimateStabilizationSettings:

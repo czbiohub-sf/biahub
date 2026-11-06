@@ -141,7 +141,7 @@ def test_a_failed_estimate_keeps_the_initial_transform_files_transform(
     config = _config(
         tmp_path,
         transform__initial={"from": "file", "file": str(initial_transform_file)},
-        bead_matching={"source_peaks_settings": peaks, "target_peaks_settings": peaks},
+        bead_matching={"moving_peaks_settings": peaks, "reference_peaks_settings": peaks},
     )
     output = tmp_path / "fov0" / "transforms.yml"
     estimate_transform(

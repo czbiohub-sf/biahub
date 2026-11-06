@@ -119,8 +119,8 @@ def test_a_matcher_that_cannot_run_is_an_estimation_error():
     rng = np.random.default_rng(5)
     volume = _synthetic_bead_volume(rng, (24, 48, 48), n_beads=12)
     estimator = NodeGraphEstimator(
-        mov_detector=BeadNodeDetector(settings.source_peaks_settings),
-        ref_detector=BeadNodeDetector(settings.target_peaks_settings),
+        mov_detector=BeadNodeDetector(settings.moving_peaks_settings),
+        ref_detector=BeadNodeDetector(settings.reference_peaks_settings),
         beads_match_settings=settings,
         transform_type="euclidean",
         matcher=too_large,
@@ -225,8 +225,8 @@ def _beads_settings(**overrides):
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
     return BeadsMatchSettings(
-        source_peaks_settings=peaks,
-        target_peaks_settings=peaks,
+        moving_peaks_settings=peaks,
+        reference_peaks_settings=peaks,
         spectral_match_settings=SpectralMatchSettings(),
         **overrides,
     )
@@ -259,8 +259,8 @@ def test_spectral_recovers_an_offset_beyond_the_hungarian_capture_range():
     affine = "euclidean"
 
     hungarian_only = NodeGraphEstimator(
-        mov_detector=BeadNodeDetector(settings.source_peaks_settings),
-        ref_detector=BeadNodeDetector(settings.target_peaks_settings),
+        mov_detector=BeadNodeDetector(settings.moving_peaks_settings),
+        ref_detector=BeadNodeDetector(settings.reference_peaks_settings),
         beads_match_settings=settings,
         transform_type=affine,
     )

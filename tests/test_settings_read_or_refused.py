@@ -92,3 +92,20 @@ def test_a_transform_type_the_method_cannot_fit_is_refused():
             reference={"frame": "first"},
             transform={"type": "affine"},
         )
+
+
+def test_the_bead_detections_are_named_for_the_volumes():
+    peaks = {"threshold_abs": 50.0}
+    beads = _settings(
+        "bead_matching",
+        bead_matching={"moving_peaks_settings": peaks, "reference_peaks_settings": peaks},
+    ).bead_matching
+    assert beads.moving_peaks_settings.threshold_abs == 50.0
+    assert beads.reference_peaks_settings.threshold_abs == 50.0
+    # the legacy pipeline's names: refused, naming the new key and the converter
+    for old, new in [
+        ("source_peaks_settings", "moving_peaks_settings"),
+        ("target_peaks_settings", "reference_peaks_settings"),
+    ]:
+        with pytest.raises(ValidationError, match=f"{old} is now {new}.*convert-settings"):
+            _settings("bead_matching", bead_matching={old: peaks})

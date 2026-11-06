@@ -59,8 +59,8 @@ def _bead_detection(run_dir: Path, threshold: float | None) -> dict:
         }
 
     return {
-        "moving": peaks(final.bead_matching.source_peaks_settings),
-        "reference": peaks(final.bead_matching.target_peaks_settings),
+        "moving": peaks(final.bead_matching.moving_peaks_settings),
+        "reference": peaks(final.bead_matching.reference_peaks_settings),
     }
 
 

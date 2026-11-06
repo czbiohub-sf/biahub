@@ -488,8 +488,8 @@ class NodeGraphEstimator(EstimatorBase):
         transform correction and the spectral candidate around it.
         """
         return cls(
-            mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
-            ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
+            mov_detector=BeadNodeDetector(beads_match_settings.moving_peaks_settings),
+            ref_detector=BeadNodeDetector(beads_match_settings.reference_peaks_settings),
             beads_match_settings=beads_match_settings,
             transform_type=transform_type,
             iterations=(
@@ -660,8 +660,8 @@ class VoteIcpEstimator(EstimatorBase):
         return cls(
             transform_type=transform_type,
             dense_detector=BeadNodeDetector(settings.vote_peaks_settings),
-            precise_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
-            ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
+            precise_detector=BeadNodeDetector(beads_match_settings.moving_peaks_settings),
+            ref_detector=BeadNodeDetector(beads_match_settings.reference_peaks_settings),
             settings=settings,
             score_fn=score_fn,
         )
@@ -753,8 +753,8 @@ class VoteInitialTransformCorrection(EstimatorBase):
     ) -> VoteInitialTransformCorrection:
         return cls(
             settings=beads_match_settings.initial_transform_correction_settings,
-            mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
-            ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
+            mov_detector=BeadNodeDetector(beads_match_settings.moving_peaks_settings),
+            ref_detector=BeadNodeDetector(beads_match_settings.reference_peaks_settings),
             transform_type=transform_type,
         )
 

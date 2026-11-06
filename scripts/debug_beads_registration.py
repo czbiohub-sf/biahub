@@ -158,8 +158,8 @@ if visualize:
 mov_peaks, ref_peaks = peaks_from_beads(
     mov_data_reg,
     ref_data,
-    config.beads_match_settings.source_peaks_settings,
-    config.beads_match_settings.target_peaks_settings,
+    config.beads_match_settings.moving_peaks_settings,
+    config.beads_match_settings.reference_peaks_settings,
     verbose=True,
 )
 

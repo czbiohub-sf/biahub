@@ -108,8 +108,8 @@ PEAKS = DetectPeaksSettings(
 
 def _beads_settings(**overrides):
     return BeadsMatchSettings(
-        source_peaks_settings=PEAKS,
-        target_peaks_settings=PEAKS,
+        moving_peaks_settings=PEAKS,
+        reference_peaks_settings=PEAKS,
         # Synthetic beads sit ~15 vox apart in a 60-vox field, so the vote cluster must
         # be tight.
         vote_icp_settings=VoteIcpSettings(

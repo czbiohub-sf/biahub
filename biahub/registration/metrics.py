@@ -71,9 +71,9 @@ def bead_alignment_metrics(
     mov, ref = np.asarray(mov), np.asarray(ref)
     # each warp and detection once per job (a score, the report and the record ask again)
     mov_peaks = warped_bead_peaks(
-        transform, mov, ref, beads_match_settings.source_peaks_settings
+        transform, mov, ref, beads_match_settings.moving_peaks_settings
     ).astype(float)
-    ref_peaks = bead_peaks(ref, beads_match_settings.target_peaks_settings).astype(float)
+    ref_peaks = bead_peaks(ref, beads_match_settings.reference_peaks_settings).astype(float)
     if len(mov_peaks) < 2 or len(ref_peaks) < 2:  # too few to pair
         return None
     distances, nearest = cKDTree(mov_peaks).query(ref_peaks, distance_upper_bound=radius)

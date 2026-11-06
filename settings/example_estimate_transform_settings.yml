@@ -16,7 +16,7 @@ reference:
 method: bead_matching
 bead_matching:
   algorithm: hungarian
-  source_peaks_settings:
+  moving_peaks_settings:
     threshold_abs: 110.0
     nms_distance: 16
     min_distance: 0
@@ -24,7 +24,7 @@ bead_matching:
     - 8
     - 8
     - 8
-  target_peaks_settings:
+  reference_peaks_settings:
     threshold_abs: 0.8
     nms_distance: 16
     min_distance: 0

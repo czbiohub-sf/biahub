@@ -135,7 +135,7 @@ def test_bead_landmarks_find_the_estimates_settings_in_a_multi_position_run(tmp_
         moving={"channel": "GFP"},
         reference={"frame": "cross", "channel": "Phase3D"},
         method="bead_matching",
-        bead_matching={"source_peaks_settings": peaks, "target_peaks_settings": peaks},
+        bead_matching={"moving_peaks_settings": peaks, "reference_peaks_settings": peaks},
     )
     for _, work_dir in run.work_dirs():
         work_dir.mkdir(parents=True)

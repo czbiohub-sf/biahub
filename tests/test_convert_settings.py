@@ -326,3 +326,24 @@ def test_a_mask_radius_without_crop_converts_to_no_mask():
     converted, notes = convert_settings(legacy)
     assert converted.preprocess == []
     assert any("ref_mask_radius" in n for n in notes)
+
+
+def test_a_legacy_beads_config_converts_its_detections_to_the_volumes_names():
+    peaks = {"threshold_abs": 50.0}
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="beads",
+        beads_match_settings={"source_peaks_settings": peaks, "target_peaks_settings": peaks},
+    )
+    unified, _ = convert_settings(legacy)
+    assert unified.bead_matching.moving_peaks_settings.threshold_abs == 50.0
+    assert unified.bead_matching.reference_peaks_settings.threshold_abs == 50.0
+    stabilization = EstimateStabilizationSettings(
+        stabilization_estimation_channel="GFP",
+        stabilization_channels=["GFP"],
+        stabilization_type="xyz",
+        stabilization_method="beads",
+        beads_match_settings={"source_peaks_settings": peaks},
+    )
+    assert stabilization.beads_match_settings.moving_peaks_settings.threshold_abs == 50.0

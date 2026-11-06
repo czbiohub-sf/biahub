@@ -424,7 +424,7 @@ class VoteIcpSettings(MyBaseModel):
     early rounds recover the bulk misalignment and late rounds only see unambiguous
     neighbours. `vote_peaks_settings` is the dense detection on the raw moving volume
     for the reach stage; a precision stage re-runs at short range with the pipeline's
-    own `source_peaks_settings` and is kept only on a strict score win.
+    own `moving_peaks_settings` and is kept only on a strict score win.
     """
 
     vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
@@ -452,12 +452,20 @@ class QCBeadsRegistrationSettings(MyBaseModel):
     score_centroid_mask_radius: int = 6
 
 
+# The legacy pipeline's names for the two detections; its configs are converted, a new
+# config with them is refused.
+LEGACY_BEAD_KEYS = {
+    "source_peaks_settings": "moving_peaks_settings",
+    "target_peaks_settings": "reference_peaks_settings",
+}
+
+
 class BeadsMatchSettings(MyBaseModel):
     algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
-    source_peaks_settings: DetectPeaksSettings | None = Field(
+    moving_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
-    target_peaks_settings: DetectPeaksSettings | None = Field(
+    reference_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
@@ -477,6 +485,16 @@ class BeadsMatchSettings(MyBaseModel):
     )
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
+
+    @model_validator(mode="before")
+    @classmethod
+    def refuse_legacy_keys(cls, data):
+        for old, new in LEGACY_BEAD_KEYS.items():
+            if isinstance(data, dict) and old in data:
+                raise ValueError(
+                    f"{old} is now {new}; `biahub convert-settings` rewrites a legacy config"
+                )
+        return data
 
 
 class LocalPhaseCrossCorrSettings(MyBaseModel):

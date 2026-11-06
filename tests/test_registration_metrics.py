@@ -45,7 +45,7 @@ def test_bead_metrics_are_continuous_where_overlap_ties(pair):
     peaks = DetectPeaksSettings(
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
-    settings = BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks)
+    settings = BeadsMatchSettings(moving_peaks_settings=peaks, reference_peaks_settings=peaks)
 
     good = bead_alignment_metrics(truth, mov, ref, settings)
     off = bead_alignment_metrics(wrong, mov, ref, settings)
@@ -128,7 +128,7 @@ def test_bead_residuals_in_um_scale_each_axis_and_pair_the_same_beads(pair):
     peaks = DetectPeaksSettings(
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
-    settings = BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks)
+    settings = BeadsMatchSettings(moving_peaks_settings=peaks, reference_peaks_settings=peaks)
     in_vox = bead_alignment_metrics(wrong, mov, ref, settings)
     in_um = bead_alignment_metrics(wrong, mov, ref, settings, ref_um=(0.2, 0.1, 0.1))
     # matching stays on the configured radius in voxels: the same beads pair up

@@ -88,7 +88,7 @@ def _write_config(
     if method == "bead_matching":
         blocks.setdefault(
             "bead_matching",
-            BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+            BeadsMatchSettings(moving_peaks_settings=peaks, reference_peaks_settings=peaks),
         )
     # repair is off unless a config asks for it; these runs ask, as the bead template does
     blocks.setdefault("fallback", {"repair": {}})
@@ -503,8 +503,8 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
     # A 1-voxel scoring radius, so a pass's unrefined input does not tie with its refinement
     # (the default 6-voxel radius cannot tell a 2-voxel misalignment from none).
     beads = BeadsMatchSettings(
-        source_peaks_settings=peaks,
-        target_peaks_settings=peaks,
+        moving_peaks_settings=peaks,
+        reference_peaks_settings=peaks,
         qc_settings={"iterations": 2, "score_threshold": 0.4, "score_centroid_mask_radius": 1},
     )
     config = _write_config(tmp_path, propagate=True, bead_matching=beads)
@@ -596,7 +596,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
         method="bead_matching",
         bead_matching=BeadsMatchSettings(
-            source_peaks_settings=peaks, target_peaks_settings=peaks
+            moving_peaks_settings=peaks, reference_peaks_settings=peaks
         ),
         score={"metric": "residual"},
     )
@@ -632,7 +632,7 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
         method="bead_matching",
         bead_matching=BeadsMatchSettings(
-            source_peaks_settings=peaks, target_peaks_settings=peaks
+            moving_peaks_settings=peaks, reference_peaks_settings=peaks
         ),
         fallback={
             "flag": {"k_mad": 2.0, "floor": 0.8, "hard_fail": 0.4},
@@ -739,7 +739,7 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
         method="bead_matching",
         bead_matching=BeadsMatchSettings(
-            source_peaks_settings=peaks, target_peaks_settings=peaks
+            moving_peaks_settings=peaks, reference_peaks_settings=peaks
         ),
         fallback={
             "repair": None,
