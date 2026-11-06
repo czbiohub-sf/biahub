@@ -170,7 +170,7 @@ def test_build_beads_estimator_wires_vote_icp_mode_and_initial_transform_correct
     corrected = build_beads_estimator(
         _beads_settings(
             initial_transform_correction_settings=InitialTransformCorrectionSettings(
-                mode="vote_affine"
+                mode="vote_fit"
             )
         ),
         "euclidean",
@@ -191,7 +191,7 @@ def test_vote_correction_moves_a_drifted_initial_transform_to_the_truth_never_wo
     truth = Transform.from_translation([-a for a in applied_zyx])
     correction = VoteInitialTransformCorrection(
         InitialTransformCorrectionSettings(
-            mode="vote_affine",
+            mode="vote_fit",
             vote_peaks_settings=PEAKS,
             capture_radius=40.0,
             cluster_radius=3.0,
@@ -254,4 +254,23 @@ def test_the_correction_modes_name_what_the_vote_fits():
     from biahub.settings import InitialTransformCorrectionSettings
 
     modes = get_args(InitialTransformCorrectionSettings.model_fields["mode"].annotation)
-    assert modes == ("none", "vote_translation", "vote_affine")
+    assert modes == ("none", "vote_translation", "vote_fit")
+
+
+def test_the_voted_fit_is_the_runs_transform_type():
+    # vote_fit fitted an affine whatever transform.type was: a euclidean run kept shear
+    rng = np.random.default_rng(11)
+    shape = (40, 60, 60)
+    ref = _synthetic_bead_volume(rng, shape)
+    mov = ndi_shift(ref, shift=(4, -6, 8), order=1, mode="constant", cval=0.0)
+    settings = InitialTransformCorrectionSettings(
+        mode="vote_fit", vote_peaks_settings=PEAKS, capture_radius=40.0, cluster_radius=3.0
+    )
+    correction = VoteInitialTransformCorrection(
+        settings, BeadNodeDetector(PEAKS), BeadNodeDetector(PEAKS), transform_type="euclidean"
+    )
+    start = Transform.from_scaling((1.0, 1.03, 0.97), shape)  # a start with scale in it
+    corrected = correction.estimate(mov, ref, initial_transform=start)
+    fitted_part = corrected @ start.invert()  # what the correction composed after it
+    linear = fitted_part.linear
+    np.testing.assert_allclose(linear.T @ linear, np.eye(3), atol=1e-6)

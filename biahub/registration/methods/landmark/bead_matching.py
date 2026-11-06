@@ -694,8 +694,8 @@ class VoteInitialTransformCorrection(EstimatorBase):
 
     Warps `mov` by the initial transform, detects beads densely and votes for the
     residual drift; "vote_translation" composes the densest cluster's mean displacement
-    into the initial transform, "vote_affine" also fits an affine on the cluster's
-    pairs. Every candidate competes against the unchanged initial transform on the
+    into the initial transform, "vote_fit" also fits the run's transform type on the
+    cluster's pairs. Every candidate competes against the unchanged initial transform on the
     median nearest-neighbour distance of the pipeline's own detection, so a bad vote
     leaves the initial transform unchanged. Returns the (possibly unchanged) initial
     transform; without an initial transform, the identity.
@@ -706,21 +706,24 @@ class VoteInitialTransformCorrection(EstimatorBase):
         settings: InitialTransformCorrectionSettings,
         mov_detector: NodeDetector,
         ref_detector: NodeDetector,
+        transform_type: str = "affine",
     ):
         self.settings = settings
         self.mov_detector = mov_detector
         self.ref_detector = ref_detector
+        self.transform_type = transform_type  # what vote_fit fits
         self.dense_detector = BeadNodeDetector(settings.vote_peaks_settings)
         self.last_note: str = ""
 
     @classmethod
     def from_beads_settings(
-        cls, beads_match_settings: BeadsMatchSettings
+        cls, beads_match_settings: BeadsMatchSettings, transform_type: str
     ) -> VoteInitialTransformCorrection:
         return cls(
             settings=beads_match_settings.initial_transform_correction_settings,
             mov_detector=BeadNodeDetector(beads_match_settings.source_peaks_settings),
             ref_detector=BeadNodeDetector(beads_match_settings.target_peaks_settings),
+            transform_type=transform_type,
         )
 
     def estimate(
@@ -774,7 +777,7 @@ class VoteInitialTransformCorrection(EstimatorBase):
         best = min(nn, key=nn.get)
         corrected = candidates[best]
         note = f"drift={np.round(drift, 1).tolist()} votes={n_votes} pick={best}"
-        if settings.mode == "vote_affine" and len(pairs) >= 4:
+        if settings.mode == "vote_fit" and len(pairs) >= 4:
             # The cluster's votes are correspondences (warped moving peak p, reference
             # peak q) in the uncorrected initial transform's warped frame; re-warping
             # should sample p at q, C(q) = p, so the forward correction after the
@@ -782,7 +785,7 @@ class VoteInitialTransformCorrection(EstimatorBase):
             p = np.asarray([a for a, _ in pairs], dtype=float)
             q = np.asarray([b for _, b in pairs], dtype=float)
             correction = (
-                Transform.fit(q, p)
+                Transform.fit(q, p, self.transform_type)
                 if len(pairs) >= 6
                 else Transform.from_translation((p - q).mean(axis=0))
             )
@@ -840,7 +843,9 @@ def build_beads_estimator(
     if beads_match_settings.initial_transform_correction_settings.mode != "none":
         configured = ChainedEstimator(
             [
-                VoteInitialTransformCorrection.from_beads_settings(beads_match_settings),
+                VoteInitialTransformCorrection.from_beads_settings(
+                    beads_match_settings, transform_type
+                ),
                 configured,
             ],
             score_fn=score_fn,

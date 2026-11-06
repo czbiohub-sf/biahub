@@ -402,12 +402,12 @@ class InitialTransformCorrectionSettings(MyBaseModel):
     (`vote_peaks_settings`) and each votes for its displacement to every reference bead
     within `capture_radius`; the mean of the densest `cluster_radius`-ball of votes is
     the residual drift. "vote_translation" composes that translation into the initial
-    transform; "vote_affine" also fits an affine on the cluster's members, kept only if
-    it lowers the peaks' median nearest-neighbour distance. Candidates only compete
-    against the unchanged initial transform, so a bad vote cannot make it worse.
+    transform; "vote_fit" also fits the run's transform type on the cluster's members,
+    kept only if it lowers the peaks' median nearest-neighbour distance. Candidates only
+    compete against the unchanged initial transform, so a bad vote cannot make it worse.
     """
 
-    mode: Literal["none", "vote_translation", "vote_affine"] = "none"
+    mode: Literal["none", "vote_translation", "vote_fit"] = "none"
     vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
         threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
     )
