@@ -255,7 +255,8 @@ class ConsensusInitialTransform:
     """Repair initial transform from the run's own well-scoring timepoints.
 
     Element-wise median transform over every timepoint (other than `t` itself) whose
-    score is >= `score_threshold`. Recomputed fresh on every call from a caller-owned
+    score is >= `score_threshold` -- or, with no threshold (a score without an absolute
+    scale), every scored timepoint not in `excluded` (the flagged ones). Recomputed fresh on every call from a caller-owned
     history/scores mapping rather than memoized, so a repair pass sees results it has
     already accepted earlier in the same run. Built only from good timepoints:
     including the ones being repaired would contaminate the very reference used to
@@ -274,13 +275,15 @@ class ConsensusInitialTransform:
         self,
         history: dict[int, Transform],
         scores: dict[int, float],
-        score_threshold: float = 0.75,
+        score_threshold: float | None = 0.75,
         min_good: int = 5,
+        excluded: set[int] = frozenset(),
     ):
         self.history = history
         self.scores = scores
         self.score_threshold = score_threshold
         self.min_good = min_good
+        self.excluded = excluded
 
     def initial_for(self, t: int) -> Transform:
         good = [
@@ -288,12 +291,21 @@ class ConsensusInitialTransform:
             for t2 in self.history
             if t2 != t
             and np.isfinite(self.scores.get(t2, np.nan))
-            and self.scores[t2] >= self.score_threshold
+            and (
+                t2 not in self.excluded
+                if self.score_threshold is None
+                else self.scores[t2] >= self.score_threshold
+            )
         ]
         if len(good) < self.min_good:
+            which = (
+                "are unflagged"
+                if self.score_threshold is None
+                else f"score >= {self.score_threshold}"
+            )
             raise CandidateUnavailableError(
-                f"Consensus initial transform: only {len(good)} timepoints score >= "
-                f"{self.score_threshold}; need at least {self.min_good}."
+                f"Consensus initial transform: only {len(good)} timepoints {which}; "
+                f"need at least {self.min_good}."
             )
         stack = np.stack([self.history[t2].matrix for t2 in good])
         median = np.median(stack, axis=0)

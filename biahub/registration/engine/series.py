@@ -42,6 +42,8 @@ class SeriesResult:
     # score.report metrics of each accepted transform, from the job that produced it.
     reports: dict[int, dict[str, float | None]] = field(default_factory=dict)
     flagged: list[int] = field(default_factory=list)
+    # the run's own flagging line (median - k * MAD) the flags were judged against
+    flag_line: float | None = None
     repairs: dict[int, PassResult] = field(default_factory=dict)
     sweeps: dict[int, PassResult] = field(default_factory=dict)
     # How an accepted fallback transform was reached, e.g. "consensus_full+polish1".

@@ -181,8 +181,13 @@ After estimating, timepoints below the run's `median - 2*MAD` (and below `floor`
 `t-1`, `t+1`, `consensus`, `initial`). Repair is skipped for methods that ignore where
 they start (`phase_cross_corr`, `focus_finding`, `manual`).
 
-The absolute values (`floor: 0.8`, `hard_fail: 0.4`) are tuned for the bead-overlap score;
-for correlation scores see "Judging the result" above.
+The absolute thresholds (`flag.floor: 0.8`, `flag.hard_fail: 0.4`,
+`repair.consensus_threshold: 0.75`) are the bead-overlap score's: with `score.metric:
+overlap` they are the defaults; with any other metric they are off (a correct cross-modal
+correlation is ~0.1), so the run's own line flags alone, the consensus is built from the
+timepoints it did not flag, and a flagged timepoint is `unreliable` while still below that
+line. Set them in the config only with values measured for that metric (see "Judging the
+result" above).
 
 The bead-overlap score counts beads within `qc_settings.score_centroid_mask_radius` (6 voxels)
 and quantizes at ~1/N beads: it cannot see misregistration below that radius, and score

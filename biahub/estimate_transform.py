@@ -59,19 +59,20 @@ from biahub.utils.config import model_to_yaml
 
 
 def transform_entries(
-    result: SeriesResult, time_indices: list[int], transforms, hard_fail: float
+    result: SeriesResult, time_indices: list[int], transforms, hard_fail: float | None
 ) -> list[TransformEntry]:
     """One entry per estimated timepoint with its score, repair provenance and status.
 
     A timepoint is `unreliable` when the pipeline found no good transform for it: none
     at all (the entry is a stand-in -- the run's initial transform -- and `note` says
     why), no score, a stack block that failed (`note` names it and the block kept
-    instead), or flagged and still below `hard_fail` after repair and sweep. Otherwise
-    `accepted`.
+    instead), or flagged and still below `hard_fail` after repair and sweep (without
+    one: below the run's own flagging line, `result.flag_line`). Otherwise `accepted`.
 
     A single timepoint (manual, `time_indices: 0`) is the series' transform: one entry
     without `t`, which `apply-transform` applies to every timepoint.
     """
+    below = hard_fail if hard_fail is not None else result.flag_line
     entries = []
     for t, transform in zip(time_indices, transforms, strict=True):
         score = result.scores.get(t)
@@ -84,7 +85,7 @@ def transform_entries(
             filled_from is not None
             or failure is not None
             or not finite
-            or (t in result.flagged and score < hard_fail)
+            or (t in result.flagged and below is not None and score < below)
         )
         entries.append(
             TransformEntry(
@@ -453,7 +454,7 @@ class _Run:
 
     def entries(self, result, time_indices, transforms) -> list[TransformEntry]:
         return transform_entries(
-            result, time_indices, transforms, self.settings.fallback.flag.hard_fail
+            result, time_indices, transforms, self.settings.fallback_thresholds().hard_fail
         )
 
 

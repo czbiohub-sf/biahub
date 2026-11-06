@@ -421,7 +421,7 @@ def _repair_timepoint_job(
         series,
         neighbour_consensus_initial_candidates(
             initial_transform,
-            consensus_score_threshold=repair_settings.consensus_threshold,
+            consensus_score_threshold=settings.fallback_thresholds().consensus,
             consensus_min_good=repair_settings.consensus_min_good,
             order=tuple(repair_settings.candidates),
         ),

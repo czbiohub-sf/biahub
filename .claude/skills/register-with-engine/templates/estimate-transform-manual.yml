@@ -42,15 +42,12 @@ time_indices: 0
 fallback:
   flag:
     k_mad: 2.0
-    floor: 0.8
-    hard_fail: 0.4
   repair:
     candidates:
     - t-1
     - t+1
     - consensus
     - initial
-    consensus_threshold: 0.75
     consensus_min_good: 5
     max_timepoints: null
     polish_rounds: 3

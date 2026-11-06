@@ -34,32 +34,27 @@ from biahub.registration.estimators import (
     select_best,
 )
 from biahub.settings import (
+    BEAD_OVERLAP_THRESHOLDS,
     FlagSettings,
 )
 
-# The flagging defaults are FlagSettings' (what a config sets); one source for both.
-_FLAG_DEFAULTS = FlagSettings()
-
-
-HARD_FAIL_SCORE = _FLAG_DEFAULTS.hard_fail
-
-
-FLAG_FLOOR_SCORE = _FLAG_DEFAULTS.floor
-
-
-FLAG_K_MAD = _FLAG_DEFAULTS.k_mad
+# the defaults of the functions below: the bead overlap's (a run resolves its own with
+# EstimateTransformSettings.fallback_thresholds)
+HARD_FAIL_SCORE = BEAD_OVERLAP_THRESHOLDS["hard_fail"]
+FLAG_FLOOR_SCORE = BEAD_OVERLAP_THRESHOLDS["floor"]
+FLAG_K_MAD = FlagSettings().k_mad
 
 
 def flag_timepoints(
     scores: ArrayLike,
     k_mad: float = FLAG_K_MAD,
-    floor: float = FLAG_FLOOR_SCORE,
-    hard_fail: float = HARD_FAIL_SCORE,
+    floor: float | None = FLAG_FLOOR_SCORE,
+    hard_fail: float | None = HARD_FAIL_SCORE,
 ) -> pd.DataFrame:
     """One row per timepoint, flagged against the run's own median - k*MAD line.
 
     Flagged when below the adaptive line AND below the absolute floor, or below
-    `hard_fail`, or missing a score entirely.
+    `hard_fail`, or missing a score entirely. A threshold that is None is off.
     """
     s = np.asarray(scores, dtype=float)
     finite = s[np.isfinite(s)]
@@ -75,9 +70,9 @@ def flag_timepoints(
         if not np.isfinite(score):
             reasons.append("no_score")
         else:
-            if score < line and score < floor:
+            if score < line and (floor is None or score < floor):
                 reasons.append("below_adaptive_line")
-            if score < hard_fail:
+            if hard_fail is not None and score < hard_fail:
                 reasons.append("below_hard_fail")
         rows.append(
             {
@@ -163,7 +158,7 @@ RepairCandidates = Callable[
 
 def neighbour_consensus_initial_candidates(
     initial: Transform,
-    consensus_score_threshold: float = 0.75,
+    consensus_score_threshold: float | None = BEAD_OVERLAP_THRESHOLDS["consensus"],
     consensus_min_good: int = 5,
     order: tuple[str, ...] = ("t-1", "t+1", "consensus", "initial"),
 ) -> RepairCandidates:
@@ -188,6 +183,7 @@ def neighbour_consensus_initial_candidates(
                     scores=scores,
                     score_threshold=consensus_score_threshold,
                     min_good=consensus_min_good,
+                    excluded=flagged,
                 )
             elif name == "initial":
                 out["initial"] = FixedInitialTransform(initial)
@@ -404,7 +400,7 @@ def flag_series(
     if not attempted:
         result.flagged = []
         return result.flagged
-    flagged_positions, _stats = select_flagged(
+    flagged_positions, stats = select_flagged(
         np.array([result.scores[t] for t in attempted]),
         label="flag",  # flagging decides `unreliable` whether or not repair runs
         k_mad=k_mad,
@@ -412,6 +408,7 @@ def flag_series(
         hard_fail=hard_fail,
     )
     result.flagged = [attempted[i] for i in flagged_positions]
+    result.flag_line = stats.get("adaptive_line")
     return result.flagged
 
 

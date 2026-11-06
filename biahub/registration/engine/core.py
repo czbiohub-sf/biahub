@@ -574,8 +574,13 @@ def flag_run(
             line += f"  WARNING {failure}"
         click.echo(line)
 
-    flag = settings.fallback.flag
-    flagged = flag_series(result, k_mad=flag.k_mad, floor=flag.floor, hard_fail=flag.hard_fail)
+    thresholds = settings.fallback_thresholds()
+    flagged = flag_series(
+        result,
+        k_mad=settings.fallback.flag.k_mad,
+        floor=thresholds.floor,
+        hard_fail=thresholds.hard_fail,
+    )
     base_scores = dict(result.scores)
     repair_settings, sweep_settings = settings.fallback.repair, settings.fallback.sweep
     repair_ts = (
@@ -598,13 +603,15 @@ def flag_run(
     if flagged and repair_settings is None and sweep_settings is None:
         click.echo(
             f"flag: repair and sweep are off; the {len(flagged)} flagged timepoint(s) are "
-            "written as they are, marked unreliable where below hard_fail"
+            "written as they are, marked unreliable where still below "
+            + ("hard_fail" if thresholds.hard_fail is not None else "the run's line")
         )
     flags = {
         "flagged": flagged,
         "repair": repair_ts,
         "sweep": sweep_ts,
         "base_scores": {str(t): _finite_or_none(v) for t, v in base_scores.items()},
+        "line": _finite_or_none(result.flag_line),
     }
     _write_json(output_dir / FLAGS_FILENAME, flags, indent=2)
     return result, flags
@@ -643,6 +650,7 @@ def finalize_run(
             timepoints_dir, time_indices, transform_type, resumed=time_indices
         )
         result.flagged = list(flags["flagged"])
+        result.flag_line = flags.get("line")
     base_scores = {
         int(t): float("nan") if v is None else v for t, v in flags["base_scores"].items()
     }

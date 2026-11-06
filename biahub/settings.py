@@ -3,7 +3,7 @@ import warnings
 
 from itertools import product
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NamedTuple
 
 import numpy as np
 import torch
@@ -1512,16 +1512,23 @@ class TransformFitSettings(MyBaseModel):
         return init.file if init is not None and init.from_ == "file" else None
 
 
+# Absolute thresholds measured on the bead overlap score (a fraction of beads matched):
+# with score.metric overlap they are the defaults; other metrics have no absolute scale
+# (a correct cross-modal correlation is ~0.1), so they are off unless a config sets them.
+BEAD_OVERLAP_THRESHOLDS = {"floor": 0.80, "hard_fail": 0.40, "consensus": 0.75}
+
+
 class FlagSettings(MyBaseModel):
     """Adaptive flagging line.
 
-    A timepoint is flagged below median - k_mad * MAD AND below `floor`, or below
-    `hard_fail` regardless.
+    A timepoint is flagged below median - k_mad * MAD (and below `floor`, when set), or
+    below `hard_fail` (when set) regardless. Left out, `floor` and `hard_fail` are the
+    bead overlap's (`BEAD_OVERLAP_THRESHOLDS`) with score.metric overlap, else off.
     """
 
     k_mad: float = 2.0
-    floor: float = 0.80
-    hard_fail: float = 0.40
+    floor: float | None = None
+    hard_fail: float | None = None
 
 
 RepairCandidate = Literal["t-1", "t+1", "consensus", "initial"]
@@ -1537,7 +1544,9 @@ class RepairSettings(MyBaseModel):
     """
 
     candidates: list[RepairCandidate] = ["t-1", "t+1", "consensus", "initial"]
-    consensus_threshold: float = 0.75
+    # left out: the bead overlap's 0.75 with score.metric overlap, else the timepoints
+    # flagging did not flag
+    consensus_threshold: float | None = None
     consensus_min_good: int = 5
     max_timepoints: int | None = None
     polish_rounds: NonNegativeInt = 3
@@ -2169,6 +2178,32 @@ class EstimateTransformSettings(MyBaseModel):
     @property
     def effective_score_metric(self) -> str:
         return self.score.metric or DEFAULT_SCORE_METRIC[self.final_method]
+
+    def fallback_thresholds(self) -> "FallbackThresholds":
+        """Return the absolute flag / repair thresholds this run uses (None: off).
+
+        Each is the config's, else the bead overlap's when the score is the overlap.
+        """
+        beads = (
+            BEAD_OVERLAP_THRESHOLDS
+            if self.effective_score_metric == "overlap"
+            else dict.fromkeys(BEAD_OVERLAP_THRESHOLDS)
+        )
+        flag, repair = self.fallback.flag, self.fallback.repair
+        consensus = repair.consensus_threshold if repair is not None else None
+        return FallbackThresholds(
+            floor=beads["floor"] if flag.floor is None else flag.floor,
+            hard_fail=beads["hard_fail"] if flag.hard_fail is None else flag.hard_fail,
+            consensus=beads["consensus"] if consensus is None else consensus,
+        )
+
+
+class FallbackThresholds(NamedTuple):
+    """A run's absolute fallback thresholds (`fallback_thresholds`); None: off."""
+
+    floor: float | None
+    hard_fail: float | None
+    consensus: float | None
 
 
 EntryStatus = Literal["accepted", "unreliable", "rejected"]
