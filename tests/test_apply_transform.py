@@ -6,6 +6,7 @@ from click.testing import CliRunner
 from iohub import open_ome_zarr
 
 from biahub.apply_transform import apply_transform, apply_transform_cli
+from biahub.core.transform import Transform
 from biahub.estimate_crop import largest_box, overlap_slices, shared_crop
 from biahub.registration.utils import RunError
 from biahub.settings import TransformEntry, TransformSettings
@@ -19,10 +20,10 @@ def _translation(dz, dy, dx):
 
 
 def test_overlap_slices_of_a_translation_is_the_shifted_box():
-    # inverse: reference voxel r reads moving voxel r + 3 along y, so the last 3 rows of the
-    # reference grid read outside the moving volume.
+    # forward: the moving content moves 3 voxels down in y (reference voxel r reads moving
+    # voxel r + 3), so the last 3 rows of the reference grid read outside the moving volume.
     z, y, x = overlap_slices(
-        (20, 40, 40), (20, 40, 40), np.array(_translation(0, 3, 0)), downsample=1
+        (20, 40, 40), (20, 40, 40), Transform.from_translation([0, -3, 0]), downsample=1
     )
     assert (z, y, x) == (slice(0, 20), slice(0, 37), slice(0, 40))
 
@@ -43,17 +44,24 @@ def test_largest_box_is_exact_on_a_sheared_mask():
         largest_box(np.zeros((2, 2, 2), dtype=bool))
 
 
-def test_canvas_intersects_over_timepoints_and_keep_overhang_keeps_the_grid():
+def test_shared_crop_intersects_over_timepoints_and_keep_overhang_keeps_the_grid():
     shape = (20, 40, 40)
-    matrices = [np.array(_translation(0, 3, 0)), np.array(_translation(0, -3, 5))]
-    z, y, x = shared_crop(shape, shape, matrices, keep_overhang=False, downsample=1)
+    transforms = [
+        Transform.from_translation([0, -3, 0]),
+        Transform.from_translation([0, 3, -5]),
+    ]
+    z, y, x = shared_crop(shape, shape, transforms, keep_overhang=False, downsample=1)
     assert (z, y, x) == (slice(0, 20), slice(3, 37), slice(0, 35))
-    assert shared_crop(shape, shape, matrices, keep_overhang=True) == tuple(
+    assert shared_crop(shape, shape, transforms, keep_overhang=True) == tuple(
         slice(0, s) for s in shape
     )
     with pytest.raises(Exception, match="no overlapping region"):
         shared_crop(
-            shape, shape, [np.array(_translation(0, 45, 0))], keep_overhang=False, downsample=1
+            shape,
+            shape,
+            [Transform.from_translation([0, -45, 0])],
+            keep_overhang=False,
+            downsample=1,
         )
 
 

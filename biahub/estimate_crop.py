@@ -107,19 +107,17 @@ def _coarse(shape_zyx: tuple[int, int, int], f: int) -> tuple[int, int, int]:
 def overlap_mask(
     source_shape_zyx: tuple[int, int, int],
     target_shape_zyx: tuple[int, int, int],
-    inverse_matrix: np.ndarray,
+    transform: Transform,
     downsample: int = 4,
 ) -> np.ndarray:
     """Target-grid voxels the warped source covers, on a `downsample`-times coarser grid.
 
-    `Transform.coverage` (the warp's own edge, without warping) of the matrix rescaled to
-    the coarse grid: the same geometry at any resolution, so a 240-timepoint series stays
-    cheap.
+    `Transform.coverage` (the warp's own edge, without warping) of the forward transform
+    on the coarse grid: the same geometry at any resolution, so a 240-timepoint series
+    stays cheap.
     """
     f = max(1, int(downsample))
-    coarse = Transform.from_inverse(inverse_matrix).on_grid(
-        f
-    )  # the same warp, f times coarser
+    coarse = transform.on_grid(f)
     return coarse.coverage(_coarse(source_shape_zyx, f), _coarse(target_shape_zyx, f))
 
 
@@ -175,28 +173,28 @@ def _mask_box(
 def overlap_slices(
     source_shape_zyx: tuple[int, int, int],
     target_shape_zyx: tuple[int, int, int],
-    inverse_matrix: np.ndarray,
+    transform: Transform,
     downsample: int = 4,
 ) -> Slices:
     """Largest box inside the overlap of the warped source and the target grid."""
-    mask = overlap_mask(source_shape_zyx, target_shape_zyx, inverse_matrix, downsample)
+    mask = overlap_mask(source_shape_zyx, target_shape_zyx, transform, downsample)
     return _mask_box(mask, target_shape_zyx, downsample)
 
 
 def shared_crop(
     source_shape_zyx: tuple[int, int, int],
     target_shape_zyx: tuple[int, int, int],
-    inverse_matrices: list[np.ndarray],
+    transforms: list[Transform],
     keep_overhang: bool,
     downsample: int = 4,
 ) -> Slices:
     """Find the one crop every transform shares: the largest box in their common overlap.
 
-    `inverse_matrices` are every transform the output must hold -- each timepoint and
+    `transforms` are every (forward) transform the output must hold -- each timepoint and
     each position of the file, since one output store has one shape -- and the crop is
     the ZYX slices of the largest z-y-x box inside all their overlaps (z planes a shift
-    or tilt leaves uncovered are cropped too). The masks are intersected first and the exact largest box found once
-    (`largest_box`). Finding a box per transform and intersecting the boxes is much
+    or tilt leaves uncovered are cropped too). The masks are intersected first and the
+    exact largest box found once (`largest_box`). Finding a box per transform and intersecting the boxes is much
     smaller: on a rotated overlap each timepoint's box trades the axes differently.
 
     With `keep_overhang` the full target grid is kept (content the transform pushes
@@ -204,13 +202,11 @@ def shared_crop(
     """
     if keep_overhang:
         return tuple(slice(0, dim) for dim in target_shape_zyx)
-    unique = {
-        np.asarray(m, dtype=float).round(9).tobytes(): np.asarray(m, dtype=float)
-        for m in inverse_matrices
-    }
+    # many timepoints share a transform: one mask each
+    unique = {t.matrix.round(9).tobytes(): t for t in transforms}
     mask = None
-    for matrix in unique.values():
-        current = overlap_mask(source_shape_zyx, target_shape_zyx, matrix, downsample)
+    for transform in unique.values():
+        current = overlap_mask(source_shape_zyx, target_shape_zyx, transform, downsample)
         mask = current if mask is None else mask & current
     if mask is None or not mask.any():
         raise click.UsageError(

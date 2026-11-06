@@ -63,8 +63,8 @@ def _apply_transform_czyx(
     interpolation: str,
 ) -> np.ndarray:
     """Warp one (C, Z, Y, X) block with its timepoint's matrix (or the single matrix)."""
-    matrix = np.asarray(matrices[input_time_index if len(matrices) > 1 else 0], dtype=float)
-    transform = Transform.from_inverse(matrix)  # the file's matrix maps output to input
+    # the file's forward (moving -> reference) transform for this timepoint
+    transform = Transform(matrices[input_time_index if len(matrices) > 1 else 0])
     canvas = np.zeros(tuple(output_shape_zyx), dtype=np.float32)  # the grid to warp onto
     warped = np.stack(
         [
@@ -180,9 +180,8 @@ def apply_transform(
                 f"the transforms file has no list for positions {missing}; it has "
                 f"{sorted(settings.positions)}"
             )
-    inverses = {
-        key: {t: settings.matrix_for(t, "inverse", key) for t in time_indices}
-        for key in position_keys
+    transforms = {
+        key: {t: settings.transform_for(t, key) for t in time_indices} for key in position_keys
     }
     reference_for = pair_reference_positions(position_keys, reference_position_dirpaths)
     # Timepoints written with a transform that is not `accepted`, per position.
@@ -210,7 +209,7 @@ def apply_transform(
                     f"{key}: the moving input is empty (never written): written as zeros"
                 )
     file_first_key = next(iter(settings.positions)) if settings.per_position else None
-    applied_first = settings.matrix_for(time_indices[0], "inverse", file_first_key)
+    applied_first = settings.transform_for(time_indices[0], file_first_key)
 
     if reference_position_dirpaths:
         with open_ome_zarr(reference_position_dirpaths[0], mode="r") as reference:
@@ -259,14 +258,12 @@ def apply_transform(
             tuple(settings.voxel_size[-3:])
             if settings.voxel_size
             # the file's first transform, whichever positions are applied
-            else Transform.from_inverse(applied_first).output_voxel_size(moving_voxel_size)
+            else applied_first.output_voxel_size(moving_voxel_size)
         )
 
     # Every transform in the file at these timepoints, whichever positions are applied.
     file_keys = list(settings.positions) if settings.per_position else [position_keys[0]]
-    applied = [
-        settings.matrix_for(t, "inverse", key) for key in file_keys for t in time_indices
-    ]
+    applied = [settings.transform_for(t, key) for key in file_keys for t in time_indices]
     crop = shared_crop(tuple(moving_shape), reference_shape, applied, keep_overhang)
     cropped_shape = tuple(s.stop - s.start for s in crop)
     click.echo(
@@ -369,8 +366,8 @@ def apply_transform(
             ).hexdigest()[:16]
             # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
             matrices_for_jobs = [None] * T
-            for t, matrix in inverses[key].items():
-                matrices_for_jobs[t] = matrix.tolist()
+            for t, transform in transforms[key].items():
+                matrices_for_jobs[t] = transform.to_list()
             for channel_name in transformed:
                 jobs.append(
                     executor.submit(
