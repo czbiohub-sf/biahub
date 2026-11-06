@@ -775,15 +775,14 @@ class VoteInitialTransformCorrection(EstimatorBase):
                 "unchanged"
             )
             return initial_transform
-        # Work in the inverse convention the vote was measured in: the initial transform
-        # maps reference coordinates to moving sample coordinates, so undoing an image
-        # drift of +d in the reference frame composes as inverse @ T(-d). Both signs
-        # compete with the unchanged initial transform.
-        inverse = initial_transform.invert().matrix
+        # The vote measured a residual drift d in the reference frame: the correction is a
+        # translation after the initial transform. "minus" undoes +d (sampling at
+        # q - d, so T(+d) after it), "plus" the opposite sign; both compete with the
+        # unchanged initial transform.
         candidates = {
             "keep": initial_transform,
-            "minus": Transform(inverse @ Transform.from_translation(-drift).matrix).invert(),
-            "plus": Transform(inverse @ Transform.from_translation(drift).matrix).invert(),
+            "minus": Transform.from_translation(drift) @ initial_transform,
+            "plus": Transform.from_translation(-drift) @ initial_transform,
         }
         nn = {name: nn_median(t) for name, t in candidates.items()}
         best = min(nn, key=nn.get)
@@ -792,8 +791,8 @@ class VoteInitialTransformCorrection(EstimatorBase):
         if settings.mode == "vote_affine" and len(pairs) >= 4:
             # The cluster's votes are correspondences (warped moving peak p, reference
             # peak q) in the uncorrected initial transform's warped frame; re-warping
-            # should put p at q, i.e. sample point C(q) = p, so the fit composes onto
-            # the initial transform as inverse @ C.
+            # should sample p at q, C(q) = p, so the forward correction after the
+            # initial transform is C's inverse.
             p = np.asarray([a for a, _ in pairs], dtype=float)
             q = np.asarray([b for _, b in pairs], dtype=float)
             correction = (
@@ -801,7 +800,7 @@ class VoteInitialTransformCorrection(EstimatorBase):
                 if len(pairs) >= 6
                 else Transform.from_translation((p - q).mean(axis=0)).matrix
             )
-            fitted = Transform(inverse @ correction).invert()
+            fitted = Transform(correction).invert() @ initial_transform
             nn_fitted = nn_median(fitted)
             if np.isfinite(nn_fitted) and nn_fitted < nn[best]:
                 corrected = fitted
