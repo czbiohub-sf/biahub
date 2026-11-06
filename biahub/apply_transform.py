@@ -120,6 +120,26 @@ def _check_existing_output(
             )
 
 
+def _say_which_timepoints_reuse_an_end_entry(settings, key, time_indices) -> None:
+    """Name the timepoints past either end of the file's entries, and the entry they use.
+
+    A timepoint without its own entry takes the nearest earlier one (a sparsely
+    estimated series); past the last (or before the first) that reuses an end entry.
+    """
+    entries = settings.entries_for(key if settings.per_position else None)
+    if entries[0].t is None:  # one entry for the whole series
+        return
+    first, last = entries[0].t, entries[-1].t
+    where = f"{key}: " if settings.per_position else ""
+    for outside, end in (([t for t in time_indices if t > last], last),
+                         ([t for t in time_indices if t < first], first)):  # fmt: skip
+        if outside:
+            click.echo(
+                f"{where}outside the transforms file's timepoints ({first}-{last}): "
+                f"t={outside} use the entry of t={end}"
+            )
+
+
 def apply_transform(
     moving_position_dirpaths: list[Path],
     config_filepath: Path,
@@ -183,6 +203,8 @@ def apply_transform(
     transforms = {
         key: {t: settings.transform_for(t, key) for t in time_indices} for key in position_keys
     }
+    for key in position_keys if settings.per_position else position_keys[:1]:
+        _say_which_timepoints_reuse_an_end_entry(settings, key, time_indices)
     reference_for = pair_reference_positions(position_keys, reference_position_dirpaths)
     # Timepoints written with a transform that is not `accepted`, per position.
     not_accepted = {}

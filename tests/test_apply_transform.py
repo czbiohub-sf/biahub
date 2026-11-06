@@ -1073,3 +1073,22 @@ def test_the_shared_crop_holds_only_voxels_every_warp_covers():
         z, y, x = shared_crop(source, target, transforms, keep_overhang=False, downsample=4)
         for transform in transforms:
             assert transform.coverage(source, target)[z, y, x].all()
+
+
+def test_timepoints_outside_the_files_range_are_named_with_the_entry_they_reuse(
+    structured_plate, tmp_path, capsys
+):
+    # the nearest-earlier rule (for sparse files) silently reused an end entry
+    position, _data = structured_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(t=t, matrix=_translation(0, t, 0)) for t in (0, 1)],
+        ),
+        config,
+    )
+    apply_transform([position], config, tmp_path / "out.zarr", keep_overhang=True, cluster="debug")
+    out = capsys.readouterr().out
+    assert "outside the transforms file's timepoints (0-1): t=[2] use the entry of t=1" in out
