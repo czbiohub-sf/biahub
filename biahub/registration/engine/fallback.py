@@ -103,7 +103,6 @@ def flag_timepoints(
 def select_flagged(
     score_col: ArrayLike,
     label: str,
-    max_timepoints: int | None = None,
     k_mad: float = FLAG_K_MAD,
     floor: float = FLAG_FLOOR_SCORE,
     hard_fail: float = HARD_FAIL_SCORE,
@@ -115,10 +114,7 @@ def select_flagged(
 
     Returns (flagged timepoints, run statistics) -- the statistics are returned rather
     than left for callers to recompute, so whatever gets logged is provably the same
-    numbers the selection used.
-
-    Returns the worst `max_timepoints` when a cap is set, and always says which ones it
-    dropped: a capped pass that logs nothing about the drop would read as full coverage.
+    numbers the selection used. Each pass caps its own share (`cap_worst`).
     """
     score_col = np.asarray(score_col, dtype=float)
     n_t = len(score_col)
@@ -137,14 +133,17 @@ def select_flagged(
         f"(adaptive line {flags.attrs['adaptive_line']:.3f}, median "
         f"{flags.attrs['median']:.3f}) -> {flagged}"
     )
-    flagged = cap_worst(flagged, dict(enumerate(score_col)), max_timepoints)
     return flagged, dict(flags.attrs)
 
 
 def cap_worst(
     timepoints: list[int], scores: dict[int, float], max_timepoints: int | None
 ) -> list[int]:
-    """Keep the worst `max_timepoints` of `timepoints` by score, naming the ones left out."""
+    """Keep the worst `max_timepoints` of `timepoints` by score, naming the ones left out.
+
+    It always says which ones it dropped: a capped pass that logs nothing about the drop
+    would read as full coverage.
+    """
     if max_timepoints is None or len(timepoints) <= max_timepoints:
         return list(timepoints)
     worst = sorted(timepoints, key=lambda t: np.nan_to_num(scores[t], nan=-1.0))
@@ -392,7 +391,6 @@ def polish(
 
 def flag_series(
     result: SeriesResult,
-    max_timepoints: int | None = None,
     k_mad: float = FLAG_K_MAD,
     floor: float = FLAG_FLOOR_SCORE,
     hard_fail: float = HARD_FAIL_SCORE,
@@ -409,7 +407,6 @@ def flag_series(
     flagged_positions, _stats = select_flagged(
         np.array([result.scores[t] for t in attempted]),
         label="flag",  # flagging decides `unreliable` whether or not repair runs
-        max_timepoints=max_timepoints,
         k_mad=k_mad,
         floor=floor,
         hard_fail=hard_fail,

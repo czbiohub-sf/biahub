@@ -48,12 +48,15 @@ def test_select_flagged_returns_stats_used_for_the_decision():
     assert stats["median"] == pytest.approx(0.90)
 
 
-def test_select_flagged_caps_to_the_worst_n_and_reports_what_it_dropped():
+def test_a_pass_cap_keeps_the_worst_n_and_reports_what_it_dropped():
+    from biahub.registration.engine.fallback import cap_worst
+
     scores = np.full(20, 0.90)
     scores[[1, 5, 10]] = [0.05, 0.20, 0.01]
-    flagged, _ = select_flagged(scores, label="test pass", max_timepoints=2)
+    flagged, _ = select_flagged(scores, label="test pass")
+    capped = cap_worst(flagged, dict(enumerate(scores)), max_timepoints=2)
     # Worst two by score: t=10 (0.01), t=1 (0.05); t=5 (0.20) is dropped.
-    assert sorted(flagged) == [1, 10]
+    assert sorted(capped) == [1, 10]
 
 
 def test_select_flagged_returns_empty_when_nothing_flagged():
