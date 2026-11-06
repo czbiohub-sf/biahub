@@ -247,7 +247,7 @@ class PassRecord:
         """Return this pass as a `PassResult`; `fallback` stands in when none was accepted."""
         return PassResult(
             transform=(
-                Transform(np.asarray(self.matrix, dtype=float), transform_type=transform_type)
+                Transform(self.matrix, transform_type=transform_type)
                 if self.matrix is not None
                 else fallback
             ),

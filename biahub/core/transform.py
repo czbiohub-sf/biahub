@@ -377,7 +377,7 @@ class Transform:
         `affine_transform_zyx*`, `ants.estimate` results) is inverse-direction; this is the
         one place that becomes an engine (forward) Transform.
         """
-        return cls(np.asarray(matrix, dtype=float), transform_type=transform_type).invert()
+        return cls(matrix, transform_type=transform_type).invert()
 
     def to_inverse(self) -> list[list[float]]:
         """Legacy inverse-direction matrix (nested list, YAML-ready) from this forward Transform."""
@@ -806,7 +806,7 @@ class Transform:
         transform_type: TransformType = "affine",
     ) -> Transform:
         """Create Transform from nested list."""
-        return cls(np.array(matrix_list), transform_type=transform_type)
+        return cls(matrix_list, transform_type=transform_type)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -819,10 +819,7 @@ class Transform:
     @classmethod
     def from_dict(cls, data: dict) -> Transform:
         """Create Transform from dictionary."""
-        return cls(
-            np.array(data["matrix"]),
-            transform_type=data.get("transform_type", "affine"),
-        )
+        return cls(data["matrix"], transform_type=data.get("transform_type", "affine"))
 
     # ==================== String Representations ====================
 

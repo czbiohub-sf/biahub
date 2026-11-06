@@ -421,7 +421,5 @@ def block_candidates(run_dir) -> dict:
                 if block["matrix"] is None:
                     continue
                 key = record.t if position is None else (position, record.t)
-                candidates.setdefault(block["block"], {})[key] = Transform(
-                    np.asarray(block["matrix"], dtype=float)
-                )
+                candidates.setdefault(block["block"], {})[key] = Transform(block["matrix"])
     return candidates

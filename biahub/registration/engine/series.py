@@ -110,16 +110,12 @@ class TimepointRecord:
             result.errors[t] = self.error
         carried = None
         if self.matrix is not None:
-            carried = Transform(
-                np.asarray(self.matrix, dtype=float), transform_type=transform_type
-            )
+            carried = Transform(self.matrix, transform_type=transform_type)
             result.transforms[t] = carried
             if self.report:
                 result.reports[t] = self.report
         elif self.stand_in is not None:
-            carried = Transform(
-                np.asarray(self.stand_in, dtype=float), transform_type=transform_type
-            )
+            carried = Transform(self.stand_in, transform_type=transform_type)
             result.stand_ins[t] = (carried, self.stand_in_from or "initial")
         if self.blocks:
             result.blocks[t] = self.blocks

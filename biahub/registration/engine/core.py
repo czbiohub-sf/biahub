@@ -124,7 +124,7 @@ def _static_initial(settings: EstimateTransformSettings) -> Transform:
     if init is None or init.from_ != "matrix":
         return Transform(np.eye(4), transform_type=fit.type)
     if init.direction == "forward":
-        return Transform(np.asarray(init.matrix, dtype=float), transform_type=fit.type)
+        return Transform(init.matrix, transform_type=fit.type)
     return Transform.from_inverse(init.matrix, fit.type)
 
 
@@ -139,9 +139,7 @@ def _initial_policy(
         by_t = json.loads((Path(run_dir) / INITIAL_FILENAME).read_text())
         return FileInitialTransform(
             {
-                int(t): Transform(
-                    np.asarray(m, dtype=float), transform_type=settings.transform.type
-                )
+                int(t): Transform(m, transform_type=settings.transform.type)
                 for t, m in by_t.items()
             }
         )
