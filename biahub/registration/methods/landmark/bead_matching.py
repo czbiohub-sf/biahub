@@ -314,14 +314,12 @@ def transform_from_matches(
     mov_peaks: ArrayLike,
     ref_peaks: ArrayLike,
     transform_type: str,
-    ndim: int = 3,
     verbose: bool = False,
 ) -> tuple[Transform, Transform]:
     """Return the (forward, inverse) transform fitted to matched peaks (`Transform.fit`, skimage).
 
     `matches` are (moving, reference) index pairs into the (N, D) peaks; the transform
-    type is `transform_type`. `ndim` is not needed (the peaks give it) and kept for callers.
-    Raises ValueError when the fit fails.
+    type is `transform_type`. Raises ValueError when the fit fails.
     """
     if verbose:
         click.echo(f"Estimating a {transform_type} transform from {len(matches)} matches")

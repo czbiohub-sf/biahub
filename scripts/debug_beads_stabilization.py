@@ -178,7 +178,6 @@ fwd_transform, inv_transform = transform_from_matches(
     mov_peaks=mov_peaks,
     ref_peaks=ref_peaks,
     transform_type=config.affine_transform_settings.transform_type,
-    ndim=mov_data.ndim,
 )
 mov_data_ants = ants.from_numpy(mov_data)
 ref_data_ants = ants.from_numpy(ref_data)

@@ -218,7 +218,6 @@ fwd_transform, inv_transform = transform_from_matches(
     mov_peaks=mov_peaks,
     ref_peaks=ref_peaks,
     transform_type=config.affine_transform_settings.transform_type,
-    ndim=mov_data_reg.ndim,
 )
 
 # Compose: apply approx transform first, then the bead-based correction

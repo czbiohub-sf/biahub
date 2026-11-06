@@ -74,7 +74,7 @@ def test_node_graph_estimator_matches_direct_call():
 
     matches = matches_from_beads(mov_nodes, ref_nodes, beads_match_settings)
     expected_transform, _ = transform_from_matches(
-        matches, mov_nodes, ref_nodes, transform_type, ndim=3
+        matches, mov_nodes, ref_nodes, transform_type
     )
 
     np.testing.assert_allclose(transform.matrix, expected_transform.matrix)
