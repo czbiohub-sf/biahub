@@ -508,10 +508,10 @@ def test_ants_estimator_recovers_known_translation_and_warps_mov_onto_ref():
 
 def test_manual_estimator_satisfies_protocol():
     estimator = ManualEstimator(
-        source_channel_name="GFP",
-        target_channel_name="Phase3D",
-        source_channel_voxel_size=(1.0, 1.0, 1.0),
-        target_channel_voxel_size=(1.0, 1.0, 1.0),
+        moving_channel_name="GFP",
+        reference_channel_name="Phase3D",
+        moving_channel_voxel_size=(1.0, 1.0, 1.0),
+        reference_channel_voxel_size=(1.0, 1.0, 1.0),
     )
     assert isinstance(estimator, TransformEstimator)
 
@@ -534,21 +534,21 @@ def test_manual_estimator_returns_the_forward_transform_the_annotation_built(mon
     mov = np.zeros((5, 5, 5))
     ref = np.zeros((5, 5, 5))
     estimator = ManualEstimator(
-        source_channel_name="GFP",
-        target_channel_name="Phase3D",
-        source_channel_voxel_size=(1.0, 1.0, 1.0),
-        target_channel_voxel_size=(0.5, 0.5, 0.5),
+        moving_channel_name="GFP",
+        reference_channel_name="Phase3D",
+        moving_channel_voxel_size=(1.0, 1.0, 1.0),
+        reference_channel_voxel_size=(0.5, 0.5, 0.5),
         similarity=True,
     )
     transform = estimator.estimate(mov, ref)
 
     assert transform is clicked
-    assert captured_kwargs["source_channel_name"] == "GFP"
-    assert captured_kwargs["target_channel_name"] == "Phase3D"
-    assert captured_kwargs["target_channel_voxel_size"] == (0.5, 0.5, 0.5)
+    assert captured_kwargs["moving_channel_name"] == "GFP"
+    assert captured_kwargs["reference_channel_name"] == "Phase3D"
+    assert captured_kwargs["reference_channel_voxel_size"] == (0.5, 0.5, 0.5)
     assert captured_kwargs["similarity"] is True
-    np.testing.assert_array_equal(captured_kwargs["source_channel_volume"], mov)
-    np.testing.assert_array_equal(captured_kwargs["target_channel_volume"], ref)
+    np.testing.assert_array_equal(captured_kwargs["moving_channel_volume"], mov)
+    np.testing.assert_array_equal(captured_kwargs["reference_channel_volume"], ref)
 
 
 def _synthetic_blob_image(rng, shape, n_blobs=10, sigma=3.0, noise_std=5.0):

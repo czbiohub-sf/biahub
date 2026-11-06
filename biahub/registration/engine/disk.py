@@ -67,7 +67,9 @@ def config_fingerprint(settings: EstimateTransformSettings) -> dict:
     return fingerprint
 
 
-def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: Path) -> dict:
+def _run_fingerprint(
+    settings: EstimateTransformSettings, moving: Path, reference: Path
+) -> dict:
     """Return what a resumed run must share with the run it resumes: config and inputs."""
 
     def resolved(path):
@@ -75,8 +77,8 @@ def _run_fingerprint(settings: EstimateTransformSettings, source: Path, target: 
 
     return {
         **config_fingerprint(settings),
-        "moving": resolved(source),
-        "reference": resolved(target),
+        "moving": resolved(moving),
+        "reference": resolved(reference),
     }
 
 
@@ -142,8 +144,8 @@ class RunFolder:
 def _start_run(
     output_dir: Path,
     settings: EstimateTransformSettings,
-    source: Path,
-    target: Path,
+    moving: Path,
+    reference: Path,
     resume: bool,
 ) -> None:
     """Begin a run in `output_dir`: clear earlier records, or check a resume is compatible.
@@ -154,7 +156,7 @@ def _start_run(
     against are refused, and with no records at all the run simply starts fresh.
     """
     manifest_path = output_dir / RUN_MANIFEST_FILENAME
-    fingerprint = _run_fingerprint(settings, source, target)
+    fingerprint = _run_fingerprint(settings, moving, reference)
     if resume and manifest_path.exists():
         previous = json.loads(manifest_path.read_text())
         changed = sorted(k for k in fingerprint if previous.get(k) != fingerprint[k])

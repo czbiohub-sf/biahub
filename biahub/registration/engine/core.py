@@ -256,10 +256,10 @@ def build_estimator(
     elif settings.method == "manual":
         manual = settings.manual
         estimator = ManualEstimator(
-            source_channel_name=settings.moving.channel,
-            target_channel_name=settings.reference_channel,
-            source_channel_voxel_size=mov_voxel_size or (1.0, 1.0, 1.0),
-            target_channel_voxel_size=ref_voxel_size or (1.0, 1.0, 1.0),
+            moving_channel_name=settings.moving.channel,
+            reference_channel_name=settings.reference_channel,
+            moving_channel_voxel_size=mov_voxel_size or (1.0, 1.0, 1.0),
+            reference_channel_voxel_size=ref_voxel_size or (1.0, 1.0, 1.0),
             similarity=settings.transform.type == "similarity",
             pre_affine_90degree_rotation=manual.affine_90degree_rotation,
             pre_affine_fliplr=manual.affine_fliplr,
@@ -464,11 +464,11 @@ def init_run(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
-    with open_ome_zarr(source, mode="r") as position:
+    moving, reference = Path(moving_position_dirpath), Path(reference_position_dirpath)
+    with open_ome_zarr(moving, mode="r") as position:
         T, _C, Z, Y, X = position.data.shape
         mov_voxel_size = tuple(position.scale[-3:])
-    with open_ome_zarr(target, mode="r") as position:
+    with open_ome_zarr(reference, mode="r") as position:
         ref_T = position.data.shape[0]
         ref_shape = position.data.shape[-3:]
         ref_voxel_size = tuple(position.scale[-3:])
@@ -480,7 +480,7 @@ def init_run(
         if beyond:
             raise RunError(
                 f"timepoints {beyond} are past the reference store, which has {ref_T} "
-                f"timepoints ({target})"
+                f"timepoints ({reference})"
             )
 
     settings = settings.model_copy(deep=True)
@@ -505,10 +505,10 @@ def init_run(
         None
         if settings.transform.initial_file is None
         else _initial_transforms_from_file(
-            settings.transform.initial_file, position_key(source), time_indices
+            settings.transform.initial_file, position_key(moving), time_indices
         )
     )
-    _start_run(output_dir, settings, source, target, resume)
+    _start_run(output_dir, settings, moving, reference, resume)
     model_to_yaml(settings, output_dir / ENGINE_SETTINGS_FILENAME)
     if initial_transforms is not None:
         _write_json(output_dir / INITIAL_FILENAME, initial_transforms, indent=2)

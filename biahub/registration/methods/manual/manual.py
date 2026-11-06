@@ -42,12 +42,12 @@ COLOR_CYCLE = [
 
 
 def user_assisted_registration(
-    source_channel_volume: ArrayLike,
-    source_channel_name: str,
-    source_channel_voxel_size: tuple[float, float, float],
-    target_channel_volume: ArrayLike,
-    target_channel_name: str,
-    target_channel_voxel_size: tuple[float, float, float],
+    moving_channel_volume: ArrayLike,
+    moving_channel_name: str,
+    moving_channel_voxel_size: tuple[float, float, float],
+    reference_channel_volume: ArrayLike,
+    reference_channel_name: str,
+    reference_channel_voxel_size: tuple[float, float, float],
     similarity: bool = False,
     pre_affine_90degree_rotation: int = 0,
     pre_affine_fliplr: bool = False,
@@ -56,147 +56,154 @@ def user_assisted_registration(
     Perform user-assisted registration of two volumetric image channels.
 
     This function allows users to manually annotate corresponding features between
-    a source and target channel to calculate an affine transformation matrix for registration.
+    a moving and reference channel to calculate an affine transformation matrix for registration.
 
     Parameters
     ----------
-    source_channel_volume : ArrayLike
-       3D array (Z, Y, X) of the source channel.
-    source_channel_name : str
-        Name of the source channel for display purposes.
-    source_channel_voxel_size : tuple[float, float, float]
-        Voxel size of the source channel (Z, Y, X).
-    target_channel_volume : ArrayLike
-       3D array (Z, Y, X) of the target channel.
-    target_channel_name : str
-        Name of the target channel for display purposes.
-    target_channel_voxel_size : tuple[float, float, float]
-        Voxel size of the target channel (Z, Y, X).
+    moving_channel_volume : ArrayLike
+       3D array (Z, Y, X) of the moving channel.
+    moving_channel_name : str
+        Name of the moving channel for display purposes.
+    moving_channel_voxel_size : tuple[float, float, float]
+        Voxel size of the moving channel (Z, Y, X).
+    reference_channel_volume : ArrayLike
+       3D array (Z, Y, X) of the reference channel.
+    reference_channel_name : str
+        Name of the reference channel for display purposes.
+    reference_channel_voxel_size : tuple[float, float, float]
+        Voxel size of the reference channel (Z, Y, X).
     similarity : bool
         If True, use a similarity transform (rotation, translation, scaling);
                          if False, use an Euclidean transform (rotation, translation).
     pre_affine_90degree_rotation : int
-        Number of 90-degree rotations to apply to the source channel before registration.
+        Number of 90-degree rotations to apply to the moving channel before registration.
     pre_affine_fliplr : bool
-        If True, apply left-right flip to the source channel before registration.
+        If True, apply left-right flip to the moving channel before registration.
         Note: Flip is applied first, then rotation.
 
     Returns
     -------
     Transform
-        The forward (source -> target) transform fitted to the clicked points, composed
+        The forward (moving -> reference) transform fitted to the clicked points, composed
         with the pre-alignment.
 
     Notes
     -----
     - The function uses a napari viewer for manual feature annotation.
-    - Scaling factors for voxel size differences between source and target are calculated and applied.
+    - Scaling factors for voxel size differences between moving and reference are calculated and applied.
     - Users must annotate at least three corresponding points in both channels for the transform calculation.
     - Two types of transformations are supported: similarity (with scaling) and Euclidean (no scaling).
     - The function visually displays intermediate and final results in napari for user validation.
     """
     # Find the in-focus slice
-    source_channel_Z, source_channel_Y, source_channel_X = source_channel_volume.shape[-3:]
-    target_channel_Z, target_channel_Y, target_channel_X = target_channel_volume.shape[-3:]
+    moving_channel_Z, moving_channel_Y, moving_channel_X = moving_channel_volume.shape[-3:]
+    reference_channel_Z, reference_channel_Y, reference_channel_X = (
+        reference_channel_volume.shape[-3:]
+    )
 
-    source_channel_focus_idx = focus_from_transverse_band(
-        source_channel_volume[
+    moving_channel_focus_idx = focus_from_transverse_band(
+        moving_channel_volume[
             :,
-            source_channel_Y // 2 - FOCUS_SLICE_ROI_WIDTH : source_channel_Y // 2
+            moving_channel_Y // 2 - FOCUS_SLICE_ROI_WIDTH : moving_channel_Y // 2
             + FOCUS_SLICE_ROI_WIDTH,
-            source_channel_X // 2 - FOCUS_SLICE_ROI_WIDTH : source_channel_X // 2
+            moving_channel_X // 2 - FOCUS_SLICE_ROI_WIDTH : moving_channel_X // 2
             + FOCUS_SLICE_ROI_WIDTH,
         ],
         NA_det=NA_DETECTION_SOURCE,
         lambda_ill=WAVELENGTH_EMISSION_SOURCE_CHANNEL,
-        pixel_size=source_channel_voxel_size[-1],
+        pixel_size=moving_channel_voxel_size[-1],
     )
 
-    target_channel_focus_idx = focus_from_transverse_band(
-        target_channel_volume[
+    reference_channel_focus_idx = focus_from_transverse_band(
+        reference_channel_volume[
             :,
-            target_channel_Y // 2 - FOCUS_SLICE_ROI_WIDTH : target_channel_Y // 2
+            reference_channel_Y // 2 - FOCUS_SLICE_ROI_WIDTH : reference_channel_Y // 2
             + FOCUS_SLICE_ROI_WIDTH,
-            target_channel_X // 2 - FOCUS_SLICE_ROI_WIDTH : target_channel_X // 2
+            reference_channel_X // 2 - FOCUS_SLICE_ROI_WIDTH : reference_channel_X // 2
             + FOCUS_SLICE_ROI_WIDTH,
         ],
         NA_det=NA_DETECTION_TARGET,
         lambda_ill=WAVELENGTH_EMISSION_TARGET_CHANNEL,
-        pixel_size=target_channel_voxel_size[-1],
+        pixel_size=reference_channel_voxel_size[-1],
     )
 
-    if source_channel_focus_idx not in (0, source_channel_Z - 1):
-        click.echo(f"Best source channel focus slice: {source_channel_focus_idx}")
+    if moving_channel_focus_idx not in (0, moving_channel_Z - 1):
+        click.echo(f"Best moving channel focus slice: {moving_channel_focus_idx}")
     else:
-        source_channel_focus_idx = source_channel_Z // 2
+        moving_channel_focus_idx = moving_channel_Z // 2
         click.echo(
-            f"Could not determine best source channel focus slice, using {source_channel_focus_idx}"
+            f"Could not determine best moving channel focus slice, using {moving_channel_focus_idx}"
         )
 
-    if target_channel_focus_idx not in (0, target_channel_Z - 1):
-        click.echo(f"Best target channel focus slice: {target_channel_focus_idx}")
+    if reference_channel_focus_idx not in (0, reference_channel_Z - 1):
+        click.echo(f"Best reference channel focus slice: {reference_channel_focus_idx}")
     else:
-        target_channel_focus_idx = target_channel_Z // 2
+        reference_channel_focus_idx = reference_channel_Z // 2
         click.echo(
-            f"Could not determine best target channel focus slice, using {target_channel_focus_idx}"
+            f"Could not determine best reference channel focus slice, using {reference_channel_focus_idx}"
         )
 
     # Add layers to napari with and transform
-    # the shapes method's answer (flip, rotate, rescale) pre-aligns the source for display
+    # the shapes method's answer (flip, rotate, rescale) pre-aligns the moving volume for display
     shapes = ShapesEstimator(
-        source_channel_voxel_size,
-        target_channel_voxel_size,
+        moving_channel_voxel_size,
+        reference_channel_voxel_size,
         rotate90=pre_affine_90degree_rotation,
         fliplr=pre_affine_fliplr,
     ).transform_for(
-        (source_channel_Z, source_channel_Y, source_channel_X),
-        (target_channel_Z, target_channel_Y, target_channel_X),
+        (moving_channel_Z, moving_channel_Y, moving_channel_X),
+        (reference_channel_Z, reference_channel_Y, reference_channel_X),
     )
     # the focus slice in reference planes, for the viewer
-    scaling_factor_z = source_channel_voxel_size[-3] / target_channel_voxel_size[-3]
+    scaling_factor_z = moving_channel_voxel_size[-3] / reference_channel_voxel_size[-3]
 
-    source_pre_aligned = shapes.apply(source_channel_volume, reference=target_channel_volume)
+    moving_pre_aligned = shapes.apply(
+        moving_channel_volume, reference=reference_channel_volume
+    )
 
     # Get a napari viewer
     viewer = napari.Viewer()
 
-    viewer.add_image(target_channel_volume, name=f"target_{target_channel_name}")
-    points_target_channel = viewer.add_points(
-        ndim=3, name=f"pts_target_{target_channel_name}", size=20, face_color=COLOR_CYCLE[0]
+    viewer.add_image(reference_channel_volume, name=f"reference_{reference_channel_name}")
+    points_reference_channel = viewer.add_points(
+        ndim=3,
+        name=f"pts_reference_{reference_channel_name}",
+        size=20,
+        face_color=COLOR_CYCLE[0],
     )
 
-    source_layer = viewer.add_image(
-        source_pre_aligned,
-        name=f"source_{source_channel_name}",
+    moving_layer = viewer.add_image(
+        moving_pre_aligned,
+        name=f"moving_{moving_channel_name}",
         blending="additive",
         colormap="green",
     )
-    points_source_channel = viewer.add_points(
-        ndim=3, name=f"pts_source_{source_channel_name}", size=20, face_color=COLOR_CYCLE[0]
+    points_moving_channel = viewer.add_points(
+        ndim=3, name=f"pts_moving_{moving_channel_name}", size=20, face_color=COLOR_CYCLE[0]
     )
 
     # setup viewer
-    viewer.layers.selection.active = points_source_channel
+    viewer.layers.selection.active = points_moving_channel
     viewer.grid.enabled = False
     viewer.grid.stride = 2
     viewer.grid.shape = (-1, 2)
-    points_source_channel.mode = "add"
-    points_target_channel.mode = "add"
+    points_moving_channel.mode = "add"
+    points_reference_channel.mode = "add"
 
     # Manual annotation of features
     def next_on_click(layer, event, in_focus):
         if layer.mode == "add":
-            if layer is points_source_channel:
-                next_layer = points_target_channel
+            if layer is points_moving_channel:
+                next_layer = points_reference_channel
                 # Change slider value
                 if len(next_layer.data) < 1:
-                    prev_step_target_channel = (
+                    prev_step_reference_channel = (
                         in_focus[1],
                         0,
                         0,
                     )
                 else:
-                    prev_step_target_channel = (next_layer.data[-1][0], 0, 0)
+                    prev_step_reference_channel = (next_layer.data[-1][0], 0, 0)
                 # Add a point to the active layer
                 # viewer.cursor.position is return in world coordinates
                 # point position needs to be converted to data coordinates before plotting
@@ -214,20 +221,20 @@ def user_assisted_registration(
                 next_layer.mode = "add"
                 layer.selected_data = {}
                 viewer.layers.selection.active = next_layer
-                viewer.dims.current_step = prev_step_target_channel
+                viewer.dims.current_step = prev_step_reference_channel
 
             else:
-                next_layer = points_source_channel
+                next_layer = points_moving_channel
                 # Change slider value
                 if len(next_layer.data) < 1:
-                    prev_step_source_channel = (
+                    prev_step_moving_channel = (
                         in_focus[0] * scaling_factor_z,
                         0,
                         0,
                     )
                 else:
                     # TODO: this +1 is not clear to me?
-                    prev_step_source_channel = (next_layer.data[-1][0], 0, 0)
+                    prev_step_moving_channel = (next_layer.data[-1][0], 0, 0)
                 cursor_position_data_coords = layer.world_to_data(viewer.cursor.position)
                 layer.add(cursor_position_data_coords)
                 # Change the colors
@@ -240,10 +247,10 @@ def user_assisted_registration(
                 next_layer.mode = "add"
                 layer.selected_data = {}
                 viewer.layers.selection.active = next_layer
-                viewer.dims.current_step = prev_step_source_channel
+                viewer.dims.current_step = prev_step_moving_channel
 
     # Bind the mouse click callback to both point layers
-    in_focus = (source_channel_focus_idx, target_channel_focus_idx)
+    in_focus = (moving_channel_focus_idx, reference_channel_focus_idx)
 
     def lambda_callback(layer, event):
         return next_on_click(layer=layer, event=event, in_focus=in_focus)
@@ -253,50 +260,52 @@ def user_assisted_registration(
         0,
         0,
     )
-    points_source_channel.mouse_drag_callbacks.append(lambda_callback)
-    points_target_channel.mouse_drag_callbacks.append(lambda_callback)
+    points_moving_channel.mouse_drag_callbacks.append(lambda_callback)
+    points_reference_channel.mouse_drag_callbacks.append(lambda_callback)
 
     input(
         "Add at least three points in the two channels by sequentially clicking "
-        + "on a feature in the source channel and its corresponding feature in target channel. "
+        + "on a feature in the moving channel and its corresponding feature in reference channel. "
         + "Select grid mode if you prefer side-by-side view. "
         + "Press <enter> when done..."
     )
 
     # Get the data from the layers
-    pts_source_channel_data = points_source_channel.data
-    pts_target_channel_data = points_target_channel.data
+    pts_moving_channel_data = points_moving_channel.data
+    pts_reference_channel_data = points_reference_channel.data
 
     # Estimate the affine transform between the points xy to make sure registration is good
     if similarity:
         # Similarity transform (rotation, translation, scaling)
         transform = SimilarityTransform()
-        transform.estimate(pts_source_channel_data, pts_target_channel_data)
+        transform.estimate(pts_moving_channel_data, pts_reference_channel_data)
         fitted = Transform(transform.params)
 
     else:
         # Euclidean transform (rotation, translation) limiting this dataset's scale and just z-translation
         transform = EuclideanTransform()
-        transform.estimate(pts_source_channel_data[:, 1:], pts_target_channel_data[:, 1:])
-        z_translation = pts_target_channel_data[0, 0] - pts_source_channel_data[0, 0]
+        transform.estimate(pts_moving_channel_data[:, 1:], pts_reference_channel_data[:, 1:])
+        z_translation = pts_reference_channel_data[0, 0] - pts_moving_channel_data[0, 0]
         fitted = Transform.from_yx(Transform.from_skimage(transform, ndim=2), z_translation)
 
-    # the clicked points are on the pre-aligned source: the fit comes after the pre-alignment
+    # the clicked points are on the pre-aligned moving volume: the fit comes after the pre-alignment
     clicked = fitted @ shapes  # moving -> reference
-    source_registered = clicked.apply(source_channel_volume, reference=target_channel_volume)
+    moving_registered = clicked.apply(
+        moving_channel_volume, reference=reference_channel_volume
+    )
 
-    click.echo("\nShowing registered source image in magenta")
+    click.echo("\nShowing registered moving image in magenta")
     viewer.grid.enabled = False
     viewer.add_image(
-        source_registered,
-        name=f"registered_{source_channel_name}",
+        moving_registered,
+        name=f"registered_{moving_channel_name}",
         colormap="magenta",
         blending="additive",
     )
     # Cleanup
-    viewer.layers.remove(points_source_channel)
-    viewer.layers.remove(points_target_channel)
-    source_layer.visible = False
+    viewer.layers.remove(points_moving_channel)
+    viewer.layers.remove(points_reference_channel)
+    moving_layer.visible = False
 
     click.echo(f"Estimated transform (forward, moving -> reference):\n{clicked.matrix}\n")
     input("Press <Enter> to close the viewer and exit...")
@@ -319,18 +328,18 @@ class ManualEstimator(EstimatorBase):
 
     def __init__(
         self,
-        source_channel_name: str,
-        target_channel_name: str,
-        source_channel_voxel_size: tuple[float, float, float],
-        target_channel_voxel_size: tuple[float, float, float],
+        moving_channel_name: str,
+        reference_channel_name: str,
+        moving_channel_voxel_size: tuple[float, float, float],
+        reference_channel_voxel_size: tuple[float, float, float],
         similarity: bool = False,
         pre_affine_90degree_rotation: int = 0,
         pre_affine_fliplr: bool = False,
     ):
-        self.source_channel_name = source_channel_name
-        self.target_channel_name = target_channel_name
-        self.source_channel_voxel_size = source_channel_voxel_size
-        self.target_channel_voxel_size = target_channel_voxel_size
+        self.moving_channel_name = moving_channel_name
+        self.reference_channel_name = reference_channel_name
+        self.moving_channel_voxel_size = moving_channel_voxel_size
+        self.reference_channel_voxel_size = reference_channel_voxel_size
         self.similarity = similarity
         self.pre_affine_90degree_rotation = pre_affine_90degree_rotation
         self.pre_affine_fliplr = pre_affine_fliplr
@@ -341,12 +350,12 @@ class ManualEstimator(EstimatorBase):
         # No initial transform support -- napari display could pre-align with it, but
         # that's not implemented, and the point-fit itself doesn't take an initial guess.
         return user_assisted_registration(
-            source_channel_volume=np.asarray(mov),
-            source_channel_name=self.source_channel_name,
-            source_channel_voxel_size=self.source_channel_voxel_size,
-            target_channel_volume=np.asarray(ref),
-            target_channel_name=self.target_channel_name,
-            target_channel_voxel_size=self.target_channel_voxel_size,
+            moving_channel_volume=np.asarray(mov),
+            moving_channel_name=self.moving_channel_name,
+            moving_channel_voxel_size=self.moving_channel_voxel_size,
+            reference_channel_volume=np.asarray(ref),
+            reference_channel_name=self.reference_channel_name,
+            reference_channel_voxel_size=self.reference_channel_voxel_size,
             similarity=self.similarity,
             pre_affine_90degree_rotation=self.pre_affine_90degree_rotation,
             pre_affine_fliplr=self.pre_affine_fliplr,

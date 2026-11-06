@@ -599,7 +599,7 @@ def run_timepoint_jobs(
     output_dir = Path(output_dir)
     plan = _run_plan(output_dir)
     settings_path = output_dir / ENGINE_SETTINGS_FILENAME
-    source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
+    moving, reference = Path(moving_position_dirpath), Path(reference_position_dirpath)
     time_indices = plan["time_indices"]
     timepoints_dir, repairs_dir, sweeps_dir = _record_dirs(output_dir)
 
@@ -612,7 +612,7 @@ def run_timepoint_jobs(
         try:
             return (
                 _estimate_propagated_job(
-                    source, target, settings_path, time_indices, timepoints_dir, resume
+                    moving, reference, settings_path, time_indices, timepoints_dir, resume
                 ),
                 [],
             )
@@ -651,8 +651,8 @@ def run_timepoint_jobs(
         try:
             records[t] = _run_timepoint_job(
                 step,
-                source,
-                target,
+                moving,
+                reference,
                 settings_path,
                 t,
                 record_path,
@@ -675,15 +675,23 @@ def run_timepoint_jobs(
 
 
 def _run_timepoint_job(
-    step, source, target, settings_path, t, record_path, time_indices, timepoints_dir, flagged
+    step,
+    moving,
+    reference,
+    settings_path,
+    t,
+    record_path,
+    time_indices,
+    timepoints_dir,
+    flagged,
 ) -> dict:
     """Run one timepoint's job of `step` in this process; return its record."""
     if step == "estimate":
-        return _estimate_timepoint_job(source, target, settings_path, t, record_path)
+        return _estimate_timepoint_job(moving, reference, settings_path, t, record_path)
     if step == "repair":
         return _repair_timepoint_job(
-            source,
-            target,
+            moving,
+            reference,
             settings_path,
             t,
             time_indices,
@@ -691,7 +699,9 @@ def _run_timepoint_job(
             timepoints_dir,
             record_path,
         )
-    return _sweep_timepoint_job(source, target, settings_path, t, timepoints_dir, record_path)
+    return _sweep_timepoint_job(
+        moving, reference, settings_path, t, timepoints_dir, record_path
+    )
 
 
 def estimate_transform_series(
@@ -714,8 +724,8 @@ def estimate_transform_series(
     `output_dir`.
     """
     output_dir = Path(output_dir)
-    source, target = Path(moving_position_dirpath), Path(reference_position_dirpath)
-    plan = init_run(source, target, settings, output_dir, resume)
+    moving, reference = Path(moving_position_dirpath), Path(reference_position_dirpath)
+    plan = init_run(moving, reference, settings, output_dir, resume)
     settings_path = output_dir / ENGINE_SETTINGS_FILENAME
     time_indices = plan["time_indices"]
     timepoints_dir, repairs_dir, sweeps_dir = _record_dirs(output_dir)
@@ -758,7 +768,7 @@ def estimate_transform_series(
             executor,
             resolved_cluster,
             monitor,
-            (source, target, settings_path, time_indices, timepoints_dir, resume),
+            (moving, reference, settings_path, time_indices, timepoints_dir, resume),
             to_estimate,
             timepoints_dir,
             user_set_time=user_set_time,
@@ -773,7 +783,7 @@ def estimate_transform_series(
                 (
                     t,
                     _estimate_timepoint_job,
-                    (source, target, settings_path, t, timepoints_dir / f"{t}.json"),
+                    (moving, reference, settings_path, t, timepoints_dir / f"{t}.json"),
                 )
                 for t in to_estimate
             ],
@@ -802,8 +812,8 @@ def estimate_transform_series(
                 t,
                 _repair_timepoint_job,
                 (
-                    source,
-                    target,
+                    moving,
+                    reference,
                     settings_path,
                     t,
                     time_indices,
@@ -831,7 +841,14 @@ def estimate_transform_series(
             (
                 t,
                 _sweep_timepoint_job,
-                (source, target, settings_path, t, timepoints_dir, sweeps_dir / f"{t}.json"),
+                (
+                    moving,
+                    reference,
+                    settings_path,
+                    t,
+                    timepoints_dir,
+                    sweeps_dir / f"{t}.json",
+                ),
             )
             for t in to_sweep
         ],

@@ -74,8 +74,8 @@ def beads_plate_with_a_blank_timepoint(tmp_path):
 def _write_config(
     tmp_path,
     *,
-    source="GFP",
-    target="Phase3D",
+    moving_channel="GFP",
+    reference_channel="Phase3D",
     reference="cross",
     method="bead_matching",
     transform_type="euclidean",
@@ -93,12 +93,12 @@ def _write_config(
     # repair is off unless a config asks for it; these runs ask, as the bead template does
     blocks.setdefault("fallback", {"repair": {}})
     settings = EstimateTransformSettings(
-        moving=ChannelSettings(channel=source),
+        moving=ChannelSettings(channel=moving_channel),
         reference=reference
         if isinstance(reference, ReferenceSettings)
         else ReferenceSettings(
             frame=reference,
-            channel=target if reference == "cross" else None,
+            channel=reference_channel if reference == "cross" else None,
             window=6 if reference == "neighbours" else None,
         ),
         method=method,
@@ -414,7 +414,7 @@ def test_estimate_transform_stabilizes_a_channel_against_itself(
     drifting_plate, tmp_path, t_reference, expected_inverse_factor
 ):
     output = tmp_path / "out" / "stabilization_settings.yml"
-    config = _write_config(tmp_path, source="GFP", reference=t_reference)
+    config = _write_config(tmp_path, moving_channel="GFP", reference=t_reference)
 
     _run(drifting_plate, config, output)
 
@@ -432,7 +432,7 @@ def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
     output = tmp_path / "out" / "stabilization_settings.yml"
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference="first",
         method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(t_reference="first", center_crop_xy=[40, 40]),
@@ -463,7 +463,7 @@ def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_
             ).astype(np.float32)
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference="first",
         method="phase_cross_corr",
         # full extent: a centre crop lets beads drift out of the window and biases PCC
@@ -530,7 +530,7 @@ def test_repair_is_skipped_for_a_method_that_ignores_initial_transforms(tmp_path
     plate = _write_plate(tmp_path / "pcc_blank.zarr", [(f, f) for f in frames])
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference="first",
         method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
@@ -723,7 +723,9 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
 def test_previous_reference_needs_contiguous_timepoints(tmp_path):
     # Rejected when the settings are read, before any job is submitted.
     with pytest.raises(Exception, match="contiguous"):
-        _write_config(tmp_path, source="GFP", reference="previous", time_indices=[0, 2])
+        _write_config(
+            tmp_path, moving_channel="GFP", reference="previous", time_indices=[0, 2]
+        )
 
 
 def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
@@ -1015,7 +1017,9 @@ def test_a_previous_chain_starts_at_the_first_requested_timepoint(drifting_plate
     # step from it. Measured against frame 0, outside the run, t=1 carried a step and the
     # chain did not start on the first frame it writes.
     output = tmp_path / "out" / "stabilization_settings.yml"
-    config = _write_config(tmp_path, source="GFP", reference="previous", time_indices=[1, 2])
+    config = _write_config(
+        tmp_path, moving_channel="GFP", reference="previous", time_indices=[1, 2]
+    )
     _run(drifting_plate, config, output)
     for row, factor in zip(_inverse_translations(output), [0, 1], strict=True):
         np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
@@ -1032,7 +1036,7 @@ def test_a_first_frame_reference_skips_an_empty_frame_zero(tmp_path):
     ]
     plate = _write_plate(tmp_path / "late.zarr", [(f, f) for f in frames])
     output = tmp_path / "out" / "stabilization_settings.yml"
-    _run(plate, _write_config(tmp_path, source="GFP", reference="first"), output)
+    _run(plate, _write_config(tmp_path, moving_channel="GFP", reference="first"), output)
     rows = _inverse_translations(output)
     np.testing.assert_allclose(rows[1], [0.0, 0.0, 0.0], atol=0.5)
     np.testing.assert_allclose(rows[2], APPLIED_SHIFT_ZYX, atol=0.5)
@@ -1053,7 +1057,7 @@ def test_a_neighbour_median_reference_removes_single_frame_jumps(tmp_path):
     output = tmp_path / "out" / "stabilization_settings.yml"
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference="neighbours",
         method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
@@ -1114,7 +1118,7 @@ def test_a_neighbour_median_reference_stabilizes_a_projected_plate(tmp_path):
     output = tmp_path / "out" / "stabilization_settings.yml"
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference="neighbours",
         method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
@@ -1150,7 +1154,7 @@ def test_a_centroid_anchor_removes_the_slow_drift_the_neighbours_follow(tmp_path
     output = tmp_path / "out" / "stabilization_settings.yml"
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference=ReferenceSettings(frame="neighbours", window=2, anchor=ANCHOR),
         method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
@@ -1203,7 +1207,7 @@ def test_a_stabilization_reports_its_leftover_motion_against_unregistered(tmp_pa
     output = tmp_path / "out" / "stabilization_settings.yml"
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference=ReferenceSettings(frame="neighbours", window=6, leftover_motion={}),
         method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
@@ -1301,7 +1305,7 @@ def test_a_job_reads_each_frame_once_and_computes_the_neighbour_median_once(
     monkeypatch.setattr(policies.NeighbourMedian, "_gather", counting_gather)
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference=ReferenceSettings(frame="neighbours", window=1, leftover_motion={}),
         method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),

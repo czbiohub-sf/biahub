@@ -1,10 +1,10 @@
 """Apply a transform series to positions: one matrix for every timepoint or one per timepoint.
 
-Replaces `register` (one transform, source onto a target store) and `stabilize` (one
+Replaces `register` (one transform, moving onto a reference store) and `stabilize` (one
 transform per timepoint, a store onto itself). The output crop is decided once, before
 the output store is allocated: by default the reference grid as is (`keep_overhang`), so
 one wrong transform cannot shrink every timepoint's field of view; or, cropped to the
-overlap, the largest box inside the overlap of the warped source and the reference,
+overlap, the largest box inside the overlap of the warped moving volume and the reference,
 intersected over every timepoint's transform.
 """
 
@@ -597,12 +597,12 @@ def verify_apply_transform(
     if record["channels_copied"] and reference_position is not None:
         with open_ome_zarr(reference_position, mode="r") as reference:
             for c in record["channels_copied"]:
-                source = np.asarray(
+                original = np.asarray(
                     reference.data[t, reference.channel_names.index(c)], np.float32
                 )
                 result["copied"][c] = bool(
-                    source.shape == written[c].shape
-                    and np.allclose(written[c], source, rtol=1e-5, atol=1e-5)
+                    original.shape == written[c].shape
+                    and np.allclose(written[c], original, rtol=1e-5, atol=1e-5)
                 )
     first = record["channels_transformed"][0] if record["channels_transformed"] else None
     result["coverage"] = float((written[first] != 0).mean()) if first else None
