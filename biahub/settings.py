@@ -1917,6 +1917,21 @@ class EstimateTransformSettings(MyBaseModel):
             raise ValueError(str(error)) from None
 
     @model_validator(mode="after")
+    def check_only_the_methods_block_is_given(self) -> "EstimateTransformSettings":
+        if self.is_stack:  # check_stack says it for a stack
+            return self
+        own = METHOD_BLOCKS[self.method]
+        ignored = [
+            f for f in METHOD_BLOCKS.values() if f != own and getattr(self, f) is not None
+        ]
+        if ignored:
+            raise ValueError(
+                f"{', '.join(ignored)} block is read by nothing: method {self.method} "
+                f"reads only its own ({own})"
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_previous_frame_starts_from_steps(self) -> "EstimateTransformSettings":
         if self.transform.initial_file is not None and self.reference.frame == "previous":
             raise ValueError(
