@@ -248,7 +248,7 @@ def test_a_methods_own_score_judges_the_raw_volumes(monkeypatch):
         ),
         preprocess=[{"clip_percentiles": {"low": 0, "high": 99.9}}],
     )
-    estimator, _score, _initial_transform = engine.build_estimator(settings, (32, 48, 48))
+    estimator, _score = engine.build_estimator(settings, (32, 48, 48))
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, (32, 48, 48))
     mov = np.roll(ref, 2, axis=2)

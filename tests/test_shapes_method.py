@@ -70,7 +70,7 @@ def test_method_shapes_needs_its_block_and_builds_with_the_stores_voxel_sizes():
     with pytest.raises(ValidationError, match="fliplr"):
         _settings("shapes", shapes={"rotate90": -1})
     settings = _settings("shapes", shapes={"rotate90": -1, "fliplr": False})
-    estimator, _score, _initial = build_estimator(
+    estimator, _score = build_estimator(
         settings, GRIDS["mov_shape"], GRIDS["mov_voxel_size"], GRIDS["ref_voxel_size"]
     )
     assert isinstance(estimator, ShapesEstimator)
@@ -88,7 +88,7 @@ def test_shapes_starts_a_stack_and_the_next_block_starts_from_it():
     settings = _settings(
         [{"shapes": {"rotate90": 0, "fliplr": False}}, {"phase_cross_corr": {}}]
     )
-    chain, _score, _initial = build_estimator(
+    chain, _score = build_estimator(
         settings, GRIDS["mov_shape"], GRIDS["mov_voxel_size"], GRIDS["ref_voxel_size"]
     )
     assert isinstance(chain, ChainedEstimator)

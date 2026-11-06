@@ -178,8 +178,11 @@ def build_estimator(
     shape_zyx: tuple[int, int, int] | None = None,
     mov_voxel_size: tuple[float, float, float] | None = None,
     ref_voxel_size: tuple[float, float, float] | None = None,
-) -> tuple[TransformEstimator, ScoreFn, Transform]:
-    """Estimator, score function and forward initial transform for the settings' method."""
+) -> tuple[TransformEstimator, ScoreFn]:
+    """Return the estimator and score function for the settings' method.
+
+    Where it starts is the initial-transform policy's (`_initial_policy`).
+    """
     if settings.is_stack:
         # each block is the estimator its own config builds (its preprocess, transform
         # type, settings), started from the block before; the run's score keeps the best
@@ -190,11 +193,10 @@ def build_estimator(
         score_fn = _score_fn(settings)
         names = [f"{k}:{m}" for k, m in enumerate(settings.method_names, start=1)]
         chain = ChainedEstimator(blocks, score_fn=score_fn, names=names)
-        return chain, score_fn, _static_initial(settings)
+        return chain, score_fn
     score_fn = _score_fn(settings)
     # the bead estimators' own choices score the raw volumes, not the prepared ones
     method_score = RawVolumeScore(score_fn) if settings.preprocess else score_fn
-    initial_transform = _static_initial(settings)
     if settings.method == "bead_matching":
         estimator: TransformEstimator = build_beads_estimator(
             settings.bead_matching, settings.transform.type, score_fn=method_score
@@ -244,7 +246,7 @@ def build_estimator(
         raise ValueError(f"unknown method '{settings.method}'")
     if settings.preprocess:
         estimator = PreprocessedEstimator(estimator, settings.preprocess, method_score)
-    return estimator, score_fn, initial_transform
+    return estimator, score_fn
 
 
 def _finite_or_none(value: float | None) -> float | None:
@@ -482,9 +484,7 @@ def init_run(
             "Computed the initial transform from the store shapes (forward):\n"
             f"{shapes.transform.matrix}"
         )
-    estimator, _score_fn, _initial_transform = build_estimator(
-        settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
-    )
+    estimator, _score_fn = build_estimator(settings, (Z, Y, X), mov_voxel_size, ref_voxel_size)
     initial_transforms = (
         None
         if settings.transform.initial_file is None

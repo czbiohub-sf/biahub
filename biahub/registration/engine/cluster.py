@@ -232,7 +232,7 @@ def _job_inputs(
     mov, mov_voxel_size = _open_series(moving_position_dirpath, settings.moving.channel)
     ref, ref_voxel_size = _open_series(reference_position_dirpath, settings.reference_channel)
     mov, ref = _JobFrames(mov), _JobFrames(ref)
-    estimator, score_fn, _ = build_estimator(
+    estimator, score_fn = build_estimator(
         settings, tuple(mov.shape[-3:]), mov_voxel_size, ref_voxel_size
     )
     initial = _initial_policy(settings, Path(settings_path).parent)

@@ -133,7 +133,8 @@ def test_a_stack_runs_its_blocks_in_order_each_from_the_one_before(monkeypatch):
     from biahub.registration.estimators import ChainedEstimator
 
     settings = _settings(PCC_THEN_ANTS)
-    estimator, score_fn, initial_transform = build_estimator(settings, (16, 64, 64))
+    estimator, score_fn = build_estimator(settings, (16, 64, 64))
+    initial_transform = Transform.identity(3)
     assert isinstance(estimator, ChainedEstimator) and len(estimator.stages) == 2
     pcc, ants = estimator.stages
     assert type(pcc.method).__name__ == "PCCEstimator"  # wrapped by its block's preprocess
