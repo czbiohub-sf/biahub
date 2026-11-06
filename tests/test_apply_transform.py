@@ -1056,3 +1056,20 @@ def test_nearest_interpolation_writes_only_input_values(structured_plate, tmp_pa
         written = np.asarray(out.data)[0, out.channel_names.index("GFP")]
     inside = written[2:-2, 4:-4, 4:-4]
     assert np.isin(inside, data[0, 0]).all()  # no blend of neighbours: input values only
+
+
+def test_the_shared_crop_holds_only_voxels_every_warp_covers():
+    # the coarse mask tested each block at its first voxel, so the last block of an
+    # upper edge could be kept with up to downsample - 1 uncovered planes or columns
+    rng = np.random.default_rng(12)
+    for _ in range(25):
+        source, target = (24, 70, 90), (28, 64, 80)
+        transforms = []
+        for _ in range(2):
+            m = np.eye(4)
+            m[:3, :3] += 0.03 * rng.standard_normal((3, 3))
+            m[:3, 3] = rng.uniform(-6, 6, 3)
+            transforms.append(Transform(m))
+        z, y, x = shared_crop(source, target, transforms, keep_overhang=False, downsample=4)
+        for transform in transforms:
+            assert transform.coverage(source, target)[z, y, x].all()

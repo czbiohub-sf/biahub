@@ -1,3 +1,4 @@
+import itertools
 import shutil
 
 from ast import literal_eval
@@ -100,8 +101,17 @@ def find_lir(registered_zyx: np.ndarray, plot: bool = False) -> tuple:
 Slices = tuple[slice, slice, slice]
 
 
-def _coarse(shape_zyx: tuple[int, int, int], f: int) -> tuple[int, int, int]:
-    return tuple(max(1, int(np.ceil(s / f))) for s in shape_zyx)
+def _factors(downsample: int) -> tuple[int, int, int]:
+    """Return the coarse grid's step per axis: z 1, y and x `downsample`.
+
+    z stays at full resolution: a stack has few planes, and each lost costs the most.
+    """
+    f = max(1, int(downsample))
+    return (1, f, f)
+
+
+def _coarse(shape_zyx: tuple[int, int, int], factors: tuple) -> tuple[int, int, int]:
+    return tuple(max(1, int(np.ceil(s / f))) for s, f in zip(shape_zyx, factors, strict=True))
 
 
 def overlap_mask(
@@ -110,15 +120,24 @@ def overlap_mask(
     transform: Transform,
     downsample: int = 4,
 ) -> np.ndarray:
-    """Target-grid voxels the warped source covers, on a `downsample`-times coarser grid.
+    """Target-grid blocks the warped source covers whole, on a coarser grid (`_factors`).
 
-    `Transform.coverage` (the warp's own edge, without warping) of the forward transform
-    on the coarse grid: the same geometry at any resolution, so a 240-timepoint series
-    stays cheap.
+    Each coarse voxel is the block of target voxels it stands for (`downsample` x
+    `downsample` in yx, one plane in z). The covered region is convex (the preimage of
+    the source box), so a block is covered whole when its corner voxels are: each corner
+    is tested with `Transform.coverage` (the warp's own edge, without warping) against
+    the source's full-resolution bounds. Cheap for a 240-timepoint series; a crop from it
+    holds only covered voxels (a partial last block counts as uncovered).
     """
-    f = max(1, int(downsample))
-    coarse = transform.on_grid(f)
-    return coarse.coverage(_coarse(source_shape_zyx, f), _coarse(target_shape_zyx, f))
+    factors = _factors(downsample)
+    coarse_shape = _coarse(target_shape_zyx, factors)
+    scale = Transform(np.diag([*map(float, factors), 1.0]))
+    mask = np.ones(coarse_shape, dtype=bool)
+    for corner in itertools.product(*[sorted({0, f - 1}) for f in factors]):
+        # coarse index k stands for target voxel factors * k + corner
+        to_target = Transform.from_translation(corner) @ scale
+        mask &= (to_target.invert() @ transform).coverage(source_shape_zyx, coarse_shape)
+    return mask
 
 
 def largest_box(mask: np.ndarray) -> Slices:
@@ -156,17 +175,16 @@ def largest_box(mask: np.ndarray) -> Slices:
 def _mask_box(
     mask: np.ndarray, target_shape_zyx: tuple[int, int, int], downsample: int
 ) -> Slices:
-    """Largest box inside a coarse mask, rounded inward onto the full-resolution grid."""
-    f = max(1, int(downsample))
+    """Largest box inside a coarse mask, back on the full-resolution grid."""
     if not mask.any():
         raise click.UsageError(
             "the transform leaves no overlapping region between source and target; "
             "drop --crop-to-overlap or check the transform"
         )
-    z, y, x = largest_box(mask)
+    box = largest_box(mask)
     return tuple(
-        slice(min(int(np.ceil(s.start * f)), dim), min(int(np.floor(s.stop * f)), dim))
-        for s, dim in zip((z, y, x), target_shape_zyx, strict=True)
+        slice(min(s.start * f, dim), min(s.stop * f, dim))
+        for s, f, dim in zip(box, _factors(downsample), target_shape_zyx, strict=True)
     )
 
 
@@ -213,7 +231,35 @@ def shared_crop(
             "the transforms share no overlapping region across timepoints; "
             "drop --crop-to-overlap or check the transforms"
         )
-    return _mask_box(mask, target_shape_zyx, downsample)
+    box = _mask_box(mask, target_shape_zyx, downsample)
+    # the coarse mask counts partly covered blocks as uncovered: win their voxels back
+    steps = [f - 1 for f in _factors(downsample)]
+    return _grow_covered(box, list(unique.values()), source_shape_zyx, target_shape_zyx, steps)
+
+
+def _grow_covered(box: Slices, transforms, source_shape, target_shape, steps) -> Slices:
+    """Grow each face of a covered box outward, voxel by voxel (up to `steps` per axis).
+
+    The region every transform covers is convex, so a box lies inside it when its 8
+    corner voxels do (`Transform.covers`): each step checks only those.
+    """
+    bounds = [[s.start, s.stop] for s in box]
+
+    def covered(trial) -> bool:
+        corners = list(itertools.product(*[(start, stop - 1) for start, stop in trial]))
+        return all(t.covers(corners, source_shape).all() for t in transforms)
+
+    for axis in range(3):
+        for end, step in ((1, 1), (0, -1)):  # the stop outward, then the start
+            for _ in range(steps[axis]):
+                trial = [list(b) for b in bounds]
+                trial[axis][end] += step
+                if not 0 <= trial[axis][0] < trial[axis][1] <= target_shape[axis]:
+                    break
+                if not covered(trial):
+                    break
+                bounds = trial
+    return tuple(slice(start, stop) for start, stop in bounds)
 
 
 def estimate_crop_one_position(

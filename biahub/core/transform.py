@@ -550,6 +550,23 @@ class Transform:
         um = np.asarray(input_um, dtype=float)[-self._ndim :]
         return tuple(float(v) for v in np.linalg.norm(steps * um[:, None], axis=0))
 
+    @staticmethod
+    def _moving_bounds(mov_shape: tuple) -> tuple[float, list]:
+        """Where `apply` has moving data along each axis: (lower, [upper per axis]).
+
+        ANTs (3D) samples up to half a voxel beyond the outer centres, the upper edge
+        excluded; scipy (2D) up to the outer centres.
+        """
+        if len(mov_shape) == 3:
+            return -0.5, [n - 0.5 - 1e-9 for n in mov_shape]
+        return 0.0, [n - 1 + 1e-9 for n in mov_shape]
+
+    def covers(self, points, mov_shape: tuple) -> NDArray[np.bool_]:
+        """Return whether `apply` has moving data at each reference-grid point (N, D)."""
+        moving = self.invert().apply_points(np.asarray(points, dtype=float))
+        lower, upper = self._moving_bounds(mov_shape)
+        return np.all((moving >= lower) & (moving <= np.asarray(upper)), axis=1)
+
     def coverage(self, mov_shape: tuple, ref_shape: tuple) -> NDArray[np.bool_]:
         """Return where `apply` has moving data on the reference grid (boolean).
 
@@ -567,10 +584,8 @@ class Transform:
         for axis in range(ndim):
             at_zero = inverse[axis, : ndim - 1] @ starts + inverse[axis, ndim]  # moving coord
             step = inverse[axis, ndim - 1]  # its change per voxel along the row
-            if ndim == 3:
-                lower, upper = -0.5, mov_shape[axis] - 0.5 - 1e-9
-            else:
-                lower, upper = 0.0, mov_shape[axis] - 1 + 1e-9
+            lower, upper = self._moving_bounds(mov_shape)
+            upper = upper[axis]
             if step == 0:
                 outside = (at_zero < lower) | (at_zero > upper)
                 first[outside], last[outside] = np.inf, -np.inf
