@@ -11,6 +11,7 @@
 | stabilization of a channel over time (drift) | `phase_cross_corr` | translation only; crop with `center_crop_xy`; `templates/estimate-transform-phase_cross_corr.yml` |
 | stabilization of phase (focus z + stackreg yx) | `focus_finding` | what the A549 projects used (`label-free/2-stabilize`); `templates/estimate-transform-focus_finding.yml` |
 | the registration the two stores' metadata implies (voxel sizes, camera turn and flip) | `shapes` | reads no pixels: `shapes: {rotate90: -1, fliplr: false}` (mantis light-sheet); a first block before a fine method, or a quick check of the geometry; `templates/estimate-transform-shapes.yml` |
+| a coarse method, then a fine one (each block starts from the one before) | a stack: `method: [<block>, <block>]` | `templates/pipelines/` (e.g. `local_pcc_ants.yml`: local phase correlation then ANTs; `local_pcc_nuclei_matching.yml`); the benchmark compares them |
 
 `reference.frame`: `cross` (another channel at the same timepoint: registration), `first`
 or `previous` (the channel's own first / previous frame with data: stabilization).

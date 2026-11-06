@@ -22,8 +22,9 @@ direction: forward
 method: bead_matching
 moving_channels: [mCherry EX561 EM600-37]   # the estimation channel
 reference_channel: Phase3D                   # null for stabilization
-reference_frame: cross                       # cross | first | previous (previous: chained
-                                             # onto the first frame; cannot take substitutes)
+reference_frame: cross                       # cross | first | previous | neighbours
+                                             # (previous: chained onto the first frame;
+                                             # cannot take substitutes)
 transforms:                                  # one list shared by every position ...
   - {t: 0, matrix: [...], score: 0.71, status: accepted}
   - {t: 1, matrix: [...], score: null, status: unreliable, filled_from: initial,
@@ -41,6 +42,9 @@ transforms:                                  # one list shared by every position
   never dropped; `apply-transform` writes every one and records the non-accepted ones in
   the output metadata.
 - `repaired_from`: which repair candidate won (e.g. `consensus_full+polish1`).
+- `initialized_from` (with `transform.initial` from a file): `file` (the file's transform,
+  kept as it is: the estimate from it did not score better) or `file+refined` (the
+  estimate from it, which did).
 - `report`: the config's `score.report` metrics for this transform, on the raw warped pair,
   and the unregistered pair's (identity) next to them: each metric as `unregistered_<name>`
   and the score as `unregistered_score`, e.g. `{correlation: 0.72, unregistered_correlation:

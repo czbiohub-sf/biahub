@@ -7,8 +7,6 @@ phase_cross_corr:
   normalization: magnitude
   maximum_shift: 1.2
   function_type: custom
-  t_reference: first
-  skip_beads_fov: '0'
   center_crop_xy: null
   X_slice: all
   Y_slice: all
