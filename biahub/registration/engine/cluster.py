@@ -179,7 +179,9 @@ class _JobFrames:
 
     Other frames (e.g. a neighbour window, read once by the reference policy) pass
     straight through, so they are not all held at once. Kept frames are read-only: a
-    step that changed one in place would corrupt the next one's input.
+    step that changed one in place would corrupt the next one's input. Every frame is
+    read with NaN as 0 (no data, as the warp's padding is), so a few NaN voxels cannot
+    turn an estimate or its score into NaN.
     """
 
     def __init__(self, series):
@@ -192,14 +194,21 @@ class _JobFrames:
         return len(self.series)
 
     def __getitem__(self, t):
-        if not isinstance(t, (int, np.integer)) or int(t) not in self.keep:
+        if not isinstance(t, (int, np.integer)):
             return self.series[t]
         t = int(t)
+        if t not in self.keep:
+            return self._read(t)
         if t not in self._kept:
-            frame = np.asarray(self.series[t])
+            frame = self._read(t)
             frame.flags.writeable = False
             self._kept[t] = frame
         return self._kept[t]
+
+    def _read(self, t: int) -> np.ndarray:
+        frame = np.asarray(self.series[t])
+        # copied only when there is NaN to replace (most frames have none)
+        return np.nan_to_num(frame) if np.isnan(frame).any() else frame
 
     def keep_only(self, timepoints) -> None:
         """Keep these frames (read on first use); forget the others."""

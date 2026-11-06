@@ -216,3 +216,30 @@ def test_propagation_keeps_the_trace_of_the_start_that_won():
         frames, CrossChannel(frames), _Traced(), Transform.identity(3), _x_score, [0, 1],
     )  # fmt: skip
     assert result.best_candidate == {0: "call1", 1: "call2"}
+
+
+def test_a_job_reads_nan_as_no_data_so_a_few_nan_voxels_do_not_break_the_estimate():
+    # four NaN voxels (an upstream warp's border) made phase correlation return the
+    # identity with a NaN score, silently
+    from scipy.ndimage import shift as ndi_shift
+
+    from biahub.registration.engine.cluster import _JobFrames
+    from biahub.registration.engine.policies import CrossChannel, FixedInitialTransform
+    from biahub.registration.engine.series import estimate_series
+    from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
+    from biahub.registration.metrics import correlation_score
+
+    rng = np.random.default_rng(0)
+    ref = rng.random((1, 10, 64, 64)).astype(np.float32)
+    mov = ndi_shift(ref, (0, 0, 3, -2), order=1).astype(np.float32)
+    mov[0, :, :2, :2] = np.nan
+    mov_frames, ref_frames = _JobFrames(mov), _JobFrames(ref)
+    assert not np.isnan(mov_frames[0]).any()  # passed through
+    mov_frames.keep_only([0])
+    assert not np.isnan(mov_frames[0]).any()  # kept
+    result = estimate_series(
+        mov_frames, CrossChannel(ref_frames), PCCEstimator(),
+        FixedInitialTransform(Transform.identity(3)), correlation_score, [0],
+    )  # fmt: skip
+    np.testing.assert_allclose(result.transforms[0].translation, [0, -3, 2], atol=0.5)
+    assert np.isfinite(result.scores[0])
