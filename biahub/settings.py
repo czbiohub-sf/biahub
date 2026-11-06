@@ -1941,6 +1941,15 @@ class EstimateTransformSettings(MyBaseModel):
         return self
 
     @model_validator(mode="after")
+    def check_propagation_has_a_start_to_pass(self) -> "EstimateTransformSettings":
+        if self.transform.propagates and self.ignores_initial_transform:
+            raise ValueError(
+                f"transform.initial.propagate starts each timepoint from the previous one's "
+                f"result, but {self.stack_settings()[0].method} ignores where it starts"
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_previous_frame_starts_from_steps(self) -> "EstimateTransformSettings":
         if self.transform.initial_file is not None and self.reference.frame == "previous":
             raise ValueError(
@@ -2208,6 +2217,18 @@ class EstimateTransformSettings(MyBaseModel):
     def reference_channel(self) -> str:
         """The channel read on the reference side (the moving channel itself for first / previous)."""
         return self.reference.channel or self.moving.channel
+
+    @property
+    def ignores_initial_transform(self) -> bool:
+        """Whether the method ignores where it starts (a stack: its first block).
+
+        Correlation-based methods find their answer from the images alone. The same as
+        the estimators' `uses_initial_transform` (a test keeps the two in step).
+        """
+        first = self.stack_settings()[0]
+        if first.method == "phase_cross_corr":
+            return first.phase_cross_corr.local is None  # local refines from its start
+        return first.method in ("focus_finding", "manual", "shapes")
 
     @property
     def effective_score_metric(self) -> str:

@@ -29,3 +29,38 @@ def test_the_neighbour_window_is_given_with_neighbours_and_only_there():
     with pytest.raises(ValidationError, match="window is read only by frame neighbours"):
         _settings(reference={"frame": "first", "window": 4})
     assert _settings(reference={"frame": "neighbours", "window": 4}).reference.window == 4
+
+
+def test_propagation_is_refused_for_a_method_that_ignores_where_it_starts():
+    # each timepoint would start from the previous result, which these methods do not read
+    propagate = {"initial": {"propagate": True}}
+    with pytest.raises(ValidationError, match="focus_finding ignores where it starts"):
+        _settings(method="focus_finding", reference={"frame": "first"}, transform=propagate)
+    _settings(method="ants", transform=propagate)  # ANTs refines from its start
+    _settings(method="phase_cross_corr", phase_cross_corr={"local": {}}, transform=propagate)
+
+
+@pytest.mark.parametrize(
+    "method, block",
+    [
+        ("bead_matching", {}),
+        ("ants", {}),
+        ("phase_cross_corr", {}),
+        ("phase_cross_corr", {"local": {}}),
+        ("focus_finding", {}),
+        ("nuclei_matching", {}),
+        ("manual", {}),
+        ("shapes", {"rotate90": 0, "fliplr": False}),
+    ],
+)
+def test_the_settings_know_which_methods_ignore_where_they_start(method, block):
+    # the settings cannot build an estimator; their record must match the estimators'
+    from biahub.registration.engine.core import build_estimator
+
+    settings = _settings(
+        method=method,
+        time_indices=0 if method == "manual" else "all",
+        **{method: block},
+    )
+    estimator, _score = build_estimator(settings, (8, 64, 64), (1.0, 1.0, 1.0), (1.0, 1.0, 1.0))
+    assert settings.ignores_initial_transform == (not estimator.uses_initial_transform)

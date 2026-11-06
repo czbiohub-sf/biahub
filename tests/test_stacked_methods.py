@@ -1,5 +1,6 @@
 """Stacked methods: a registration as blocks, coarse to fine, each with its own settings."""
 
+import numpy as np
 import pytest
 
 from pydantic import ValidationError
@@ -38,9 +39,8 @@ def test_a_stack_is_read_and_written_in_the_form_it_was_given(tmp_path):
 
 
 def test_each_block_becomes_an_ordinary_single_method_config():
-    settings = _settings(
-        PCC_THEN_ANTS, transform={"type": "euclidean", "initial": {"propagate": True}}
-    )
+    start = {"from": "matrix", "matrix": np.eye(4).tolist(), "direction": "forward"}
+    settings = _settings(PCC_THEN_ANTS, transform={"type": "euclidean", "initial": start})
     pcc, ants = settings.stack_settings()
     assert (pcc.method, ants.method) == ("phase_cross_corr", "ants")
     assert pcc.phase_cross_corr.maximum_shift == 1.5
@@ -48,7 +48,7 @@ def test_each_block_becomes_an_ordinary_single_method_config():
     assert [b.kind for b in ants.preprocess] == ["sobel"]
     # a block's transform type, else the run's; the rest of the run is shared
     assert (pcc.transform.type, ants.transform.type) == ("euclidean", "similarity")
-    assert pcc.transform.propagates and ants.transform.propagates
+    assert pcc.transform.initial == ants.transform.initial == settings.transform.initial
     assert not pcc.is_stack
 
 
