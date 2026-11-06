@@ -60,7 +60,35 @@ def test_the_settings_know_which_methods_ignore_where_they_start(method, block):
     settings = _settings(
         method=method,
         time_indices=0 if method == "manual" else "all",
+        transform={"type": "affine" if method == "shapes" else "euclidean"},
         **{method: block},
     )
-    estimator, _score = build_estimator(settings, (8, 64, 64), (1.0, 1.0, 1.0), (1.0, 1.0, 1.0))
+    estimator, _score = build_estimator(
+        settings, (8, 64, 64), (1.0, 1.0, 1.0), (1.0, 1.0, 1.0)
+    )
     assert settings.ignores_initial_transform == (not estimator.uses_initial_transform)
+
+
+def test_a_transform_type_the_method_cannot_fit_is_refused():
+    # the type labelled the file as something the method never fitted (focus finding
+    # measures a translation; manual fits euclidean or similarity; shapes rescales)
+    with pytest.raises(ValidationError, match="focus_finding fits euclidean only"):
+        _settings(
+            method="focus_finding", reference={"frame": "first"}, transform={"type": "affine"}
+        )
+    with pytest.raises(ValidationError, match="manual fits euclidean or similarity"):
+        _settings(method="manual", time_indices=0, transform={"type": "affine"})
+    with pytest.raises(ValidationError, match="shapes fits affine only"):
+        _settings(method="shapes", shapes={"rotate90": 0, "fliplr": False})
+    with pytest.raises(ValidationError, match="phase_cross_corr fits euclidean only"):
+        _settings(transform={"type": "similarity"})
+    _settings(
+        phase_cross_corr={"local": {}}, transform={"type": "similarity"}
+    )  # local fits it
+    # each block of a stack with its own type
+    with pytest.raises(ValidationError, match=r"block 1 \(focus_finding\)"):
+        _settings(
+            method=[{"focus_finding": {}}, {"ants": {}}],
+            reference={"frame": "first"},
+            transform={"type": "affine"},
+        )

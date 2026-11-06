@@ -1648,6 +1648,17 @@ METHOD_BLOCKS: dict[str, str] = {
 TransformType = Literal["euclidean", "similarity", "affine"]
 
 
+# The transform types a method can fit, where it cannot fit every one: focus finding and
+# (global) phase correlation measure a translation, manual fits euclidean or similarity,
+# shapes rescales by the voxel-size ratio.
+METHOD_TRANSFORM_TYPES: dict[str, tuple[str, ...]] = {
+    "focus_finding": ("euclidean",),
+    "phase_cross_corr": ("euclidean",),
+    "manual": ("euclidean", "similarity"),
+    "shapes": ("affine",),
+}
+
+
 # The legacy pipeline's method names (estimation_method / stabilization_method).
 RENAMED_METHODS = {
     "beads": "bead_matching",
@@ -1937,6 +1948,21 @@ class EstimateTransformSettings(MyBaseModel):
             raise ValueError(
                 f"{', '.join(ignored)} block is read by nothing: method {self.method} "
                 f"reads only its own ({own})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_the_method_fits_the_transform_type(self) -> "EstimateTransformSettings":
+        if self.is_stack:  # each block is checked as its own config (check_stack)
+            return self
+        fits = METHOD_TRANSFORM_TYPES.get(self.method)
+        pcc = self.phase_cross_corr
+        if self.method == "phase_cross_corr" and pcc is not None and pcc.local is not None:
+            fits = None  # local phase correlation fits the type in yx
+        if fits is not None and self.transform.type not in fits:
+            raise ValueError(
+                f"method {self.method} fits {' or '.join(fits)} only; got transform.type "
+                f"{self.transform.type}"
             )
         return self
 

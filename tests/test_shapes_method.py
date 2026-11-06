@@ -19,6 +19,7 @@ GRIDS = dict(
 
 
 def _settings(method, **kwargs):
+    kwargs.setdefault("transform", {"type": "affine"})  # shapes rescales: an affine
     return EstimateTransformSettings(
         moving={"channel": "GFP"},
         reference={"frame": "cross", "channel": "Phase3D"},
@@ -90,7 +91,10 @@ def test_shapes_starts_a_stack_and_the_next_block_starts_from_it():
     from biahub.registration.methods.manual.shapes import ShapesEstimator
 
     settings = _settings(
-        [{"shapes": {"rotate90": 0, "fliplr": False}}, {"phase_cross_corr": {}}]
+        [
+            {"shapes": {"rotate90": 0, "fliplr": False}},
+            {"phase_cross_corr": {"transform": {"type": "euclidean"}}},
+        ]
     )
     chain, _score = build_estimator(
         settings, GRIDS["mov_shape"], GRIDS["mov_voxel_size"], GRIDS["ref_voxel_size"]
@@ -98,7 +102,9 @@ def test_shapes_starts_a_stack_and_the_next_block_starts_from_it():
     assert isinstance(chain, ChainedEstimator)
     assert isinstance(chain.stages[0], ShapesEstimator)
     with pytest.raises(ValueError, match="block 1 \\(shapes\\)"):
-        _settings([{"shapes": {}}, {"phase_cross_corr": {}}]).stack_settings()
+        _settings(
+            [{"shapes": {}}, {"phase_cross_corr": {"transform": {"type": "euclidean"}}}]
+        ).stack_settings()
 
 
 def test_a_run_with_method_shapes_writes_the_transform_from_the_metadata(tmp_path):
