@@ -39,5 +39,5 @@ class StackregEstimator(EstimatorBase):
         ref = np.asarray(ref)
         sr = StackReg(self.transformation)
         xy_inverse_matrix = np.asarray(sr.register(ref, mov))
-        yx_matrix = self._AXIS_SWAP @ xy_inverse_matrix @ self._AXIS_SWAP
-        return Transform(matrix=yx_matrix).invert()
+        yx_inverse = self._AXIS_SWAP @ xy_inverse_matrix @ self._AXIS_SWAP
+        return Transform.from_inverse(yx_inverse)  # stackreg registers reference -> moving
