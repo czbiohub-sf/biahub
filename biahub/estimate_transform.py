@@ -110,17 +110,27 @@ def transform_entries(
 # transform, one per position, one per timepoint, or one per position and timepoint?
 
 
-def _widest_pair(
-    transforms: dict, shape_zyx: tuple, voxel_um: tuple, gap_key: str = "max_um"
-) -> tuple[float, tuple]:
-    """Return the largest `gap_key` gap between any two of `transforms` (by key), and the pair."""
+def _pair_gaps(transforms: dict, shape_zyx: tuple, voxel_um: tuple) -> dict:
+    """Return `displacement_to` between every two of `transforms`, once per pair.
+
+    Keyed (a, b) in the order of `transforms`' keys, a before b.
+    """
     keys = list(transforms)
+    return {
+        (keys[a], keys[b]): transforms[keys[a]].displacement_to(
+            transforms[keys[b]], shape_zyx, voxel_um
+        )
+        for a in range(len(keys))
+        for b in range(a + 1, len(keys))
+    }
+
+
+def _widest_pair(pair_gaps: dict, gap_key: str = "max_um") -> tuple[float, tuple]:
+    """Return the largest `gap_key` gap in `_pair_gaps`' table, and its pair (the first on ties)."""
     best, pair = 0.0, ()
-    for a in range(len(keys)):
-        for b in range(a + 1, len(keys)):
-            gap = transforms[keys[a]].displacement_to(transforms[keys[b]], shape_zyx, voxel_um)
-            if gap[gap_key] > best or not pair:
-                best, pair = gap[gap_key], (keys[a], keys[b])
+    for keys, gap in pair_gaps.items():
+        if gap[gap_key] > best or not pair:
+            best, pair = gap[gap_key], keys
     return best, pair
 
 
@@ -148,13 +158,18 @@ def transform_spread(
     by_p = [
         (p, {(p, t): estimates[p, t] for t in times if (p, t) in estimates}) for p in positions
     ]
+    # each group with every pair's gap, computed once (every gap key reads the same table)
+    by_t = [
+        (t, _pair_gaps(group, shape_zyx, voxel_um)) for t, group in by_t if len(group) >= 2
+    ]
+    by_p = [
+        (p, _pair_gaps(group, shape_zyx, voxel_um)) for p, group in by_p if len(group) >= 2
+    ]
 
     def widest(groups, gap_key="max_um"):
         best, worst, where = None, (), None
-        for label, group in groups:
-            if len(group) < 2:
-                continue
-            gap, pair = _widest_pair(group, shape_zyx, voxel_um, gap_key)
+        for label, pair_gaps in groups:
+            gap, pair = _widest_pair(pair_gaps, gap_key)
             if best is None or gap > best:
                 best, worst, where = gap, pair, label
         return best, worst, where
@@ -219,35 +234,26 @@ def pool_transforms(
     keys = sorted(estimates)
     if not keys:
         raise ValueError("no estimates to pool")
-    gaps = np.array(
-        [
-            [
-                0.0
-                if a == b
-                else estimates[a].displacement_to(estimates[b], shape_zyx, voxel_um)["max_um"]
-                for b in keys
-            ]
-            for a in keys
-        ]
-    )
-    medoid = keys[_medoid(gaps)]
-    matrix = np.array(estimates[medoid].matrix, dtype=float)
+    table = _pair_gaps({k: estimates[k] for k in keys}, shape_zyx, voxel_um)
+
+    def gap(a, b):  # the table holds each pair once; the gap is the same either way
+        return table[a, b] if (a, b) in table else table[b, a]
+
+    max_um = np.array([[0.0 if a == b else gap(a, b)["max_um"] for b in keys] for a in keys])
+    medoid = keys[_medoid(max_um)]
+    transform = estimates[medoid]
     z_shift = 0.0
     if z == "median":
         centre = (np.asarray(shape_zyx, dtype=float) - 1) / 2
         depths = [estimates[k].apply_points(centre[None])[0, 0] for k in keys]
-        z_shift = float(np.median(depths) - estimates[medoid].apply_points(centre[None])[0, 0])
-        matrix[0, 3] += z_shift
+        z_shift = float(np.median(depths) - depths[keys.index(medoid)])
+        transform = Transform.from_translation([z_shift, 0.0, 0.0]) @ transform
     spread = transform_spread(
         {(k, 0): estimates[k] for k in keys}, shape_zyx, voxel_um, tolerance_um
     )
-    gaps = [
-        estimates[medoid].displacement_to(estimates[k], shape_zyx, voxel_um)
-        for k in keys
-        if k != medoid
-    ]
+    gaps = [gap(medoid, k) for k in keys if k != medoid]
     return {
-        "transform": Transform(matrix),
+        "transform": transform,
         "medoid": medoid,
         "gap_to_medoid_um": {
             axis: float(np.median([g[f"max_{axis}_um"] for g in gaps])) if gaps else None
