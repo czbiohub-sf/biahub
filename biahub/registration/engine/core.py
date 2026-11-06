@@ -497,11 +497,14 @@ def init_run(
     reference_volumes = (
         2 * settings.reference.window + 2 if settings.reference.frame == "neighbours" else 0
     )
+    # each volume sized as the larger grid: the warped moving volume, the reference and
+    # the scores' arrays live on the reference grid
+    volume_zyx = max((Z, Y, X), tuple(ref_shape), key=np.prod)
     num_cpus, gb_ram_per_cpu = max(
         (
             _estimate_job_resources(
                 m,
-                (Z, Y, X),
+                volume_zyx,
                 reference_volumes,
                 at_least=LEFTOVER_MOTION_VOLUMES if settings.reference.leftover_motion else 0,
             )

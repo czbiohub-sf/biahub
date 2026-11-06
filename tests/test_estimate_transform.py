@@ -1307,3 +1307,26 @@ def test_a_job_reads_each_frame_once_and_computes_the_neighbour_median_once(
         for k in {t - 1, t, t + 1} & set(range(5)):
             needed[k] += 1
     assert reads == needed
+
+
+def test_an_estimate_plans_memory_for_the_larger_of_the_two_grids(tmp_path):
+    # a small moving volume registered onto a much larger reference: the job's volumes
+    # live on the reference grid, but the plan was sized from the moving one
+    from biahub.registration.engine import init_run
+    from biahub.settings import EstimateTransformSettings as Settings
+
+    def store(name, zyx):
+        path = tmp_path / f"{name}.zarr"
+        with open_ome_zarr(path, layout="hcs", mode="w", channel_names=[name]) as p:
+            p.create_position("A", "1", "0").create_zeros("0", (2, 1, *zyx), dtype=np.float32)
+        return path / "A" / "1" / "0"
+
+    small, large = store("GFP", (20, 256, 256)), store("Phase3D", (120, 1024, 1024))
+    settings = Settings(
+        moving={"channel": "GFP"},
+        reference={"frame": "cross", "channel": "Phase3D"},
+        method="phase_cross_corr",
+    )
+    plan = init_run(small, large, settings, tmp_path / "run")["resources"]["estimate"]
+    gb_per_reference_volume = 120 * 1024 * 1024 * 4 / 2**30
+    assert plan["mem_gb"] >= 10 * gb_per_reference_volume
