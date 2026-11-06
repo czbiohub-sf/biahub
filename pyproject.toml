@@ -85,7 +85,11 @@ stain = ["cytoland"]
 # have. Install it explicitly with `uv sync --extra qc`.
 qc = ["imaging_qc_pipeline[interactive]"]
 
-all = ["biahub[segment,track,gui,stain]"]
+# DCA v0.2 metadata for `biahub dca-finalize`: the dca_helpers metadata engine
+# (pinned below) and the AirTable client for the optional sample-sheet source.
+dca = ["dca_helpers", "pyairtable"]
+
+all = ["biahub[segment,track,gui,stain,dca]"]
 
 build = ["build", "twine"]
 
@@ -141,6 +145,9 @@ constraint-dependencies = ["gurobipy>=13; python_version >= '3.14'"]
 # store, `label:`, which counts the labels track writes into the projected plate)
 # and #235, which removed the `upstream_qc_dir` config key.
 imaging_qc_pipeline = { git = "https://github.com/czbiohub-sf/imaging-qc-pipeline", tag = "v0.6.0" }
+
+# v0.2.11 is the first dynamic-cell-atlas-specs release with the metadata engine.
+dca_helpers = { git = "https://github.com/chanzuckerberg/dynamic-cell-atlas-specs.git", tag = "v0.2.11" }
 
 # Pin ultrack to royerlab/ultrack main at the #289 merge. #288 gives
 # Tracker.to_geff track_id/lineage_id/seg_id node props, related_objects pointing

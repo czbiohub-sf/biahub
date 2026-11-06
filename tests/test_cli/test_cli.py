@@ -22,6 +22,7 @@ def test_main():
         "estimate-stitch",
         "stitch",
         "concatenate",
+        "dca-finalize",
         "apply-transform",
         "convert-settings",
         "estimate-crop",
