@@ -308,7 +308,7 @@ def _one_transform_per_timepoint(
 def _pass_report(outcome: PassResult) -> dict:
     return {
         "accepted": outcome.accepted,
-        "source": outcome.source,
+        "repaired_from": outcome.repaired_from,
         "score": _finite_or_none(outcome.score),
         "candidate_scores": {k: _finite_or_none(v) for k, v in outcome.scores.items()},
         "candidate_failures": outcome.failures,
@@ -335,8 +335,8 @@ def _report(result: SeriesResult, time_indices: list[int], run_id: str) -> dict:
             for t, r in result.repairs.items()
         },
         "sweeps": {str(t): _pass_report(r) for t, r in result.sweeps.items()},
-        "provenance": {str(t): source for t, source in sorted(result.provenance.items())},
-        "stand_ins": {str(t): source for t, source in sorted(result.filled_from.items())},
+        "repaired_from": {str(t): r for t, r in sorted(result.repaired_from.items())},
+        "filled_from": {str(t): f for t, f in sorted(result.filled_from.items())},
         **({"blocks": _blocks_summary(result.blocks)} if result.blocks else {}),
         **(
             {"anchor": {str(t): a for t, a in result.anchors.items()}}
@@ -701,9 +701,14 @@ def finalize_run(
         # current estimate -- a repair kept by resume may predate a redone, better one.
         if outcome.accepted and is_higher(outcome.score, result.scores.get(t)):
             _accept(
-                result, t, outcome.transform, outcome.score, outcome.source, outcome.report
+                result,
+                t,
+                outcome.transform,
+                outcome.score,
+                outcome.repaired_from,
+                outcome.report,
             )
-        click.echo(f"repair t={t}: {outcome.source} -> {outcome.score:.4f}")
+        click.echo(f"repair t={t}: {outcome.repaired_from} -> {outcome.score:.4f}")
 
     # The sweep competes with repair rather than following it: it starts from each
     # timepoint's pre-fallback estimate, and the better of the two is kept.
@@ -721,8 +726,8 @@ def finalize_run(
         )
         _fold_sweep(result, t, outcome)
         click.echo(
-            f"sweep t={t}: {outcome.source} -> {outcome.score:.4f}"
-            + ("" if result.provenance.get(t, "").startswith("sweep:") else " (not kept)")
+            f"sweep t={t}: {outcome.repaired_from} -> {outcome.score:.4f}"
+            + ("" if result.repaired_from.get(t, "").startswith("sweep:") else " (not kept)")
         )
 
     # Before the report: this records which timepoints got a stand-in.

@@ -33,7 +33,7 @@ def test_a_resumed_record_comes_back_with_the_runs_transform_type():
     assert result.transforms[0].transform_type == "euclidean"
     assert result.scores[0] == 0.8
     stand_in = TimepointRecord(
-        t=1, stand_in=np.eye(4).tolist(), stand_in_from="t=0", error="no beads"
+        t=1, stand_in=np.eye(4).tolist(), filled_from="t=0", error="no beads"
     )
     carried = stand_in.fold_into(result, transform_type="euclidean")
     assert result.stand_ins[1][1] == "t=0" and np.isnan(result.scores[1])
@@ -68,7 +68,7 @@ def test_a_pass_record_round_trips_and_falls_back_when_nothing_was_accepted():
 
     kept = Transform.from_translation([1.0, 0.0, 0.0])
     record = PassRecord(
-        t=2, matrix=None, score=None, accepted=False, source="unchanged",
+        t=2, matrix=None, score=None, accepted=False, repaired_from="unchanged",
         candidate_scores={"t-1": None}, candidate_failures={"initial": "EstimationError: x"},
     )  # fmt: skip
     assert PassRecord.from_dict(record.to_dict()) == record

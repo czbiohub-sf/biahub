@@ -79,7 +79,7 @@ def transform_entries(
         finite = score is not None and np.isfinite(score)
         filled_from = result.filled_from.get(t)
         # a repair or sweep replaced the estimate, and its blocks with it
-        replaced = filled_from is not None or t in result.provenance
+        replaced = filled_from is not None or t in result.repaired_from
         failure = None if replaced else block_failure(result.blocks.get(t))
         unreliable = (
             filled_from is not None
@@ -94,7 +94,7 @@ def transform_entries(
                 matrix=transform.to_list(),
                 score=float(score) if finite else None,
                 report=result.reports.get(t) if filled_from is None else None,
-                repaired_from=result.provenance.get(t),
+                repaired_from=result.repaired_from.get(t),
                 initialized_from=None if replaced else result.initialized_from.get(t),
                 status="unreliable" if unreliable else "accepted",
                 filled_from=filled_from,

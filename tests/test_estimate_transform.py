@@ -142,7 +142,7 @@ def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp
     )
     assert set(report["scores"]) == {"0", "1"}
     assert all(score > 0.5 for score in report["scores"].values())
-    assert report["errors"] == {} and report["stand_ins"] == {}
+    assert report["errors"] == {} and report["filled_from"] == {}
     assert (output.with_suffix("") / "run_journal.json").exists()
     assert sorted(p.name for p in (output.with_suffix("") / "timepoints").iterdir()) == [
         "0.json",
@@ -347,7 +347,7 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     assert failures["consensus_full"].startswith(
         "CandidateUnavailableError: Consensus initial transform: only 2 timepoints"
     )
-    assert report["stand_ins"] == {"2": "initial"}
+    assert report["filled_from"] == {"2": "initial"}
     assert (output.with_suffix("") / "repairs" / "2.json").exists()
 
     journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
@@ -519,7 +519,7 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
     for t, row in enumerate(_inverse_translations(output)):
         np.testing.assert_allclose(row, (t + 1) * step, atol=0.5)
     record = json.loads((output.with_suffix("") / "timepoints" / "2.json").read_text())
-    assert {"stand_in", "stand_in_from"} <= set(record)
+    assert {"stand_in", "filled_from"} <= set(record)
 
 
 def test_repair_is_skipped_for_a_method_that_ignores_initial_transforms(tmp_path, capsys):
@@ -765,7 +765,7 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
         "bead_matching.hungarian_match_settings.cost_threshold=0.05",
         "bead_matching.hungarian_match_settings.cost_threshold=0.2",
     }
-    assert report["provenance"] == {}
+    assert report["repaired_from"] == {}
     assert (output.with_suffix("") / "sweeps" / "2.json").exists()
     journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
     assert [(a["t"], a["pass_name"]) for a in journal["attempts"]] == [(2, "sweep")]
@@ -886,7 +886,9 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
     repaired = Transform.from_translation([-1.0, 3.0, -4.0])  # 1 voxel off the estimate
 
     def accepted_repair(t, *args, **kwargs):
-        return engine.PassResult(transform=repaired, score=2.0, accepted=True, source="t-1")
+        return engine.PassResult(
+            transform=repaired, score=2.0, accepted=True, repaired_from="t-1"
+        )
 
     monkeypatch.setattr(cluster, "repair_timepoint", accepted_repair)
     record = cluster._repair_timepoint_job(
@@ -916,7 +918,9 @@ def test_a_repaired_timepoint_reports_the_repairs_transform(
     outcome = PassRecord.from_dict(record).to_result(
         "euclidean", fallback=series.transforms[1]
     )
-    engine._accept(series, 1, outcome.transform, outcome.score, outcome.source, outcome.report)
+    engine._accept(
+        series, 1, outcome.transform, outcome.score, outcome.repaired_from, outcome.report
+    )
     assert series.reports[1] == record["report"] != estimate_report
 
 
@@ -950,7 +954,7 @@ def test_repair_and_sweep_reports_get_the_score_to_compare_with_unregistered(
             beads_plate, beads_plate, settings_path, t, run / "timepoints" / f"{t}.json"
         )
     accepted = engine.PassResult(
-        transform=Transform.identity(3), score=-1.0, accepted=True, source="t-1"
+        transform=Transform.identity(3), score=-1.0, accepted=True, repaired_from="t-1"
     )
     monkeypatch.setattr(cluster, "repair_timepoint", lambda *a, **k: accepted)
     monkeypatch.setattr(cluster, "sweep_timepoint", lambda *a, **k: accepted)

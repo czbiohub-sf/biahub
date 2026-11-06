@@ -201,7 +201,7 @@ class PassResult:
     transform: Transform
     score: float
     accepted: bool
-    source: str  # name of the winning candidate, or "unchanged"
+    repaired_from: str  # the winning candidate's name, or "unchanged"
     scores: dict[str, float] = field(default_factory=dict)  # every candidate that ran
     failures: dict[str, str] = field(default_factory=dict)  # candidate -> "Type: message"
     polish_rounds: int = 0  # polish rounds that improved the accepted candidate
@@ -223,7 +223,7 @@ class PassRecord:
     matrix: list | None
     score: float | None
     accepted: bool
-    source: str
+    repaired_from: str
     candidate_scores: dict[str, float | None]
     candidate_failures: dict[str, str]
     polish_rounds: int = 0
@@ -248,7 +248,7 @@ class PassRecord:
             ),
             score=-np.inf if self.score is None else self.score,
             accepted=self.accepted,
-            source=self.source,
+            repaired_from=self.repaired_from,
             scores={
                 k: float("nan") if v is None else v for k, v in self.candidate_scores.items()
             },
@@ -287,7 +287,7 @@ def _best_of(
         transform=chosen.transform,
         score=chosen.score,
         accepted=chosen.name != "unchanged",
-        source=chosen.name,
+        repaired_from=chosen.name,
         scores=chosen.scores,
         failures=chosen.failures,
     )
@@ -452,10 +452,12 @@ def repair_timepoint(
             polish_rounds,
         )
         if outcome.polish_rounds:
-            outcome.source += f"+polish{outcome.polish_rounds}"
+            outcome.repaired_from += f"+polish{outcome.polish_rounds}"
     result.repairs[t] = outcome
     if outcome.accepted:
-        _accept(result, t, outcome.transform, outcome.score, outcome.source, outcome.report)
+        _accept(
+            result, t, outcome.transform, outcome.score, outcome.repaired_from, outcome.report
+        )
     return outcome
 
 
@@ -464,13 +466,13 @@ def _accept(
     t: int,
     transform: Transform,
     score: float,
-    source: str,
+    repaired_from: str,
     report: dict | None = None,
 ):
     result.transforms[t] = transform
     result.scores[t] = score
     result.errors.pop(t, None)
-    result.provenance[t] = source
+    result.repaired_from[t] = repaired_from
     if report is None:
         result.reports.pop(t, None)
     else:
@@ -520,6 +522,6 @@ def _fold_sweep(result: SeriesResult, t: int, outcome: PassResult) -> None:
             t,
             outcome.transform,
             outcome.score,
-            f"sweep:{outcome.source}",
+            f"sweep:{outcome.repaired_from}",
             outcome.report,
         )

@@ -178,7 +178,7 @@ def test_repair_touches_only_flagged_timepoints_and_journals_them():
 
     assert result.flagged == [5]
     assert list(result.repairs) == [5]
-    assert result.repairs[5].accepted and result.repairs[5].source == "fix"
+    assert result.repairs[5].accepted and result.repairs[5].repaired_from == "fix"
     assert result.transforms[5] is fix and result.scores[5] == 0.95
     assert [result.transforms[t] for t in range(8) if t != 5] == [IDENTITY] * 7
 
@@ -363,7 +363,7 @@ def test_repair_polishes_only_accepted_repairs():
 
     repair = result.repairs[5]
     assert repair.accepted and repair.repair_transform_score == pytest.approx(0.3)
-    assert repair.polish_rounds == 2 and repair.source == "fix+polish2"
+    assert repair.polish_rounds == 2 and repair.repaired_from == "fix+polish2"
     assert result.scores[5] == pytest.approx(0.5)
     assert result.transforms[5].translation[0] == 3.0
     assert list(result.repairs) == [5]
@@ -402,17 +402,17 @@ def test_sweep_timepoint_keeps_the_best_trial_that_beats_the_estimate():
         2, mov, FixedFrame(0), trials, IDENTITY, _score_by_x_on_frame, result
     )
 
-    assert outcome.accepted and outcome.source == "b"
+    assert outcome.accepted and outcome.repaired_from == "b"
     assert outcome.scores == pytest.approx({"a": 0.05, "b": 0.4, "c": 0.3})
     assert result.scores[2] == pytest.approx(0.4)
-    assert result.provenance[2] == "sweep:b"
+    assert result.repaired_from[2] == "sweep:b"
 
 
 def test_sweep_competes_with_repair_from_the_pre_fallback_score():
     mov, result = _series_with_one_poor_timepoint()
     baseline = result.scores[2]
     result.transforms[2] = Transform.from_translation([6.0, 0.0, 0.0])  # a repair landed
-    result.scores[2], result.provenance[2] = 0.6, "t-1"
+    result.scores[2], result.repaired_from[2] = 0.6, "t-1"
 
     outcome = sweep_timepoint(
         2,
@@ -426,7 +426,7 @@ def test_sweep_competes_with_repair_from_the_pre_fallback_score():
     )
 
     assert outcome.accepted, "the sweep beat the estimate it started from"
-    assert result.provenance[2] == "t-1" and result.scores[2] == 0.6, "but not the repair"
+    assert result.repaired_from[2] == "t-1" and result.scores[2] == 0.6, "but not the repair"
     assert result.sweeps[2] is outcome
 
 
@@ -439,9 +439,9 @@ def test_sweep_skips_a_raising_trial_and_names_it():
     outcome = sweep_timepoint(
         2, mov, FixedFrame(0), {"bad": _Raises()}, IDENTITY, _score_by_x_on_frame, result
     )
-    assert not outcome.accepted and outcome.source == "unchanged"
+    assert not outcome.accepted and outcome.repaired_from == "unchanged"
     assert outcome.failures == {"bad": "EstimationError: too few matches"}
-    assert 2 not in result.provenance
+    assert 2 not in result.repaired_from
 
 
 def _shift_x(dx):
@@ -582,7 +582,7 @@ def _records(result, upto):
             "score": result.scores[t],
             "error": result.errors.get(t),
             "stand_in": stand_in[0].matrix.tolist() if stand_in else None,
-            "stand_in_from": stand_in[1] if stand_in else None,
+            "filled_from": stand_in[1] if stand_in else None,
         }
     return records
 

@@ -171,8 +171,8 @@ sbatch file sets `#SBATCH --partition=...`; set only what you need there -- a
 From `transforms.yml`, `<run>/estimate_transform_report.json`, `<run>/run_journal.json` and
 the per-timepoint records `<run>/timepoints/<t>.json`:
 
-- score distribution (median, min), `flagged`, `repairs` (accepted, source, before ->
-  after), `stand_ins`, and the `unreliable` entries with their notes.
+- score distribution (median, min), `flagged`, `repairs` (accepted, repaired_from, before ->
+  after), `filled_from` (the stand-ins), and the `unreliable` entries with their notes.
 - per-timepoint `metrics`, in the records (`median_residual` in voxels should sit well under 1 on good
   timepoints; `n_matched` close to the detected bead count).
 - `report` metrics next to each score (the config's `score.report`), compared with the

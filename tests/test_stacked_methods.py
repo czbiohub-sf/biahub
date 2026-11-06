@@ -459,7 +459,7 @@ def test_a_timepoint_whose_block_failed_is_unreliable_and_says_why():
     assert (entries[1].status, entries[1].note) == ("accepted", None)
 
     # a repair that replaced the estimate replaced its blocks too
-    result.provenance[0] = "consensus_full"
+    result.repaired_from[0] = "consensus_full"
     entries = transform_entries(result, [0, 1], [Transform.identity(3)] * 2, hard_fail=0.0)
     assert (entries[0].status, entries[0].note) == ("accepted", None)
 

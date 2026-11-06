@@ -50,7 +50,7 @@ def test_repair_picks_the_best_scoring_candidate_not_the_first_or_last():
     )
 
     assert result.accepted is True
-    assert result.source == "close"
+    assert result.repaired_from == "close"
     np.testing.assert_allclose(result.transform.matrix[:3, 3], [9.0, 9.0, 9.0])
 
 
@@ -74,7 +74,7 @@ def test_repair_keeps_current_when_no_candidate_beats_it():
     )
 
     assert result.accepted is False
-    assert result.source == "unchanged"
+    assert result.repaired_from == "unchanged"
     assert result.transform is current
 
 
@@ -104,7 +104,7 @@ def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
     )
 
     assert result.accepted is True
-    assert result.source == "good"
+    assert result.repaired_from == "good"
     assert result.failures == {"broken": "EstimationError: simulated candidate failure"}
     assert set(result.scores) == {"good"}
 
@@ -163,7 +163,7 @@ def test_repair_skips_a_candidate_whose_initial_for_raises_without_failing_the_p
     )
 
     assert result.accepted is True
-    assert result.source == "good"
+    assert result.repaired_from == "good"
 
 
 def test_a_repair_candidate_with_a_bug_is_not_hidden_as_a_failed_candidate():
@@ -202,7 +202,7 @@ def test_a_sweep_outcome_scoring_nan_is_not_folded_over_a_finite_estimate():
         transform=Transform.from_translation([5.0, 0.0, 0.0]),
         score=float("nan"),
         accepted=True,
-        source="trial_0",
+        repaired_from="trial_0",
         scores={},
         failures={},
     )

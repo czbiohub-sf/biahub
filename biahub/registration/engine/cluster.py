@@ -360,7 +360,7 @@ def _estimate_propagated_job(
             score=_finite_or_none(result.scores.get(t)),
             error=result.errors.get(t),
             stand_in=stand_in[0].to_list() if stand_in else None,
-            stand_in_from=stand_in[1] if stand_in else None,
+            filled_from=stand_in[1] if stand_in else None,
             best_candidate=result.best_candidate.get(t),
             blocks=result.blocks.get(t),
             metrics=_bead_metrics(settings, result, t, mov, ref, job.reference_policy),
@@ -439,7 +439,7 @@ def _repair_timepoint_job(
     record = PassRecord(
         t=t,
         accepted=outcome.accepted,
-        source=outcome.source,
+        repaired_from=outcome.repaired_from,
         score=_finite_or_none(outcome.score),
         matrix=outcome.transform.to_list() if outcome.accepted else None,
         candidate_scores={k: _finite_or_none(v) for k, v in outcome.scores.items()},
@@ -489,7 +489,7 @@ def _sweep_timepoint_job(
     record = PassRecord(
         t=t,
         accepted=outcome.accepted,
-        source=outcome.source,
+        repaired_from=outcome.repaired_from,
         score=_finite_or_none(outcome.score),
         matrix=outcome.transform.to_list() if outcome.accepted else None,
         candidate_scores={k: _finite_or_none(v) for k, v in outcome.scores.items()},

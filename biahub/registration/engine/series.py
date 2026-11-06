@@ -47,7 +47,7 @@ class SeriesResult:
     repairs: dict[int, PassResult] = field(default_factory=dict)
     sweeps: dict[int, PassResult] = field(default_factory=dict)
     # How an accepted fallback transform was reached, e.g. "consensus_full+polish1".
-    provenance: dict[int, str] = field(default_factory=dict)
+    repaired_from: dict[int, str] = field(default_factory=dict)
     # Timepoints with no transform of their own, and where the stand-in written for them
     # came from ("t=81", "initial", "identity"); set by `transforms_for_file`.
     filled_from: dict[int, str] = field(default_factory=dict)
@@ -87,7 +87,7 @@ class TimepointRecord:
     error: str | None = None
     failed: bool = False
     stand_in: list | None = None  # propagation: what the next timepoint starts from
-    stand_in_from: str | None = None
+    filled_from: str | None = None
     initialized_from: str | None = None  # "file" or "file+refined" (from: file)
     best_candidate: str | None = None  # competing candidates: the one kept
     blocks: list[dict] | None = None  # a stack: what each block did
@@ -118,7 +118,7 @@ class TimepointRecord:
                 result.reports[t] = self.report
         elif self.stand_in is not None:
             carried = Transform(self.stand_in, transform_type=transform_type)
-            result.stand_ins[t] = (carried, self.stand_in_from or "initial")
+            result.stand_ins[t] = (carried, self.filled_from or "initial")
         if self.blocks:
             result.blocks[t] = self.blocks
         if self.best_candidate:
