@@ -638,12 +638,12 @@ class VoteIcpEstimator(EstimatorBase):
             score_fn=score_fn,
         )
 
-    def _register(self, mov_peaks, ref_peaks, inverse_initial_transform, initial_radius):
+    def _register(self, mov_peaks, ref_peaks, initial_transform, initial_radius):
         s = self.settings
         return _vote_icp_register(
             mov_peaks=mov_peaks,
             ref_peaks=ref_peaks,
-            initial_transform=inverse_initial_transform,
+            initial_transform=initial_transform,
             initial_capture_radius=initial_radius,
             min_capture_radius=s.min_capture_radius,
             radius_decay=s.radius_decay,
@@ -660,11 +660,8 @@ class VoteIcpEstimator(EstimatorBase):
         mov = np.asarray(mov, dtype=np.float32)
         ref = np.asarray(ref, dtype=np.float32)
         ndim = mov.ndim
-        inverse_initial_transform = (
-            initial_transform.invert()
-            if initial_transform is not None
-            else Transform.identity(ndim)
-        ).matrix
+        if initial_transform is None:
+            initial_transform = Transform.identity(ndim)
         ref_peaks = np.asarray(self.ref_detector.detect(ref))
         dense_peaks = np.asarray(self.dense_detector.detect(mov))
         if min(len(dense_peaks), len(ref_peaks)) < self.settings.min_votes:
@@ -672,28 +669,21 @@ class VoteIcpEstimator(EstimatorBase):
                 f"vote_icp: {len(dense_peaks)} dense moving / {len(ref_peaks)} reference "
                 f"peaks (need >= {self.settings.min_votes})"
             )
-        inverse, info = self._register(
-            dense_peaks,
-            ref_peaks,
-            inverse_initial_transform,
-            self.settings.initial_capture_radius,
+        best, info = self._register(
+            dense_peaks, ref_peaks, initial_transform, self.settings.initial_capture_radius
         )
-        if inverse is None:
+        if best is None:
             raise EstimationError(
                 f"vote_icp: voting abstained after {info['iterations']} iteration(s)"
             )
-        best = Transform(inverse, transform_type=self.transform_type).invert()
         best_score = self.score_fn(best, mov, ref)
 
         precise_peaks = np.asarray(self.precise_detector.detect(mov))
         if len(precise_peaks) >= self.settings.min_votes:
-            precise_inverse, _info = self._register(
-                precise_peaks, ref_peaks, inverse, self.settings.min_capture_radius
+            precise, _info = self._register(
+                precise_peaks, ref_peaks, best, self.settings.min_capture_radius
             )
-            if precise_inverse is not None:
-                precise = Transform(
-                    precise_inverse, transform_type=best.transform_type
-                ).invert()
+            if precise is not None:
                 precise_score = self.score_fn(precise, mov, ref)
                 # a finite refinement beats a NaN coarse score (a NaN compares false)
                 if np.isfinite(precise_score) and (

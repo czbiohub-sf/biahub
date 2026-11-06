@@ -417,7 +417,7 @@ class InitialTransformCorrectionSettings(MyBaseModel):
 
 
 class VoteIcpSettings(MyBaseModel):
-    """Tunables for `estimation_mode: vote_icp` (see `pointcloud.vote_icp_register`).
+    """Tunables for `estimation_mode: vote_icp` (see `core.nodes.point_set.vote_icp_register`).
 
     The capture radius starts wide enough to reach a badly drifted initial transform and
     shrinks geometrically each iteration (default 80 -> 40 -> 20 -> 10, then held), so
@@ -468,7 +468,8 @@ class BeadsMatchSettings(MyBaseModel):
     # `algorithm` alone scores below qc_settings.score_threshold.
     spectral: Literal["off", "on_low_score", "always"] = "off"
     # "matching": detect -> match -> fit (the configured algorithm, plus `spectral`);
-    # "vote_icp": correspond-by-voting ICP over the peak clouds (pointcloud.vote_icp_register).
+    # "vote_icp": correspond-by-voting ICP over the peak clouds
+    # (core.nodes.point_set.vote_icp_register).
     estimation_mode: Literal["matching", "vote_icp"] = "matching"
     vote_icp_settings: VoteIcpSettings = VoteIcpSettings()
     initial_transform_correction_settings: InitialTransformCorrectionSettings = (

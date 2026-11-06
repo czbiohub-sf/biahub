@@ -18,7 +18,7 @@ from biahub.core.transform import Transform
 def vote_icp_register(
     mov_peaks: ArrayLike,
     ref_peaks: ArrayLike,
-    initial_transform: ArrayLike,
+    initial_transform: Transform,
     initial_capture_radius: float = 80.0,
     min_capture_radius: float = 10.0,
     radius_decay: float = 0.5,
@@ -27,7 +27,7 @@ def vote_icp_register(
     max_iterations: int = 20,
     convergence_translation: float = 0.5,
     transform_type: str = "affine",
-) -> tuple[np.ndarray | None, dict]:
+) -> tuple[Transform | None, dict]:
     """Register two peak clouds by iterated displacement voting.
 
     An ICP whose correspondence stage is a vote: each iteration maps the moving peaks
@@ -41,21 +41,17 @@ def vote_icp_register(
     Unlike one-to-one matching the vote never commits a peak to a single partner, so a
     split or fuzzy detection just casts extra votes outside the winning cluster.
 
-    `initial_transform` and the returned matrix map reference-space points to
-    moving-space sample coordinates. Returns `(None, info)` when voting abstained before
-    any fit; `info` holds iterations, converged, n_inliers and the final capture radius.
+    `initial_transform` and the returned transform are forward (moving peaks onto the
+    reference). Each fit is reference -> moving, as the votes pair them, then inverted
+    once. Returns `(None, info)` when voting abstained before any fit; `info` holds
+    iterations, converged, n_inliers and the final capture radius.
     """
     mov_peaks = np.asarray(mov_peaks, dtype=float)
     ref_peaks = np.asarray(ref_peaks, dtype=float)
-    matrix = np.asarray(initial_transform, dtype=float)
+    transform = initial_transform
     ref_tree = cKDTree(ref_peaks)
     ndim = mov_peaks.shape[1]
-
-    def map_to_ref(m):
-        inverse = np.linalg.inv(m)
-        return mov_peaks @ inverse[:ndim, :ndim].T + inverse[:ndim, ndim]
-
-    mapped = map_to_ref(matrix)
+    mapped = transform.apply_points(mov_peaks)
     radius = initial_capture_radius
     info = {"iterations": 0, "converged": False, "n_inliers": 0, "capture_radius": radius}
     fitted_once = False
@@ -78,15 +74,15 @@ def vote_icp_register(
         # A full affine needs a margin over its degrees of freedom; with fewer inliers the
         # translation update is the only fit that cannot hallucinate.
         if len(members) >= ndim + 3:
-            new_matrix = Transform.fit(
+            new = Transform.fit(
                 ref_peaks[inlier_ref], mov_peaks[inlier_mov], transform_type
-            ).matrix
+            ).invert()
         else:
-            drift = votes[members].mean(axis=0)
-            new_matrix = matrix @ Transform.from_translation(-drift).matrix
-        new_mapped = map_to_ref(new_matrix)
+            # the mapped peaks move by the votes' mean displacement
+            new = Transform.from_translation(votes[members].mean(axis=0)) @ transform
+        new_mapped = new.apply_points(mov_peaks)
         step = float(np.mean(np.linalg.norm(new_mapped - mapped, axis=1)))
-        matrix, mapped, fitted_once = new_matrix, new_mapped, True
+        transform, mapped, fitted_once = new, new_mapped, True
         info.update(iterations=iteration, n_inliers=int(len(members)), capture_radius=radius)
         radius = max(min_capture_radius, radius * radius_decay)
         if step < convergence_translation:
@@ -94,7 +90,7 @@ def vote_icp_register(
             break
     if not fitted_once:
         return None, info
-    return matrix, info
+    return transform, info
 
 
 def vote_drift(

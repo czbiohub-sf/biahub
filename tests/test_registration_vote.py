@@ -33,12 +33,14 @@ def test_vote_icp_register_recovers_a_large_offset_with_clutter():
     offset = np.array([30.0, -25.0, 40.0])
     mov = np.vstack([ref + offset, rng.uniform(0, 200, size=(6, 3))])  # + clutter
 
-    inverse, info = vote_icp_register(mov, ref, np.eye(4), initial_capture_radius=80.0)
+    found, info = vote_icp_register(
+        mov, ref, Transform.identity(3), initial_capture_radius=80.0
+    )
 
-    assert inverse is not None and info["converged"]
-    # inverse maps reference coordinates to moving sample coordinates: ref + offset.
-    np.testing.assert_allclose(inverse[:3, 3], offset, atol=0.5)
-    np.testing.assert_allclose(inverse[:3, :3], np.eye(3), atol=0.02)
+    assert found is not None and info["converged"]
+    # forward: moving peaks onto the reference, so the offset comes off
+    np.testing.assert_allclose(found.translation, -offset, atol=0.5)
+    np.testing.assert_allclose(found.linear, np.eye(3), atol=0.02)
 
 
 @pytest.mark.parametrize("transform_type", ["euclidean", "similarity", "affine"])
@@ -49,11 +51,15 @@ def test_vote_icp_register_fits_the_configured_transform_type(transform_type):
     ref = rng.uniform(0, 200, size=(30, 3))
     mov = ref * np.array([1.0, 1.04, 0.97]) + np.array([12.0, -9.0, 15.0])
 
-    inverse, _info = vote_icp_register(
-        mov, ref, np.eye(4), initial_capture_radius=80.0, transform_type=transform_type
+    found, _info = vote_icp_register(
+        mov,
+        ref,
+        Transform.identity(3),
+        initial_capture_radius=80.0,
+        transform_type=transform_type,
     )
 
-    linear = inverse[:3, :3]
+    linear = found.invert().linear  # the fit's own (reference -> moving) direction
     gram = linear.T @ linear
     if transform_type == "euclidean":
         np.testing.assert_allclose(gram, np.eye(3), atol=1e-9)
@@ -66,8 +72,10 @@ def test_vote_icp_register_fits_the_configured_transform_type(transform_type):
 def test_vote_icp_register_abstains_without_votes():
     ref = np.array([[0.0, 0.0, 0.0], [50.0, 0.0, 0.0], [0.0, 50.0, 0.0]])
     mov = ref + 500.0  # far outside any capture radius
-    inverse, info = vote_icp_register(mov, ref, np.eye(4), initial_capture_radius=20.0)
-    assert inverse is None and info["iterations"] == 0
+    found, info = vote_icp_register(
+        mov, ref, Transform.identity(3), initial_capture_radius=20.0
+    )
+    assert found is None and info["iterations"] == 0
 
 
 def test_vote_drift_finds_the_consensus_displacement():
