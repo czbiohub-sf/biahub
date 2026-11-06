@@ -2,6 +2,7 @@
 resume, finalize and the benchmark."""
 
 import numpy as np
+import pytest
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import EstimatorBase
@@ -243,3 +244,38 @@ def test_a_job_reads_nan_as_no_data_so_a_few_nan_voxels_do_not_break_the_estimat
     )  # fmt: skip
     np.testing.assert_allclose(result.transforms[0].translation, [0, -3, 2], atol=0.5)
     assert np.isfinite(result.scores[0])
+
+
+def test_previous_frame_steps_do_not_start_from_a_files_absolute_transforms(tmp_path):
+    # a file holds absolute transforms; reference.frame previous estimates steps, so the
+    # file's transforms were used as steps and the chain compounded them
+    from pydantic import ValidationError
+
+    from biahub.settings import EstimateTransformSettings
+
+    with pytest.raises(ValidationError, match="absolute"):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "previous"},
+            method="phase_cross_corr",
+            transform={"initial": {"from": "file", "file": str(tmp_path / "plate.yml")}},
+        )
+
+
+def test_the_frame_that_starts_the_chain_is_identity_not_an_estimate_against_itself():
+    from biahub.registration.engine.policies import FixedInitialTransform, PreviousFrame
+    from biahub.registration.engine.series import estimate_series
+
+    class _Counting(EstimatorBase):
+        calls = 0
+
+        def estimate(self, mov, ref, initial_transform=None):
+            _Counting.calls += 1
+            return Transform.from_translation([1.0, 0.0, 0.0])
+
+    frames = np.ones((3, 2, 4, 4), np.float32)
+    result = estimate_series(
+        frames, PreviousFrame(first=0), _Counting(),
+        FixedInitialTransform(Transform.identity(3)), lambda t, m, r: 1.0, [0, 1, 2],
+    )  # fmt: skip
+    assert result.transforms[0].is_identity and _Counting.calls == 2

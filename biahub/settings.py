@@ -1917,6 +1917,16 @@ class EstimateTransformSettings(MyBaseModel):
             raise ValueError(str(error)) from None
 
     @model_validator(mode="after")
+    def check_previous_frame_starts_from_steps(self) -> "EstimateTransformSettings":
+        if self.transform.initial_file is not None and self.reference.frame == "previous":
+            raise ValueError(
+                "transform.initial from a file holds absolute transforms, but reference "
+                "frame 'previous' estimates steps (t -> t-1): use frame 'first', "
+                "'neighbours' or 'cross' with a file"
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_pool_has_a_shared_frame(self) -> "EstimateTransformSettings":
         if self.pool is not None and self.reference.frame == "previous":
             raise ValueError(

@@ -161,6 +161,14 @@ def estimate_series(
             if on_timepoint is not None:
                 on_timepoint(t, result)
             continue
+        if reference_policy.compares_with_itself(mov, t):
+            # the frame that starts the chain: identity, as propagation records it
+            identity = Transform.identity(mov_t.ndim)
+            result.transforms[t] = identity
+            result.scores[t] = float(score_fn(identity, mov_t, ref_t))
+            if on_timepoint is not None:
+                on_timepoint(t, result)
+            continue
         initial_transform = initial_policy.initial_for(t)
         estimate, error = None, None
         try:
