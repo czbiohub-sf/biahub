@@ -524,9 +524,8 @@ class Transform:
         scale of 1 means the same physical size; then split into rotation, per-axis scale and
         shear. Translation is the reference-side offset in µm.
         """
-        matrix = np.asarray(self._matrix, dtype=float)
         mov_um, ref_um = np.asarray(mov_um, float), np.asarray(ref_um, float)
-        linear = np.diag(ref_um) @ matrix[:3, :3] @ np.diag(1.0 / mov_um)
+        linear = np.diag(ref_um) @ self.linear @ np.diag(1.0 / mov_um)
         rotation, stretch = polar(linear)
         total, yx = rotation_angles(rotation)
         scale = np.diag(stretch).copy()
@@ -536,7 +535,7 @@ class Transform:
             "rotation_deg": total,
             "rotation_yx_deg": yx,
             "shear": float(np.abs(shear).max()),
-            "translation_um": (matrix[:3, 3] * ref_um).tolist(),
+            "translation_um": (self.translation * ref_um).tolist(),
         }
 
     def output_voxel_size(self, input_um) -> tuple[float, ...]:
@@ -658,10 +657,9 @@ class Transform:
         cval: float,
     ) -> NDArray:
         """Apply transform using scipy.ndimage."""
-        # scipy applies inverse transform: output[i] = input[inv_matrix @ i]
-        inv_matrix = np.linalg.inv(self._matrix)
-        affine_matrix = inv_matrix[:-1, :-1]
-        offset = inv_matrix[:-1, -1]
+        # scipy applies inverse transform: output[i] = input[inverse @ i]
+        inverse = self.invert()
+        affine_matrix, offset = inverse.linear, inverse.translation
 
         return affine_transform(
             moving,

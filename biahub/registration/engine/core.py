@@ -811,12 +811,8 @@ def leftover_motion_report(
         for t, record in sorted(result.raw_shifts.items())
         if t in time_indices
     ]
-    corrections = {
-        t: np.asarray(m.matrix)[:3, 3] for t, m in zip(time_indices, transforms, strict=True)
-    }
-    approximate = any(
-        not np.allclose(np.asarray(m.matrix)[:3, :3], np.eye(3), atol=1e-6) for m in transforms
-    )
+    corrections = {t: m.translation for t, m in zip(time_indices, transforms, strict=True)}
+    approximate = any(not np.allclose(m.linear, np.eye(3), atol=1e-6) for m in transforms)
     report = {
         "approximate": approximate,
         "transforms": leftover_motion(pairs, corrections, voxel_um),
