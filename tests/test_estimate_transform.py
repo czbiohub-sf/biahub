@@ -90,6 +90,8 @@ def _write_config(
             "bead_matching",
             BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
         )
+    # repair is off unless a config asks for it; these runs ask, as the bead template does
+    blocks.setdefault("fallback", {"repair": {}})
     settings = EstimateTransformSettings(
         moving=ChannelSettings(channel=source),
         reference=reference
@@ -932,9 +934,10 @@ def test_repair_and_sweep_reports_get_the_score_to_compare_with_unregistered(
         tmp_path,
         score={"report": ["correlation"]},
         fallback={
+            "repair": {},
             "sweep": {
                 "grid": [{"bead_matching.hungarian_match_settings.cost_threshold": [0.05]}]
-            }
+            },
         },
     )
     run = tmp_path / "run"

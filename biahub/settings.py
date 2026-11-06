@@ -1560,11 +1560,12 @@ class SweepSettings(MyBaseModel):
     the union of each sub-grid's cross product, so parameters that are inert together
     (hungarian vs spectral) are swept without paying for their product. Paths are checked
     when the config loads. Each flagged timepoint keeps the best of its original, repaired
-    and swept transforms; `max_timepoints` caps the sweep to the worst flagged timepoints.
+    and swept transforms; `max_timepoints` caps the sweep to the worst flagged timepoints
+    (None, as repair's: every flagged one -- a trial grid costs per flagged timepoint).
     """
 
     grid: list[dict[str, list]] = Field(min_length=1)
-    max_timepoints: int | None = 25
+    max_timepoints: int | None = None
 
     @field_validator("grid")
     @classmethod
@@ -1600,7 +1601,8 @@ def trial_name(overrides: dict[str, Any]) -> str:
 
 class FallbackSettings(MyBaseModel):
     flag: FlagSettings = FlagSettings()
-    repair: RepairSettings | None = RepairSettings()
+    # off unless the config asks for it: a method that ignores where it starts gains nothing
+    repair: RepairSettings | None = None
     sweep: SweepSettings | None = None
 
 

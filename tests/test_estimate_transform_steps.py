@@ -99,7 +99,7 @@ def _by_steps(movings, config, output, references=(), crashes_ok=False):
 def test_the_steps_write_what_one_call_writes(beads_plate_with_a_blank_timepoint, tmp_path):
     # t=2 has no beads: flagged, repaired and swept, so every step runs.
     plate = beads_plate_with_a_blank_timepoint
-    config = _write_config(tmp_path, fallback={"sweep": SWEEP})
+    config = _write_config(tmp_path, fallback={"repair": {}, "sweep": SWEEP})
     one_call = tmp_path / "one" / "transforms.yml"
     estimate_transform(
         [plate], config, one_call, reference_position_dirpaths=[plate], cluster="debug"

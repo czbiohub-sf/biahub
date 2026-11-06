@@ -177,9 +177,13 @@ thread counts.
 ## Flagging, repair and thresholds
 
 After estimating, timepoints below the run's `median - 2*MAD` (and below `floor`), or below
-`hard_fail`, are flagged and re-estimated from other starts (`fallback.repair.candidates`:
-`t-1`, `t+1`, `consensus`, `initial`). Repair is skipped for methods that ignore where
-they start (`phase_cross_corr`, `focus_finding`, `manual`).
+`hard_fail`, are flagged. With a `fallback.repair` block they are re-estimated from other
+starts (`candidates`: `t-1`, `t+1`, `consensus`, `initial`); without one (the default)
+they are written as they are, `unreliable` while still below the threshold. Repair is
+skipped for methods that ignore where they start (`phase_cross_corr`, `focus_finding`,
+`manual`, `shapes`): their templates set `repair: null`. A sweep
+(`fallback.sweep.max_timepoints`) and repair (`fallback.repair.max_timepoints`) both take
+every flagged timepoint unless capped.
 
 The absolute thresholds (`flag.floor: 0.8`, `flag.hard_fail: 0.4`,
 `repair.consensus_threshold: 0.75`) are the bead-overlap score's: with `score.metric:
