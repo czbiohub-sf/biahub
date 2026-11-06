@@ -49,16 +49,20 @@ def test_the_shapes_method_reads_only_the_shapes_and_the_voxel_sizes():
     assert from_start.matrix.tolist() == transform.matrix.tolist()
 
 
-def test_the_initial_transform_from_shapes_is_the_methods_answer():
-    from biahub.registration.engine.policies import ShapesInitialTransform
+def test_the_shapes_method_takes_the_voxel_sizes_it_is_given():
+    # No built-in voxel sizes: the caller reads them from each store's metadata. Same
+    # grids and no rotation or flip leave the moving volume where it is.
     from biahub.registration.methods.manual.shapes import ShapesEstimator
 
-    policy = ShapesInitialTransform(**GRIDS, rotate90=-1, fliplr=False)
-    method = ShapesEstimator(
-        GRIDS["mov_voxel_size"], GRIDS["ref_voxel_size"], rotate90=-1, fliplr=False
+    shape, um = (30, 100, 100), (1.0, 0.5, 0.5)
+    same = ShapesEstimator(um, um, rotate90=0, fliplr=False).transform_for(shape, shape)
+    np.testing.assert_allclose(same.matrix, np.eye(4), atol=1e-12)
+    # the moving voxels twice the reference's in z: one moving plane spans two reference
+    # ones (the forward transform doubles z)
+    coarse = ShapesEstimator((2.0, 0.5, 0.5), um, rotate90=0, fliplr=False).transform_for(
+        shape, shape
     )
-    answer = method.estimate(np.zeros(GRIDS["mov_shape"]), np.zeros(GRIDS["ref_shape"]))
-    assert policy.initial_for(3).matrix.tolist() == answer.matrix.tolist()
+    np.testing.assert_allclose(np.diag(coarse.matrix)[:3], (2.0, 1.0, 1.0))
 
 
 def test_method_shapes_needs_its_block_and_builds_with_the_stores_voxel_sizes():

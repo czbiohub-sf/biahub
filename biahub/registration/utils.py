@@ -11,7 +11,7 @@
   usage error (`biahub.cli.parsing.refusals_as_usage_errors`).
 
 Transforms live in `biahub.core.transform`, cropping in `biahub.estimate_crop`, the
-initial transform from the two grids in `ShapesInitialTransform` (`engine.policies`).
+initial transform from the two grids in the shapes method (`methods/manual/shapes.py`).
 Shapes are ZYX.
 """
 

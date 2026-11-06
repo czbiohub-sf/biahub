@@ -20,7 +20,6 @@ from numpy.typing import ArrayLike
 
 from biahub.core.transform import Transform
 from biahub.registration.estimators import CandidateUnavailableError
-from biahub.registration.methods.manual.shapes import ShapesEstimator
 
 
 @runtime_checkable
@@ -226,33 +225,6 @@ class FixedInitialTransform:
 
     def __init__(self, transform: Transform):
         self.transform = transform
-
-    def initial_for(self, t: int) -> Transform:
-        return self.transform
-
-
-class ShapesInitialTransform:
-    """`transform.initial: {from: shapes}`: the shapes method's answer for the two grids.
-
-    The same transform for every t, computed once (see `ShapesEstimator`).
-    """
-
-    keep_unless_beaten = False
-
-    def __init__(
-        self,
-        mov_shape: tuple,
-        ref_shape: tuple,
-        mov_voxel_size: tuple,
-        ref_voxel_size: tuple,
-        rotate90: int,
-        fliplr: bool,
-        transform_type: str = "affine",
-    ):
-        method = ShapesEstimator(
-            mov_voxel_size, ref_voxel_size, rotate90, fliplr, transform_type
-        )
-        self.transform = method.transform_for(mov_shape, ref_shape)
 
     def initial_for(self, t: int) -> Transform:
         return self.transform

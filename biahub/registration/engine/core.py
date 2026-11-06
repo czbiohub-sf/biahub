@@ -57,7 +57,6 @@ from biahub.registration.engine.policies import (
     NeighbourMedian,
     PreviousFrame,
     ReferencePolicy,
-    ShapesInitialTransform,
 )
 from biahub.registration.engine.series import (
     SeriesResult,
@@ -465,24 +464,18 @@ def init_run(
     init = settings.transform.initial
     if init is not None and init.from_ == "shapes":
         # the run's settings hold the matrix it computed, so every job reads the same one
-        shapes = ShapesInitialTransform(
-            mov_shape=(Z, Y, X),
-            ref_shape=tuple(ref_shape),
-            mov_voxel_size=mov_voxel_size,
-            ref_voxel_size=ref_voxel_size,
-            rotate90=init.rotate90,
-            fliplr=init.fliplr,
-            transform_type=settings.transform.type,
+        method = ShapesEstimator(
+            mov_voxel_size, ref_voxel_size, init.rotate90, init.fliplr, settings.transform.type
         )
+        shapes = method.transform_for((Z, Y, X), tuple(ref_shape))
         settings.transform.initial = InitialTransformSettings(
             from_="matrix",
-            matrix=shapes.transform.to_list(),
+            matrix=shapes.to_list(),
             direction="forward",
             propagate=init.propagate,
         )
         click.echo(
-            "Computed the initial transform from the store shapes (forward):\n"
-            f"{shapes.transform.matrix}"
+            f"Computed the initial transform from the store shapes (forward):\n{shapes.matrix}"
         )
     estimator, _score_fn = build_estimator(settings, (Z, Y, X), mov_voxel_size, ref_voxel_size)
     initial_transforms = (
