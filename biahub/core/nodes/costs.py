@@ -158,13 +158,17 @@ def weighted_cost(
     C_total = np.zeros((n, m), dtype=np.float32)
     w = weights
 
+    def scaled(cost):
+        """With `normalize`, the cost divided by its largest value (into [0, 1])."""
+        if not normalize:
+            return cost
+        peak = cost.max()
+        return cost / peak if peak > 0 else cost
+
     # Position distance
     if w["dist"] > 0:
         C_dist = cdist(moving.nodes, reference.nodes, metric=distance_metric)
-        if normalize:
-            max_val = C_dist.max()
-            if max_val > 0:
-                C_dist = C_dist / max_val
+        C_dist = scaled(C_dist)
         C_total += w["dist"] * C_dist
 
     # Edge consistency
@@ -172,10 +176,7 @@ def weighted_cost(
         C_edge_len = edge_consistency_cost(
             moving, reference, attr_type="distance", default_cost=1e6
         )
-        if normalize:
-            max_val = C_edge_len.max()
-            if max_val > 0:
-                C_edge_len = C_edge_len / max_val
+        C_edge_len = scaled(C_edge_len)
         C_total += w["edge_length"] * C_edge_len
 
     if w["edge_angle"] > 0 and moving.dim == 2:
@@ -194,18 +195,12 @@ def weighted_cost(
         if w["pca_dir"] > 0:
             dot = np.clip(np.dot(mov_dirs, ref_dirs.T), -1.0, 1.0)
             C_dir = 1 - np.abs(dot)
-            if normalize:
-                max_val = C_dir.max()
-                if max_val > 0:
-                    C_dir = C_dir / max_val
+            C_dir = scaled(C_dir)
             C_total += w["pca_dir"] * C_dir
 
         if w["pca_aniso"] > 0:
             C_aniso = np.abs(mov_aniso[:, None] - ref_aniso[None, :])
-            if normalize:
-                max_val = C_aniso.max()
-                if max_val > 0:
-                    C_aniso = C_aniso / max_val
+            C_aniso = scaled(C_aniso)
             C_total += w["pca_aniso"] * C_aniso
 
     # Edge descriptors
@@ -213,10 +208,7 @@ def weighted_cost(
         mov_desc = moving.edge_descriptors
         ref_desc = reference.edge_descriptors
         C_desc = cdist(mov_desc, ref_desc)
-        if normalize:
-            max_val = C_desc.max()
-            if max_val > 0:
-                C_desc = C_desc / max_val
+        C_desc = scaled(C_desc)
         C_total += w["edge_descriptor"] * C_desc
 
     return C_total
