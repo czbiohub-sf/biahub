@@ -263,7 +263,6 @@ def test_polish_improves_on_a_nan_score():
             return better
 
     transform, score, rounds = polish(
-        t=0,
         mov=np.zeros((2, 2, 2)),
         ref=np.zeros((2, 2, 2)),
         estimator=_Refines(),
@@ -312,9 +311,7 @@ def test_polish_keeps_improving_rounds_and_stops_at_the_first_flat_one():
     estimator = _StepEstimator(target=2.0)
     start = Transform.from_translation([0.0, 0.0, 0.0])
 
-    transform, score, rounds = polish(
-        3, None, None, estimator, start, 0.0, _score_by_x, rounds=5
-    )
+    transform, score, rounds = polish(None, None, estimator, start, 0.0, _score_by_x, rounds=5)
 
     assert (score, rounds) == (2.0, 2)
     assert transform.translation[0] == 2.0
@@ -323,14 +320,14 @@ def test_polish_keeps_improving_rounds_and_stops_at_the_first_flat_one():
 
 def test_polish_is_capped_and_a_raising_round_keeps_the_accepted_transform():
     start = Transform.from_translation([0.0, 0.0, 0.0])
-    capped = polish(0, None, None, _StepEstimator(9.0), start, 0.0, _score_by_x, rounds=1)
+    capped = polish(None, None, _StepEstimator(9.0), start, 0.0, _score_by_x, rounds=1)
     assert capped[1:] == (1.0, 1)
 
     class _Raises(EstimatorBase):
         def estimate(self, mov, ref, initial_transform=None):
             raise EstimationError("too few matches")
 
-    transform, score, rounds = polish(0, None, None, _Raises(), start, 0.5, _score_by_x, 3)
+    transform, score, rounds = polish(None, None, _Raises(), start, 0.5, _score_by_x, 3)
     assert transform is start and (score, rounds) == (0.5, 0)
 
 

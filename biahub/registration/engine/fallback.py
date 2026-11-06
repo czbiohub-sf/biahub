@@ -265,8 +265,6 @@ class PassRecord:
 
 
 def _best_of(
-    t: int,
-    pass_name: str,
     attempts: dict[str, Callable[[], Transform]],
     current_transform: Transform,
     current_score: float,
@@ -290,16 +288,13 @@ def _best_of(
         {name: scored(attempt) for name, attempt in attempts.items()},
         current=("unchanged", current_transform, current_score),
     )
-    best_name, best_transform, best_score = chosen.name, chosen.transform, chosen.score
-    scores, failures = chosen.scores, chosen.failures
-    accepted = best_name != "unchanged"
     return PassResult(
-        transform=best_transform,
-        score=best_score,
-        accepted=accepted,
-        source=best_name,
-        scores=scores,
-        failures=failures,
+        transform=chosen.transform,
+        score=chosen.score,
+        accepted=chosen.name != "unchanged",
+        source=chosen.name,
+        scores=chosen.scores,
+        failures=chosen.failures,
     )
 
 
@@ -320,8 +315,6 @@ def repair(
     raises.
     """
     return _best_of(
-        t,
-        "repair",
         {
             name: (
                 lambda policy=policy: estimator.estimate(
@@ -337,7 +330,6 @@ def repair(
 
 
 def sweep(
-    t: int,
     mov: ArrayLike,
     ref: ArrayLike,
     trials: dict[str, TransformEstimator],
@@ -346,7 +338,7 @@ def sweep(
     current_score: float,
     score_fn: Callable[[Transform], float],
 ) -> PassResult:
-    """Re-estimate `t` with each trial's estimator from `initial_transform`; keep the best.
+    """Re-estimate with each trial's estimator from `initial_transform`; keep the best.
 
     Repair changes the initial transform and keeps the method; the sweep keeps the
     initial transform and changes the method's settings, for the timepoints the run's
@@ -354,8 +346,6 @@ def sweep(
     judged on the same scale.
     """
     return _best_of(
-        t,
-        "sweep",
         {
             name: (
                 lambda estimator=estimator: estimator.estimate(
@@ -371,7 +361,6 @@ def sweep(
 
 
 def polish(
-    t: int,
     mov: ArrayLike,
     ref: ArrayLike,
     estimator: TransformEstimator,
@@ -460,7 +449,6 @@ def repair_timepoint(
     if outcome.accepted and polish_rounds:
         outcome.repair_transform_score = outcome.score
         outcome.transform, outcome.score, outcome.polish_rounds = polish(
-            t,
             mov_t,
             ref_t,
             estimator,
@@ -517,7 +505,6 @@ def sweep_timepoint(
     if baseline_score is None:
         baseline_score = result.scores[t] if current is not None else -np.inf
     outcome = sweep(
-        t=t,
         mov=mov_t,
         ref=ref_t,
         trials=trials,
