@@ -365,23 +365,8 @@ def score_transform(
     `score_fn` a fallback pass (e.g. `registration.engine.repair`) needs to compare
     candidate initial transforms against each other and against the current transform.
     """
-    warped = transform.apply(np.asarray(mov), reference=np.asarray(ref))
-    peaks = peaks_from_beads(
-        mov=warped,
-        ref=np.asarray(ref),
-        mov_peaks_settings=beads_match_settings.source_peaks_settings,
-        ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose=False,
-    )
-    if peaks is None:
-        return float("nan")
-    mov_peaks, ref_peaks = peaks
-    return overlap_score(
-        mov_peaks=mov_peaks,
-        ref_peaks=ref_peaks,
-        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
-        verbose=False,
-    )
+    metrics = bead_alignment_metrics(transform, mov, ref, beads_match_settings)
+    return float("nan") if metrics is None else metrics.overlap
 
 
 def correlation_score(
