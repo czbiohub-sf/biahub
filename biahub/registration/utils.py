@@ -112,11 +112,12 @@ def match_shape(
     ArrayLike
         Padded or cropped array.
     """
-    if np.any(shape > img.shape):
-        padded_shape = np.maximum(img.shape, shape)
-        img = pad_to_shape(img, padded_shape, mode="reflect")
-
-    if np.any(shape < img.shape):
+    # each axis on its own: pad up to the larger size, then centre-crop down to `shape`
+    shape = tuple(int(n) for n in shape)
+    padded = tuple(max(n, m) for n, m in zip(img.shape, shape, strict=True))
+    if padded != img.shape:
+        img = pad_to_shape(img, padded, mode="reflect")
+    if shape != img.shape:
         img = center_crop(img, shape)
 
     if verbose:
