@@ -580,13 +580,11 @@ class NodeGraphEstimator(EstimatorBase):
         if self.fit is not None:
             correction = self.fit(matches, mov_nodes, ref_nodes)
         else:
-            correction = Transform(
-                fit_pairs(
-                    mov_nodes[matches[:, 0]],
-                    ref_nodes[matches[:, 1]],
-                    self.transform_type,
-                    solver="skimage",  # the beads method's fit (see Transform.fit)
-                )
+            correction = fit_pairs(
+                mov_nodes[matches[:, 0]],
+                ref_nodes[matches[:, 1]],
+                self.transform_type,
+                solver="skimage",  # the beads method's fit (see Transform.fit)
             )
         if not np.all(np.isfinite(correction.matrix)):
             raise EstimationError(
@@ -786,11 +784,11 @@ class VoteInitialTransformCorrection(EstimatorBase):
             p = np.asarray([a for a, _ in pairs], dtype=float)
             q = np.asarray([b for _, b in pairs], dtype=float)
             correction = (
-                Transform.fit(q, p).matrix
+                Transform.fit(q, p)
                 if len(pairs) >= 6
-                else Transform.from_translation((p - q).mean(axis=0)).matrix
+                else Transform.from_translation((p - q).mean(axis=0))
             )
-            fitted = Transform(correction).invert() @ initial_transform
+            fitted = correction.invert() @ initial_transform
             nn_fitted = nn_median(fitted)
             if np.isfinite(nn_fitted) and nn_fitted < nn[best]:
                 corrected = fitted

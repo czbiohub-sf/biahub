@@ -158,10 +158,10 @@ def select_best(
 
 def fit_pairs(
     src, dst, transform_type: str = "affine", solver: str = "least_squares"
-) -> np.ndarray:
-    """Return `Transform.fit`'s matrix; a fit that fails is a failed estimate."""
+) -> Transform:
+    """Return `Transform.fit`'s transform; a fit that fails is a failed estimate."""
     try:
-        return Transform.fit(src, dst, transform_type, solver).matrix
+        return Transform.fit(src, dst, transform_type, solver)
     except ValueError as error:
         raise EstimationError(str(error)) from error
 

@@ -279,7 +279,7 @@ def user_assisted_registration(
         transform = EuclideanTransform()
         transform.estimate(pts_source_channel_data[:, 1:], pts_target_channel_data[:, 1:])
         z_translation = pts_target_channel_data[0, 0] - pts_source_channel_data[0, 0]
-        fitted = Transform.from_yx(transform.params, z_translation)
+        fitted = Transform.from_yx(Transform.from_skimage(transform, ndim=2), z_translation)
 
     # the clicked points are on the pre-aligned source: the fit comes after the pre-alignment
     clicked = fitted @ shapes  # moving -> reference

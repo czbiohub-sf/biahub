@@ -251,18 +251,17 @@ class Transform:
 
     @classmethod
     def from_yx(
-        cls, yx, z_shift: float = 0.0, transform_type: TransformType = "affine"
+        cls, yx: Transform, z_shift: float = 0.0, transform_type: TransformType | None = None
     ) -> Transform:
         """Return the 3D transform that applies a 2D (y, x) one in every z plane.
 
-        `yx` is the 3x3 homogeneous matrix of the 2D transform; z moves by `z_shift`.
+        z moves by `z_shift`; the type is the 2D transform's unless given.
         """
-        yx = np.asarray(yx, dtype=float)
         matrix = np.eye(4)
         matrix[0, 3] = z_shift
-        matrix[1:3, 1:3] = yx[:2, :2]
-        matrix[1:3, 3] = yx[:2, 2]
-        return cls(matrix, transform_type=transform_type)
+        matrix[1:3, 1:3] = yx.linear
+        matrix[1:3, 3] = yx.translation
+        return cls(matrix, transform_type=transform_type or yx.transform_type)
 
     @classmethod
     def from_skimage(
@@ -311,7 +310,7 @@ class Transform:
             if ndim == 2:
                 return cls(params, transform_type=transform_type)
             elif ndim == 3:
-                return cls.from_yx(params, transform_type=transform_type)
+                return cls.from_yx(cls(params, transform_type=transform_type))
         elif params.shape == (4, 4):
             # 3D transform
             if ndim == 3:

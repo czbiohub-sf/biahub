@@ -69,7 +69,7 @@ class LocalPCCEstimator(EstimatorBase):
         """Return `current` corrected by the yx fit of the tile shifts."""
         reference = np.asarray(residuals["position_um"])[:, 1:]
         mapped = reference - np.asarray(residuals["diff_um"])[:, 1:]  # where content landed
-        yx = fit_pairs(mapped, reference, self.transform_type)  # 3 x 3, in µm
+        yx = fit_pairs(mapped, reference, self.transform_type)  # the yx fit, in µm
         # fitted in µm; the reference grid's voxel k sits at ref_um * k µm
         correction = Transform.from_yx(yx).on_grid(self.ref_um)
         return Transform(

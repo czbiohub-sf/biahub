@@ -131,4 +131,4 @@ class FocusEstimator(EstimatorBase):
                 @ on_crops
                 @ Transform.from_translation(np.negative(mov_origin))
             )
-        return Transform.from_yx(yx.matrix, z_shift, transform_type="euclidean")
+        return Transform.from_yx(yx, z_shift, transform_type="euclidean")

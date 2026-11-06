@@ -222,7 +222,7 @@ def test_from_yx_applies_a_2d_transform_in_every_plane_and_shifts_z():
     yx = np.eye(3)
     yx[:2, :2] += 0.1 * rng.standard_normal((2, 2))
     yx[:2, 2] = [5.0, -3.0]
-    lifted = Transform.from_yx(yx, z_shift=2.5, transform_type="similarity")
+    lifted = Transform.from_yx(Transform(yx), z_shift=2.5, transform_type="similarity")
     points = rng.uniform(0, 50, size=(10, 3))
     moved = lifted.apply_points(points)
     np.testing.assert_allclose(moved[:, 0], points[:, 0] + 2.5)
