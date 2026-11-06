@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "biahub"
 description = "Bioimage analysis hub."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = { file = "LICENSE.md" }
 requires-python = ">=3.12"
 
 dynamic = ["version"]
