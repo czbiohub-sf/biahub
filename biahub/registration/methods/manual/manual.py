@@ -152,7 +152,6 @@ def user_assisted_registration(
         (source_channel_Z, source_channel_Y, source_channel_X),
         (target_channel_Z, target_channel_Y, target_channel_X),
     )
-    compound_affine = shapes.matrix  # moving -> reference
     # the focus slice in reference planes, for the viewer
     scaling_factor_z = source_channel_voxel_size[-3] / target_channel_voxel_size[-3]
 
@@ -273,28 +272,17 @@ def user_assisted_registration(
         # Similarity transform (rotation, translation, scaling)
         transform = SimilarityTransform()
         transform.estimate(pts_source_channel_data, pts_target_channel_data)
-        manual_estimated_transform = transform.params @ compound_affine
+        fitted = Transform(transform.params)
 
     else:
         # Euclidean transform (rotation, translation) limiting this dataset's scale and just z-translation
         transform = EuclideanTransform()
         transform.estimate(pts_source_channel_data[:, 1:], pts_target_channel_data[:, 1:])
-        yx_points_transformation_matrix = transform.params
-
         z_translation = pts_target_channel_data[0, 0] - pts_source_channel_data[0, 0]
+        fitted = Transform.from_yx(transform.params, z_translation)
 
-        z_scale_translate_matrix = np.array([[1, 0, 0, z_translation]])
-
-        # 2D to 3D matrix
-        euclidian_transform = np.vstack(
-            (
-                z_scale_translate_matrix,
-                np.insert(yx_points_transformation_matrix, 0, 0, axis=1),
-            )
-        )  # Insert 0 in the third entry of each row
-        manual_estimated_transform = euclidian_transform @ compound_affine
-
-    clicked = Transform(manual_estimated_transform)  # moving -> reference
+    # the clicked points are on the pre-aligned source: the fit comes after the pre-alignment
+    clicked = fitted @ shapes  # moving -> reference
     source_registered = clicked.apply(source_channel_volume, reference=target_channel_volume)
 
     click.echo("\nShowing registered source image in magenta")

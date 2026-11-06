@@ -124,12 +124,9 @@ def yx_and_z_shift_fit(transform_type: str, voxel_um: tuple[float, float, float]
         src = np.asarray(mov_nodes)[matches[:, 0]] * um
         dst = np.asarray(ref_nodes)[matches[:, 1]] * um
         yx = fit_pairs(src[:, 1:], dst[:, 1:], transform_type)
-        in_um = np.eye(4)
-        in_um[1:3, 1:3] = yx[:2, :2]
-        in_um[1:3, 3] = yx[:2, 2]
-        in_um[0, 3] = float(np.median(dst[:, 0] - src[:, 0]))
-        # fitted in µm; voxel k of the grid sits at um * k µm
-        return Transform(in_um, transform_type=transform_type).on_grid(um)
+        z_shift = float(np.median(dst[:, 0] - src[:, 0]))
+        in_um = Transform.from_yx(yx, z_shift, transform_type)
+        return in_um.on_grid(um)  # fitted in µm; voxel k of the grid sits at um * k µm
 
     return fit
 

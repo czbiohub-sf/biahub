@@ -70,11 +70,8 @@ class LocalPCCEstimator(EstimatorBase):
         reference = np.asarray(residuals["position_um"])[:, 1:]
         mapped = reference - np.asarray(residuals["diff_um"])[:, 1:]  # where content landed
         yx = fit_pairs(mapped, reference, self.transform_type)  # 3 x 3, in µm
-        correction_um = np.eye(4)
-        correction_um[1:3, 1:3] = yx[:2, :2]
-        correction_um[1:3, 3] = yx[:2, 2]
         # fitted in µm; the reference grid's voxel k sits at ref_um * k µm
-        correction = Transform(correction_um).on_grid(self.ref_um)
+        correction = Transform.from_yx(yx).on_grid(self.ref_um)
         return Transform(
             correction.matrix @ current.matrix, transform_type=self.transform_type
         )

@@ -215,3 +215,16 @@ def test_on_grid_is_the_same_transform_on_another_grid():
     # one scale for every axis, no offset: a 2-voxel shift is 1 voxel on a 2x coarser grid
     shift = Transform.from_translation([2.0, 4.0, -6.0]).on_grid(2)
     np.testing.assert_allclose(shift.translation, [1.0, 2.0, -3.0])
+
+
+def test_from_yx_applies_a_2d_transform_in_every_plane_and_shifts_z():
+    rng = np.random.default_rng(4)
+    yx = np.eye(3)
+    yx[:2, :2] += 0.1 * rng.standard_normal((2, 2))
+    yx[:2, 2] = [5.0, -3.0]
+    lifted = Transform.from_yx(yx, z_shift=2.5, transform_type="similarity")
+    points = rng.uniform(0, 50, size=(10, 3))
+    moved = lifted.apply_points(points)
+    np.testing.assert_allclose(moved[:, 0], points[:, 0] + 2.5)
+    np.testing.assert_allclose(moved[:, 1:], points[:, 1:] @ yx[:2, :2].T + yx[:2, 2])
+    assert lifted.transform_type == "similarity" and lifted.ndim == 3

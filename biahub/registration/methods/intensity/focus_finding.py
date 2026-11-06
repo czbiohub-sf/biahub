@@ -120,9 +120,8 @@ class FocusEstimator(EstimatorBase):
         ref = np.asarray(ref, dtype=np.float32)
         z_mov, z_ref = self._focus(mov), self._focus(ref)
 
-        matrix = np.eye(4)
-        if "z" in self.axes:
-            matrix[0, 3] = z_ref - z_mov
+        z_shift = z_ref - z_mov if "z" in self.axes else 0.0
+        yx = Transform.identity(2)
         if "xy" in self.axes:
             mov_yx = np.clip(
                 center_crop_yx(mov[z_mov : z_mov + 1], self.center_crop_xy)[0], 0, None
@@ -132,11 +131,12 @@ class FocusEstimator(EstimatorBase):
             )
             # stackreg maps the moving crop onto the reference crop; the crops start at each
             # volume's own centre, so map back through both origins.
-            crop_matrix = self._stackreg.estimate(mov_yx, ref_yx).matrix
-            to_ref, from_mov = np.eye(3), np.eye(3)
-            to_ref[:2, 2] = center_crop_yx_origin(ref.shape[-2:], self.center_crop_xy)
-            from_mov[:2, 2] = np.negative(
-                center_crop_yx_origin(mov.shape[-2:], self.center_crop_xy)
+            on_crops = self._stackreg.estimate(mov_yx, ref_yx)
+            ref_origin = center_crop_yx_origin(ref.shape[-2:], self.center_crop_xy)
+            mov_origin = center_crop_yx_origin(mov.shape[-2:], self.center_crop_xy)
+            yx = (
+                Transform.from_translation(ref_origin)
+                @ on_crops
+                @ Transform.from_translation(np.negative(mov_origin))
             )
-            matrix[1:, 1:] = to_ref @ crop_matrix @ from_mov
-        return Transform(matrix, transform_type="euclidean")
+        return Transform.from_yx(yx.matrix, z_shift, transform_type="euclidean")
