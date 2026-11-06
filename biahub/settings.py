@@ -771,18 +771,18 @@ Volume = Literal["moving", "reference"]
 
 
 class _Block(MyBaseModel):
-    """One preprocessing step on the volumes in `target`; `kind` is its name in the config."""
+    """One preprocessing step on the volumes in `volumes`; `kind` is its name in the config."""
 
     kind: str
-    target: list[Volume]
+    volumes: list[Volume]
 
-    @field_validator("target")
+    @field_validator("volumes")
     @classmethod
     def _check_target(cls, v):
         if not v:
-            raise ValueError("target needs at least one of moving, reference")
+            raise ValueError("volumes needs at least one of moving, reference")
         if len(set(v)) != len(v):
-            raise ValueError(f"target names a volume more than once: {v}")
+            raise ValueError(f"volumes names a volume more than once: {v}")
         return v
 
     @model_serializer(mode="wrap")
@@ -792,10 +792,10 @@ class _Block(MyBaseModel):
 
 
 class ClipPercentiles(_Block):
-    """Clip each target volume to its own `low`-`high` percentiles (outliers, background)."""
+    """Clip each volume to its own `low`-`high` percentiles (outliers, background)."""
 
     kind: Literal["clip_percentiles"] = "clip_percentiles"
-    target: list[Volume] = ["moving", "reference"]
+    volumes: list[Volume] = ["moving", "reference"]
     low: float = Field(1.0, ge=0, le=100)
     high: float = Field(99.5, ge=0, le=100)
 
@@ -810,21 +810,21 @@ class Sobel(_Block):
     """Edge strength (3D gradient magnitude): match structure, not intensity (cross-modal)."""
 
     kind: Literal["sobel"] = "sobel"
-    target: list[Volume] = ["moving", "reference"]
+    volumes: list[Volume] = ["moving", "reference"]
 
 
 class Log1p(_Block):
     """log(1 + v), negatives clipped to 0: compresses bright structure so dim structure counts."""
 
     kind: Literal["log1p"] = "log1p"
-    target: list[Volume] = ["moving", "reference"]
+    volumes: list[Volume] = ["moving", "reference"]
 
 
 class GaussianBlur(_Block):
     """Gaussian blur of `sigma` voxels (every axis): steadies a noisy comparison."""
 
     kind: Literal["gaussian_blur"] = "gaussian_blur"
-    target: list[Volume] = ["moving", "reference"]
+    volumes: list[Volume] = ["moving", "reference"]
     sigma: float = Field(gt=0)
 
 
@@ -836,7 +836,7 @@ class MaskCircle(_Block):
     """
 
     kind: Literal["mask_circle"] = "mask_circle"
-    target: list[Volume]
+    volumes: list[Volume]
     radius: float = Field(gt=0, le=1)
 
 
@@ -846,18 +846,18 @@ AxisRange = Literal["all"] | Annotated[list[NonNegativeInt], Field(min_length=2,
 class MaskBox(_Block):
     """Compare only inside a box: one `[start, stop]` voxel range (or `all`) per z, y, x.
 
-    Its voxels belong to one volume's grid, so it names exactly one target.
+    Its voxels belong to one volume's grid, so it names exactly one volume.
     """
 
     kind: Literal["mask_box"] = "mask_box"
-    target: list[Volume]
+    volumes: list[Volume]
     box: Annotated[list[AxisRange], Field(min_length=3, max_length=3)]
 
-    @field_validator("target")
+    @field_validator("volumes")
     @classmethod
     def _one_target(cls, v):
         if len(v) != 1:
-            raise ValueError(f"a box is in one volume's voxels: give one target, not {v}")
+            raise ValueError(f"a box is in one volume's voxels: give one volume, not {v}")
         return v
 
     @field_validator("box")
@@ -932,7 +932,7 @@ class AntsRegistrationSettings(MyBaseModel):
         # the old mask was applied only when cropping
         if data.get("crop") and data.get("ref_mask_radius") is not None:
             blocks.append(
-                f"- mask_circle: {{target: [reference], radius: {data['ref_mask_radius']}}}"
+                f"- mask_circle: {{volumes: [reference], radius: {data['ref_mask_radius']}}}"
             )
         if data.get("crop"):
             notes.append(

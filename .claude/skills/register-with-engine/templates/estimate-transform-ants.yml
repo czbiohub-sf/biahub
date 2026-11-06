@@ -28,13 +28,13 @@ reference:
   channel: <reference channel>
 preprocess:
 - clip_percentiles:
-    target:
+    volumes:
     - moving
     - reference
     low: 1.0
     high: 99.5
 - sobel:
-    target:
+    volumes:
     - moving
     - reference
 method: ants
@@ -42,7 +42,7 @@ ants: {}
 score:
   preprocess:
   - sobel:
-      target:
+      volumes:
       - moving
       - reference
   report:

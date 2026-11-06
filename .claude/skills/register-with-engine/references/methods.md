@@ -19,15 +19,15 @@ or `previous` (the channel's own first / previous frame with data: stabilization
 ## Preprocessing blocks: `preprocess`
 
 What is done to the volumes before the method, in order; empty (the default) means the raw
-volumes. Each block names the volumes it applies to, `target: [moving, reference]` (image
+volumes. Each block names the volumes it applies to, `volumes: [moving, reference]` (image
 blocks default to both; a mask names its volume), and runs in that volume's own grid.
 
 | Block | Kind | Use it when |
 |---|---|---|
 | `clip_percentiles: {low: 1, high: 99.5}` | image | hot pixels, saturated spots or bright debris dominate; each volume clipped to its own percentiles |
 | `sobel: {}` | image | the two channels show the same structures with different intensities (fluorescence vs phase / virtual staining): compare edges |
-| `mask_circle: {target: [reference], radius: 0.9}` | mask | a bright ring at the field edge (mantis v1 well edge); radius is a fraction of the half-width of the shorter yx axis |
-| `mask_box: {target: [reference], box: [all, [y0, y1], [x0, x1]]}` | mask | only part of the field is informative (cells in one region, a damaged corner); keep it large and spread out -- scale and rotation are poorly constrained from a small region |
+| `mask_circle: {volumes: [reference], radius: 0.9}` | mask | a bright ring at the field edge (mantis v1 well edge); radius is a fraction of the half-width of the shorter yx axis |
+| `mask_box: {volumes: [reference], box: [all, [y0, y1], [x0, x1]]}` | mask | only part of the field is informative (cells in one region, a damaged corner); keep it large and spread out -- scale and rotation are poorly constrained from a small region |
 
 Image blocks apply to every method; mask blocks only to methods that can use them (`ants`;
 the config refuses them for the others). Sobel before `bead_matching` would break bead detection:

@@ -65,7 +65,7 @@ def test_the_default_score_is_the_final_blocks():
     assert _settings([{"ants": {}}, {"bead_matching": {}}]).effective_score_metric == "overlap"
 
 
-MASK = {"target": ["reference"], "radius": 0.9}
+MASK = {"volumes": ["reference"], "radius": 0.9}
 
 
 @pytest.mark.parametrize(

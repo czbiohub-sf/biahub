@@ -39,7 +39,7 @@ def test_the_metric_defaults_to_the_methods_and_can_be_set():
         ("ants", {"metric": "overlap", "preprocess": [{"sobel": {}}]}, "intensity"),
         (
             "ants",
-            {"preprocess": [{"mask_circle": {"target": ["reference"], "radius": 0.9}}]},
+            {"preprocess": [{"mask_circle": {"volumes": ["reference"], "radius": 0.9}}]},
             "image blocks",
         ),
     ],
@@ -224,8 +224,8 @@ def test_scores_with_a_padding_margin_work_on_2d_images():
     [
         ([{"sobel": {}}], 1),
         # each volume filtered once, as with one block on both
-        ([{"sobel": {"target": ["moving"]}}, {"sobel": {"target": ["reference"]}}], 1),
-        ([{"sobel": {}}, {"sobel": {"target": ["moving"]}}], 2),
+        ([{"sobel": {"volumes": ["moving"]}}, {"sobel": {"volumes": ["reference"]}}], 1),
+        ([{"sobel": {}}, {"sobel": {"volumes": ["moving"]}}], 2),
     ],
 )
 def test_the_score_margin_is_the_reach_on_the_most_filtered_volume(blocks, footprint):

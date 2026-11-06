@@ -5,7 +5,7 @@ reference:
   channel: Phase3D
 preprocess:
 - sobel:
-    target:
+    volumes:
     - moving
     - reference
 method: ants
@@ -13,7 +13,7 @@ ants: {}
 score:
   preprocess:
   - sobel:
-      target:
+      volumes:
       - moving
       - reference
 transform:

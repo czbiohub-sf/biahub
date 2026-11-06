@@ -310,7 +310,7 @@ def test_a_converted_ants_config_gets_its_preparation_as_blocks():
         "Sobel",
         "MaskCircle",
     ]
-    assert converted.preprocess[2].target == ["reference"]
+    assert converted.preprocess[2].volumes == ["reference"]
     assert converted.preprocess[2].radius == 0.9
     assert any("clip" in n for n in notes) and any("crop dropped" in n for n in notes)
 

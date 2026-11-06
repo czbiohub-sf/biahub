@@ -345,7 +345,7 @@ def estimate_crop_one_position(
 
         # the preprocess block's circle, on the phase field it belongs to, then cut to
         # the shared shape like the volumes
-        circle = MaskCircle(target=["reference"], radius=lf_mask_radius)
+        circle = MaskCircle(volumes=["reference"], radius=lf_mask_radius)
         phase_circle = build_mask(lf_shape, [circle], "reference")
         combined_mask = combined_mask * phase_circle[:Z, :Y, :X]
 

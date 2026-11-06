@@ -1,4 +1,4 @@
-"""Preprocessing blocks: named steps, each on a list of target volumes, before a method."""
+"""Preprocessing blocks: named steps, each on a list of volumes, before a method."""
 
 import numpy as np
 import pytest
@@ -22,10 +22,10 @@ def _parse(text):
 
 def test_blocks_are_read_and_written_as_name_and_parameters():
     text = """
-- clip_percentiles: {target: [moving], low: 2.0, high: 99.0}
+- clip_percentiles: {volumes: [moving], low: 2.0, high: 99.0}
 - sobel: {}
-- mask_circle: {target: [reference], radius: 0.9}
-- mask_box: {target: [reference], box: [all, [10, 50], [10, 50]]}
+- mask_circle: {volumes: [reference], radius: 0.9}
+- mask_box: {volumes: [reference], box: [all, [10, 50], [10, 50]]}
 """
     blocks = _parse(text)
     assert [type(b).__name__ for b in blocks] == [
@@ -34,12 +34,12 @@ def test_blocks_are_read_and_written_as_name_and_parameters():
         "MaskCircle",
         "MaskBox",
     ]
-    assert blocks[1].target == ["moving", "reference"]  # image blocks default to both
+    assert blocks[1].volumes == ["moving", "reference"]  # image blocks default to both
     # written back in the form it was read in, so a run's resolved settings read the same
     dumped = BLOCKS.dump_python(blocks)
-    assert dumped[0] == {"clip_percentiles": {"target": ["moving"], "low": 2.0, "high": 99.0}}
+    assert dumped[0] == {"clip_percentiles": {"volumes": ["moving"], "low": 2.0, "high": 99.0}}
     assert dumped[3] == {
-        "mask_box": {"target": ["reference"], "box": ["all", [10, 50], [10, 50]]}
+        "mask_box": {"volumes": ["reference"], "box": ["all", [10, 50], [10, 50]]}
     }
     assert BLOCKS.validate_python(dumped) == blocks
 
@@ -47,13 +47,13 @@ def test_blocks_are_read_and_written_as_name_and_parameters():
 @pytest.mark.parametrize(
     "text, message",
     [
-        ("- sobel: {target: []}", "at least one"),
-        ("- sobel: {target: [moving, moving]}", "more than once"),
-        ("- sobel: {target: [phase]}", "moving"),
-        ("- mask_circle: {radius: 0.9}", "target"),  # a mask names its grid
-        ("- mask_box: {target: [moving, reference], box: [all, all, all]}", "one target"),
-        ("- mask_box: {target: [reference], box: [all, [50, 10], all]}", "start"),
-        ("- mask_circle: {target: [reference], radius: 1.5}", "radius"),
+        ("- sobel: {volumes: []}", "at least one"),
+        ("- sobel: {volumes: [moving, moving]}", "more than once"),
+        ("- sobel: {volumes: [phase]}", "moving"),
+        ("- mask_circle: {radius: 0.9}", "volumes"),  # a mask names its grid
+        ("- mask_box: {volumes: [moving, reference], box: [all, all, all]}", "one volume"),
+        ("- mask_box: {volumes: [reference], box: [all, [50, 10], all]}", "start"),
+        ("- mask_circle: {volumes: [reference], radius: 1.5}", "radius"),
         ("- clip_percentiles: {low: 99, high: 1}", "low"),
         ("- blur: {}", "blur"),
         ("- {sobel: {}, clip_percentiles: {}}", "one block"),
@@ -71,7 +71,7 @@ def test_image_blocks_apply_in_order_to_their_targets_only():
     rng = np.random.default_rng(0)
     volume = rng.normal(100, 10, size=(4, 16, 16)).astype(np.float32)
     volume[0, 0, 0] = 1e6  # a hot pixel
-    blocks = _parse("- clip_percentiles: {target: [moving], low: 1, high: 99}")
+    blocks = _parse("- clip_percentiles: {volumes: [moving], low: 1, high: 99}")
 
     moving = apply_image_blocks(volume, blocks, "moving")
     assert moving.max() < 1e3 and moving.max() == pytest.approx(np.percentile(volume, 99))
@@ -91,7 +91,7 @@ def test_masks_combine_and_are_none_without_a_mask_block():
     assert build_mask(shape, _parse("- sobel: {}"), "reference") is None
 
     circle = build_mask(
-        shape, _parse("- mask_circle: {target: [reference], radius: 1.0}"), "reference"
+        shape, _parse("- mask_circle: {volumes: [reference], radius: 1.0}"), "reference"
     )
     assert circle.shape == shape and circle[:, 20, 30].all() and not circle[:, 0, 0].any()
     assert (circle[0] == circle[2]).all()  # the same circle on every z slice
@@ -101,8 +101,8 @@ def test_masks_combine_and_are_none_without_a_mask_block():
     both = build_mask(
         shape,
         _parse(
-            "- mask_circle: {target: [reference], radius: 1.0}\n"
-            "- mask_box: {target: [reference], box: [[1, 2], all, [30, 60]]}"
+            "- mask_circle: {volumes: [reference], radius: 1.0}\n"
+            "- mask_box: {volumes: [reference], box: [[1, 2], all, [30, 60]]}"
         ),
         "reference",
     )
@@ -113,14 +113,14 @@ def test_masks_combine_and_are_none_without_a_mask_block():
     # the moving volume is not masked by reference blocks
     assert (
         build_mask(
-            shape, _parse("- mask_circle: {target: [reference], radius: 1.0}"), "moving"
+            shape, _parse("- mask_circle: {volumes: [reference], radius: 1.0}"), "moving"
         )
         is None
     )
 
 
 def test_a_box_outside_its_volume_is_refused():
-    blocks = _parse("- mask_box: {target: [reference], box: [all, [0, 100], all]}")
+    blocks = _parse("- mask_box: {volumes: [reference], box: [all, [0, 100], all]}")
     with pytest.raises(ValueError, match="outside"):
         build_mask((3, 40, 60), blocks, "reference")
 
@@ -160,8 +160,8 @@ def test_the_method_gets_prepared_volumes_and_masks_and_keeps_its_interface():
     from biahub.registration.preprocess import PreprocessedEstimator
 
     blocks = _parse(
-        "- clip_percentiles: {target: [moving], low: 0, high: 50}\n"
-        "- mask_box: {target: [reference], box: [all, [0, 8], all]}"
+        "- clip_percentiles: {volumes: [moving], low: 0, high: 50}\n"
+        "- mask_box: {volumes: [reference], box: [all, [0, 8], all]}"
     )
     inner = _Recording()
     wrapped = PreprocessedEstimator(inner, blocks)
@@ -190,7 +190,7 @@ def test_mask_blocks_are_refused_for_methods_that_cannot_use_them(method, tmp_pa
             moving={"channel": "GFP"},
             reference={"frame": "cross", "channel": "Phase3D"},
             method=method,
-            preprocess=[{"mask_circle": {"target": ["reference"], "radius": 0.9}}],
+            preprocess=[{"mask_circle": {"volumes": ["reference"], "radius": 0.9}}],
         )
 
 

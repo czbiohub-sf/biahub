@@ -1,7 +1,7 @@
 """Preprocessing blocks: what a config's `preprocess:` list does to the volumes.
 
 Image blocks change a volume's pixels, in order; mask blocks say where to compare. Each
-block applies to the volumes in its `target`, in that volume's own grid (see the block
+block applies to the volumes in its `volumes`, in that volume's own grid (see the block
 models in `biahub.settings`).
 """
 
@@ -66,7 +66,7 @@ def apply_image_blocks(
     out = np.asarray(volume, dtype=np.float32)
     reach = 0  # how far the filters so far reach from outside `where`
     for block in blocks:
-        if which not in block.target or isinstance(block, MASK_BLOCKS):
+        if which not in block.volumes or isinstance(block, MASK_BLOCKS):
             continue
         if isinstance(block, ClipPercentiles):
             sample = out
@@ -92,7 +92,7 @@ def apply_image_blocks(
 def blocks_footprint(blocks: PreprocessBlocks) -> int:
     """Return how far `blocks` reach on the most filtered volume, in voxels.
 
-    Each volume is filtered only by the blocks that target it, so filters on different
+    Each volume is filtered only by the blocks that name it, so filters on different
     volumes do not add up.
     """
 
@@ -102,7 +102,8 @@ def blocks_footprint(blocks: PreprocessBlocks) -> int:
         return blur_footprint(block.sigma) if isinstance(block, GaussianBlur) else 0
 
     return max(
-        sum(reach(b) for b in blocks if which in b.target) for which in ("moving", "reference")
+        sum(reach(b) for b in blocks if which in b.volumes)
+        for which in ("moving", "reference")
     )
 
 
@@ -111,7 +112,7 @@ def build_mask(shape_zyx: tuple, blocks: PreprocessBlocks, which: str) -> np.nda
     masks = [
         _mask(block, tuple(shape_zyx))
         for block in blocks
-        if isinstance(block, MASK_BLOCKS) and which in block.target
+        if isinstance(block, MASK_BLOCKS) and which in block.volumes
     ]
     if not masks:
         return None
@@ -134,7 +135,7 @@ def _mask(block, shape_zyx: tuple) -> np.ndarray:
                 continue
             if r[1] > size:
                 raise ValueError(
-                    f"mask_box {axis} range {r} is outside the {block.target[0]} volume "
+                    f"mask_box {axis} range {r} is outside the {block.volumes[0]} volume "
                     f"({axis} size {size})"
                 )
             slices.append(slice(r[0], r[1]))

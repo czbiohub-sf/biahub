@@ -232,7 +232,7 @@ def _ants_blocks(legacy, notes: list[str]) -> list[dict]:
     # the old pipeline used ref_mask_radius only to choose its crop
     if ants.ref_mask_radius is not None and ants.crop:
         blocks.append(
-            {"mask_circle": {"target": ["reference"], "radius": ants.ref_mask_radius}}
+            {"mask_circle": {"volumes": ["reference"], "radius": ants.ref_mask_radius}}
         )
     elif ants.ref_mask_radius is not None:
         notes.append("ants ref_mask_radius dropped: without crop it was never applied")
