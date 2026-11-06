@@ -54,4 +54,4 @@ python templates/view_runs.py --plate <plate> --fov <row/col/fov> \
   nuclei_<tracker> nuclei_<tracker>_v2
 ```
 
-(`scripts/debug_track.py` predates the current track settings and runs ultrack only.)
+(`scripts/debug_track.py` runs ultrack only, on the foreground + contour path, and shows one FOV in napari.)

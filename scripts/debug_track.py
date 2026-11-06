@@ -2,11 +2,10 @@ import os
 import shutil
 from pathlib import Path
 from biahub.settings import ProjectionSettings, TrackingSettings
-import napari
 import numpy as np
 from iohub import open_ome_zarr
 from rich import print
-from biahub.project import _find_focus_per_t, project_zyx, resolve_z_indices
+from biahub.project import _FLOAT_METHODS, _find_focus_per_t, project_zyx, resolve_z_indices
 from biahub.track import check_input_dimensionality, load_data
 from biahub.tracking.methods.ultrack import detect_foreground_segmentation, run_ultrack
 from biahub.tracking.preprocess import fill_empty_frames_from_csv, run_preprocessing_pipeline
@@ -14,38 +13,53 @@ from ultrack import MainConfig
 from biahub.utils.config import update_model
 
 
-def project_fov(position_path, channel_names, projection, pixel_size, num_workers=8):
+def find_focus(position_path, projection, pixel_size, num_workers=8):
+    """Return the in-focus plane of every timepoint, as `biahub project` finds it.
+
+    None when no channel projects around the focus. With ``per: fov`` every
+    timepoint takes the median plane over T.
+    """
+    if not projection.uses_focus:
+        return None
+    focus_channel = projection.focus.channel
+    with open_ome_zarr(position_path) as dataset:
+        store_channels = dataset.channel_names
+        T = dataset.data.shape[0]
+    if focus_channel not in store_channels:
+        raise ValueError(
+            f"Focus channel {focus_channel!r} is not in {position_path} "
+            f"({store_channels}); set focus_store_path to a store that has it."
+        )
+    focus_per_t = _find_focus_per_t(
+        position_path,
+        store_channels.index(focus_channel),
+        projection.focus,
+        pixel_size,
+        num_workers=num_workers,
+    )
+    if projection.focus.per == "fov":
+        focus_per_t = np.full(T, int(round(float(np.median(focus_per_t)))))
+    print(f"Focus on {focus_channel}: {focus_per_t.tolist()}")
+    return focus_per_t
+
+
+def project_fov(position_path, channel_names, projection, focus_per_t=None):
     """Project one FOV's channels to (T, Y, X) in memory with the `biahub project` API.
 
     The same per-channel projection `biahub project` writes to a 2D plate, without
-    writing a store: find the in-focus plane (when a channel projects around it),
-    then reduce every timepoint's Z-stack.
+    writing a store: reduce every timepoint's Z-stack around ``focus_per_t`` (from
+    :func:`find_focus`) where a channel projects around the focus.
     """
+    missing = [name for name in channel_names if name not in projection.channels]
+    if missing:
+        raise ValueError(f"No projection set for channels {missing}.")
+    # Like `biahub project`, every channel is float32 when any projection is mean/sum.
+    methods = {plan.method for plan in projection.channels.values()}
+    as_float = bool(methods & set(_FLOAT_METHODS))
+
     with open_ome_zarr(position_path) as dataset:
         store_channels = dataset.channel_names
         T, _, Z, _, _ = dataset.data.shape
-        missing = [name for name in channel_names if name not in projection.channels]
-        if missing:
-            raise ValueError(f"No projection set for channels {missing}.")
-
-        focus_per_t = None
-        if projection.uses_focus:
-            focus_channel = projection.focus.channel
-            if focus_channel not in store_channels:
-                raise ValueError(
-                    f"Focus channel {focus_channel!r} is not in the store {store_channels}."
-                )
-            focus_per_t = _find_focus_per_t(
-                position_path,
-                store_channels.index(focus_channel),
-                projection.focus,
-                pixel_size,
-                num_workers=num_workers,
-            )
-            if projection.focus.per == "fov":
-                focus_per_t = np.full(T, int(round(float(np.median(focus_per_t)))))
-            print(f"Focus on {focus_channel}: {focus_per_t.tolist()}")
-
         data_dict = {}
         for name in channel_names:
             plan = projection.channels[name]
@@ -55,7 +69,8 @@ def project_fov(position_path, channel_names, projection, pixel_size, num_worker
                 focus_z = None if focus_per_t is None else int(focus_per_t[t])
                 z_indices = resolve_z_indices(plan, Z, focus_z)
                 frames.append(project_zyx(np.asarray(dataset.data[t, c]), plan.method, z_indices))
-            data_dict[name] = np.stack(frames)
+            data = np.stack(frames)
+            data_dict[name] = data.astype(np.float32, copy=False) if as_float else data
     return data_dict
 
 
@@ -100,8 +115,8 @@ def main():
         "input_images": [
             {
                 # First input: Load data from Zarr store.
-                ### CHANGE THIS VALUE - for 2D tracking this must be a projected (Z=1)
-                # plate, e.g. the virtual-stain store after `biahub project`.
+                ### CHANGE THIS VALUE - a projected (Z=1) plate, or a 3D store that
+                # this script projects with `projection` below (2D tracking).
                 "path": "/hpc/projects/intracellular_dashboard/organelle_dynamics/rerun/2025_06_26_A549_G3BP1_ZIKV/1-preprocess/label-free/2-stabilize/virtual-stain/2025_06_26_A549_G3BP1_ZIKV.zarr",
                 "channels": {
                     # Nuclei channel preprocessing pipeline
@@ -178,11 +193,11 @@ def main():
     # Convert dictionary to TrackingSettings model for validation
     config = TrackingSettings(**config)
 
-    # Z projection of the input_images[0] channels (a `biahub project` config), used
-    # when the input is 3D and output_mode is 2D. Same as nextflow/configs/a549/project.yml:
-    # mean over 60 planes starting 20 below the Phase3D in-focus plane, found per
-    # timepoint. The focus channel must be in the store; to project without focus,
-    # use e.g. {"method": "mean"} (the whole stack) and drop `focus`.
+    # Z projection of the input_images channels (a `biahub project` config), used
+    # when the input is 3D and output_mode is 2D. Same window as
+    # nextflow/configs/a549/project.yml: mean over 60 planes starting 20 below the
+    # Phase3D in-focus plane, found per timepoint. To project without focus, use
+    # e.g. {"method": "mean"} (the whole stack) and drop `focus`.
     projection = ProjectionSettings(
         channels={
             "nuclei_prediction": {"method": "mean", "z": {"center": "focus", "below": 20, "above": 40}},
@@ -190,6 +205,11 @@ def main():
         },
         focus={"channel": "Phase3D", "per": "timepoint"},
     )
+
+    ### CHANGE THIS VALUE - the plate the focus channel is read from, when it is not
+    # in input_images[0] (a virtual-stain store usually has no Phase3D; the
+    # assembled or label-free plate does). None reads it from input_images[0].
+    focus_store_path = None
 
     # ============================================================================
     # DATASET AND PATH SETUP
@@ -234,13 +254,24 @@ def main():
 
     # Load (and, for a 3D input, project) the data
     if project_input:
-        print("Projecting data...")
-        data_dict = project_fov(
-            input_images[0].path / Path(*position_key),
-            list(input_images[0].channels),
-            projection,
-            pixel_size=full_scale[-1],
+        focus_store = Path(focus_store_path) if focus_store_path else input_images[0].path
+        focus_per_t = find_focus(
+            focus_store / Path(*position_key), projection, pixel_size=full_scale[-1]
         )
+        # Every input with a path is loaded (and projected), as in `biahub track`
+        data_dict = {}
+        for image in input_images:
+            if image.path is None:
+                continue
+            print(f"Projecting data from {image.path}...")
+            data_dict.update(
+                project_fov(
+                    image.path / Path(*position_key),
+                    list(image.channels),
+                    projection,
+                    focus_per_t,
+                )
+            )
     else:
         print("Loading data...")
         data_dict = load_data(position_key, input_images)
@@ -274,13 +305,13 @@ def main():
     tracking_cfg = update_model(default_config, config.tracking_config)
     
     # Create temporary directory for tracking database
-    databaset_path = output_dirpath / f"{dataset}_config_tracking" / "_".join(position_key)
-    os.makedirs(databaset_path, exist_ok=True)
+    database_path = output_dirpath / f"{dataset}_config_tracking" / "_".join(position_key)
+    os.makedirs(database_path, exist_ok=True)
 
     print("Running Ultrack tracking...")
     tracking_labels, tracks_df, graph = run_ultrack(
         tracking_config=tracking_cfg,
-        database_path=databaset_path,
+        database_path=database_path,
         min_sibling_length=config.min_sibling_length,
         detection=foreground_mask,
         edges=contour_gradient_map,
@@ -289,9 +320,9 @@ def main():
     )
     
     # Clean up temporary tracking database
-    shutil.rmtree(databaset_path)
+    shutil.rmtree(database_path)
     
-    print(f"Tracking complete!")
+    print("Tracking complete!")
     print(f"Number of tracks: {len(tracks_df['track_id'].unique())}")
     print(f"Number of timepoints: {len(tracks_df['t'].unique())}")
  
@@ -299,6 +330,8 @@ def main():
     # VISUALIZATION
     # ============================================================================
     
+    import napari
+
     # Setup visualization parameters
     kwargs = dict(scale=scale, blending="additive")
     
@@ -310,16 +343,18 @@ def main():
     viewer.add_image(data_dict["membrane_prediction"], name="VS membrane Preprocessed", colormap="magma", **kwargs)
     
     # Add segmentation and tracking results
-    viewer.add_labels(foreground_mask, name="Foreground ", **kwargs)
-    viewer.add_image(contour_gradient_map, name="Contourn ", colormap="magma", **kwargs)
+    viewer.add_labels(foreground_mask, name="Foreground", **kwargs)
+    viewer.add_image(contour_gradient_map, name="Contour", colormap="magma", **kwargs)
     viewer.add_labels(tracking_labels, name="Tracking Segments", scale=scale)
     
     # Add tracks with graph visualization
+    # Tracks carry a time column: (t, y, x) in 2D, (t, z, y, x) in 3D
+    track_columns = ["track_id", "t", "y", "x"] if config.output_mode == "2D" else ["track_id", "t", "z", "y", "x"]
     viewer.add_tracks(
-        tracks_df[["track_id", "t", "y", "x"]],
+        tracks_df[track_columns],
         graph=graph,
         name="Tracks",
-        scale=scale,
+        scale=(1, *scale),
         colormap="hsv",
         blending="opaque",
     )
