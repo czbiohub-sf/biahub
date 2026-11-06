@@ -153,3 +153,47 @@ def test_the_flip_happens_on_the_moving_grid_when_the_widths_differ():
         flipped.apply_points(points),
         [[2.0, 50.0, 100.0], [2.0, 50.0, 150.0], [2.0, 50.0, 50.0]],
     )
+
+
+def test_a_run_from_shapes_records_the_methods_forward_answer_once(tmp_path):
+    # init_run writes the initial transform into the run's settings for every job: the
+    # forward answer as it is (it once wrote the inverse, which each job inverted back)
+    from scipy.ndimage import shift as ndi_shift
+
+    from biahub.registration.engine.core import _static_initial
+    from biahub.registration.engine.disk import ENGINE_SETTINGS_FILENAME
+    from biahub.registration.methods.manual.shapes import ShapesEstimator
+    from biahub.utils.config import model_to_yaml, yaml_to_model
+    from tests.test_estimate_transform import (
+        APPLIED_SHIFT_ZYX,
+        SHAPE,
+        _run,
+        _synthetic_bead_volume,
+        _write_plate,
+    )
+
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    mov = ndi_shift(ref, shift=APPLIED_SHIFT_ZYX, order=1, mode="constant", cval=0.0)
+    plate = _write_plate(tmp_path / "plate.zarr", [(ref, mov)])
+    config = tmp_path / "shapes.yml"
+    turn = {"rotate90": 1, "fliplr": False}
+    settings = _settings(
+        "shapes",
+        shapes=turn,
+        transform={"type": "affine", "initial": {"from": "shapes", **turn}},
+    )
+    model_to_yaml(settings, config)
+    output = tmp_path / "out" / "transforms.yml"
+    _run(plate, config, output)
+
+    resolved = yaml_to_model(
+        output.with_suffix("") / ENGINE_SETTINGS_FILENAME, EstimateTransformSettings
+    )
+    initial = resolved.transform.initial
+    expected = ShapesEstimator((1.0, 1.0, 1.0), (1.0, 1.0, 1.0), **turn).transform_for(
+        SHAPE, SHAPE
+    )
+    assert (initial.from_, initial.direction) == ("matrix", "forward")
+    np.testing.assert_array_equal(initial.matrix, expected.matrix)
+    np.testing.assert_array_equal(_static_initial(resolved).matrix, expected.matrix)

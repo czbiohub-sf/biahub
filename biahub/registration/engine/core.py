@@ -122,7 +122,7 @@ def _static_initial(settings: EstimateTransformSettings) -> Transform:
     """
     fit, init = settings.transform, settings.transform.initial
     if init is None or init.from_ != "matrix":
-        return Transform.from_inverse(np.eye(4).tolist(), fit.type)
+        return Transform(np.eye(4), transform_type=fit.type)
     if init.direction == "forward":
         return Transform(np.asarray(init.matrix, dtype=float), transform_type=fit.type)
     return Transform.from_inverse(init.matrix, fit.type)
@@ -476,13 +476,13 @@ def init_run(
         )
         settings.transform.initial = InitialTransformSettings(
             from_="matrix",
-            matrix=shapes.transform.invert().matrix.tolist(),
-            direction="inverse",
+            matrix=shapes.transform.to_list(),
+            direction="forward",
             propagate=init.propagate,
         )
         click.echo(
-            "Computed initial transform from the store shapes:\n"
-            f"{shapes.transform.invert().matrix}"
+            "Computed the initial transform from the store shapes (forward):\n"
+            f"{shapes.transform.matrix}"
         )
     estimator, _score_fn, _initial_transform = build_estimator(
         settings, (Z, Y, X), mov_voxel_size, ref_voxel_size
