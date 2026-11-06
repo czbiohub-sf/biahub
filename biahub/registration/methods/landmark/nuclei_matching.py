@@ -128,8 +128,8 @@ def yx_and_z_shift_fit(transform_type: str, voxel_um: tuple[float, float, float]
         in_um[1:3, 1:3] = yx[:2, :2]
         in_um[1:3, 3] = yx[:2, 2]
         in_um[0, 3] = float(np.median(dst[:, 0] - src[:, 0]))
-        to_vox, from_vox = np.diag([*(1.0 / um), 1.0]), np.diag([*um, 1.0])
-        return Transform(to_vox @ in_um @ from_vox, transform_type=transform_type)
+        # fitted in µm; voxel k of the grid sits at um * k µm
+        return Transform(in_um, transform_type=transform_type).on_grid(um)
 
     return fit
 
