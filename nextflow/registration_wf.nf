@@ -12,12 +12,12 @@
 //   # registration: estimate on the beads well, apply to every position
 //   nextflow run registration_wf.nf -profile slurm \
 //       --moving <deskewed.zarr> --reference <reconstructed.zarr> \
-//       --estimate_config estimate-transform-beads.yml --estimate_positions 'C/1/000000' \
+//       --estimate_config estimate-transform-bead_matching.yml --estimate_positions 'C/1/000000' \
 //       --apply --output <dir> -resume
 //
 //   # stabilization: one transform list per position, applied to the same positions
 //   nextflow run registration_wf.nf -profile slurm \
-//       --moving <data.zarr> --estimate_config estimate-transform-focus-finding.yml \
+//       --moving <data.zarr> --estimate_config estimate-transform-focus_finding.yml \
 //       --estimate_positions '*/*/*' --apply --output <dir> -resume
 //
 //   # apply an existing transforms file (e.g. after substitute-transforms)
@@ -36,7 +36,7 @@ nextflow.enable.dsl = 2
 include { collect_positions; check_environment } from './modules/common'
 include {
     estimate_transform_init_wf; estimate_transform_run_wf;
-    apply_transform_init_wf; apply_transform_run_wf
+    apply_transform_init_wf; apply_transform_run_wf; estimate_config_files
 } from './modules/registration'
 
 
@@ -87,16 +87,16 @@ workflow {
     def transforms = absolute_path(params.transforms) ?: "${out}/transforms.yml"
     def start = channel.value('start')
 
-    // An edited config reruns the estimate (staged file, main's #397); the transforms file
+    // An edited config or seed file reruns the estimate (staged, main's #397); the transforms file
     // is keyed on its content (see the module header).
     if (params.estimate_config) {
         estimate_init = estimate_transform_init_wf(
             moving, reference, params.estimate_positions, estimate_config,
-            file(estimate_config), transforms, start
+            estimate_config_files(estimate_config), transforms, start
         )
         estimated = estimate_transform_run_wf(
             estimate_init.plan, moving, reference, params.estimate_positions,
-            estimate_config, file(estimate_config), transforms, start
+            estimate_config, estimate_config_files(estimate_config), transforms, start
         )
         transforms_hash = estimated.done
     } else {

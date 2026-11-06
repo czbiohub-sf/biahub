@@ -9,6 +9,8 @@ from click.testing import CliRunner
 from iohub import open_ome_zarr
 from scipy.ndimage import shift as ndi_shift
 
+import biahub.registration.engine.cluster as cluster
+
 from biahub.cli.main import cli
 from biahub.estimate_transform import JOBS_FAILED_EXIT_CODE, estimate_transform
 from biahub.settings import PhaseCrossCorrSettings, load_transform_settings
@@ -31,7 +33,7 @@ def beads_plate_with_a_blank_timepoint(tmp_path):
     return _write_plate(tmp_path / "beads_blank.zarr", [(ref, mov), (ref, mov), (ref, blank)])
 
 
-SWEEP = {"grid": [{"beads.hungarian_match_settings.cost_threshold": [0.05, 0.2]}]}
+SWEEP = {"grid": [{"bead_matching.hungarian_match_settings.cost_threshold": [0.05, 0.2]}]}
 
 
 def _cli(*args):
@@ -97,7 +99,7 @@ def _by_steps(movings, config, output, references=(), crashes_ok=False):
 def test_the_steps_write_what_one_call_writes(beads_plate_with_a_blank_timepoint, tmp_path):
     # t=2 has no beads: flagged, repaired and swept, so every step runs.
     plate = beads_plate_with_a_blank_timepoint
-    config = _write_config(tmp_path, fallback={"sweep": SWEEP})
+    config = _write_config(tmp_path, fallback={"repair": {}, "sweep": SWEEP})
     one_call = tmp_path / "one" / "transforms.yml"
     estimate_transform(
         [plate], config, one_call, reference_position_dirpaths=[plate], cluster="debug"
@@ -125,7 +127,8 @@ def test_the_steps_refuse_what_init_did_not_start(
     common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
 
     result = _cli("--step", "estimate", *common)
-    assert result.exit_code != 0 and "run with --init first" in result.output
+    # the engine refuses with RunError; the command shows it as a usage error (exit 2)
+    assert result.exit_code == 2 and "run with --init first" in result.output
     result = _cli("--init", "--step", "flag", *common)
     assert result.exit_code != 0 and "separate calls" in result.output
 
@@ -133,7 +136,7 @@ def test_the_steps_refuse_what_init_did_not_start(
     _ok("--step", "estimate", *common)
     _ok("--step", "flag", *common)
     result = _cli("--step", "repair", "--timepoints", "0", *common)  # only t=2 is flagged
-    assert result.exit_code != 0 and "not in this run's repair list" in result.output
+    assert result.exit_code == 2 and "not in this run's repair list" in result.output
     result = _cli("--step", "flag", "--timepoints", "0", *common)
     assert result.exit_code != 0 and "--timepoints goes with" in result.output
 
@@ -160,7 +163,7 @@ def test_the_steps_estimate_several_positions_each_on_its_own(tmp_path):
     config = _write_config(
         tmp_path,
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
     movings = [path / "A" / "1" / "0", path / "A" / "1" / "1"]
@@ -190,7 +193,7 @@ def test_a_propagated_run_is_one_estimate_step(tmp_path):
             for t in range(3)
         ],
     )
-    config = _write_config(tmp_path, seed_from="previous_timepoint")
+    config = _write_config(tmp_path, propagate=True)
     output = tmp_path / "out" / "transforms.yml"
     common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
 
@@ -220,12 +223,10 @@ def test_a_retried_step_with_resume_keeps_finished_timepoints(
     _ok("--step", "flag", *common)
     _ok("--step", "repair", *common)
 
-    import biahub.registration.engine as engine
-
     def _must_not_run(*args, **kwargs):
         raise AssertionError("a finished timepoint was redone")
 
-    monkeypatch.setattr(engine, f"_{step}_timepoint_job", _must_not_run)
+    monkeypatch.setattr(cluster, f"_{step}_timepoint_job", _must_not_run)
     _ok("--step", step, "--resume", *common)
 
 
@@ -235,24 +236,23 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
     # An unexpected error on one timepoint (e.g. an unreadable chunk) must not stop the
     # steps -- under Nextflow that would end the run -- but be recorded as a failed job,
     # as the plain run does: the file is written, that timepoint unreliable with the error.
-    import biahub.registration.engine as engine
 
-    real = engine._estimate_timepoint_job
+    real = cluster._estimate_timepoint_job
 
     def crash_at_t1(source, target, settings_path, t, record_path):
         if t == 1:
             raise RuntimeError("blosc encoded value is invalid")
         return real(source, target, settings_path, t, record_path)
 
-    real_repair = engine._repair_timepoint_job
+    real_repair = cluster._repair_timepoint_job
 
     def repair_crashes_at_t1(source, target, settings_path, t, *args):
         if t == 1:
             raise RuntimeError("blosc encoded value is invalid")
         return real_repair(source, target, settings_path, t, *args)
 
-    monkeypatch.setattr(engine, "_estimate_timepoint_job", crash_at_t1)
-    monkeypatch.setattr(engine, "_repair_timepoint_job", repair_crashes_at_t1)
+    monkeypatch.setattr(cluster, "_estimate_timepoint_job", crash_at_t1)
+    monkeypatch.setattr(cluster, "_repair_timepoint_job", repair_crashes_at_t1)
     # submitit's in-process (debug) executor opens pdb on a failed job; no debugger here.
     monkeypatch.setattr("pdb.post_mortem", lambda *args, **kwargs: None)
     plate = beads_plate_with_a_blank_timepoint
@@ -274,11 +274,11 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
 
     # The crashing step exits 3 (recorded, but not a success: a workflow retries it).
     common = ["-m", plate, "-r", plate, "-c", config, "-o", by_steps]
-    monkeypatch.setattr(engine, "_estimate_timepoint_job", crash_at_t1)
+    monkeypatch.setattr(cluster, "_estimate_timepoint_job", crash_at_t1)
     assert _cli("--step", "estimate", "--timepoints", "1", *common).exit_code == 3
 
     # A failed timepoint is not "finished": a retry with --resume does it again.
-    monkeypatch.setattr(engine, "_estimate_timepoint_job", real)
+    monkeypatch.setattr(cluster, "_estimate_timepoint_job", real)
     common = ["-m", plate, "-r", plate, "-c", config, "-o", by_steps]
     _ok("--step", "estimate", "--timepoints", "1", "--resume", *common)
     record = json.loads((by_steps.with_suffix("") / "timepoints" / "1.json").read_text())
@@ -288,7 +288,6 @@ def test_a_crashing_timepoint_is_recorded_as_the_plain_run_does(
 def test_a_crashed_propagated_step_is_redone_on_resume(tmp_path, monkeypatch):
     # The sequential job raising records every unreached timepoint as failed; a retry with
     # --resume must estimate them again, not keep the stand-ins.
-    import biahub.registration.engine as engine
 
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, SHAPE)
@@ -300,22 +299,22 @@ def test_a_crashed_propagated_step_is_redone_on_resume(tmp_path, monkeypatch):
             for t in range(3)
         ],
     )
-    config = _write_config(tmp_path, seed_from="previous_timepoint")
+    config = _write_config(tmp_path, propagate=True)
     output = tmp_path / "out" / "transforms.yml"
     common = ["-m", plate, "-r", plate, "-c", config, "-o", output]
     _ok("--init", *common)
 
-    real = engine.estimate_propagated
+    real = cluster.estimate_propagated
 
     def crash(*args, **kwargs):
         raise RuntimeError("blosc encoded value is invalid")
 
-    monkeypatch.setattr(engine, "estimate_propagated", crash)
+    monkeypatch.setattr(cluster, "estimate_propagated", crash)
     _cli("--step", "estimate", *common)
     records = output.with_suffix("") / "timepoints"
     assert all(json.loads((records / f"{t}.json").read_text()).get("failed") for t in range(3))
 
-    monkeypatch.setattr(engine, "estimate_propagated", real)
+    monkeypatch.setattr(cluster, "estimate_propagated", real)
     _ok("--step", "estimate", "--resume", *common)
     for t in range(3):
         record = json.loads((records / f"{t}.json").read_text())
@@ -342,9 +341,9 @@ def test_a_stale_repair_does_not_replace_a_better_redone_estimate(
     (run / "repairs" / "2.json").write_text(
         json.dumps(
             {
-                "t": 2, "accepted": True, "source": "t-1", "score": 0.3,
+                "t": 2, "accepted": True, "repaired_from": "t-1", "score": 0.3,
                 "matrix": shift.tolist(), "candidate_scores": {"t-1": 0.3},
-                "candidate_failures": {}, "polish_rounds": 0, "reseed_score": 0.3,
+                "candidate_failures": {}, "polish_rounds": 0, "repair_transform_score": 0.3,
             }
         )
     )  # fmt: skip
@@ -373,3 +372,21 @@ def test_a_half_written_record_is_redone_not_fatal(
     record.write_text('{"t": 1, "matrix": [[1.0, 0')  # truncated
     _ok("--step", "estimate", "--timepoints", "1", "--resume", *common)
     assert json.loads(record.read_text())["matrix"] is not None
+
+
+def test_the_engine_refuses_with_a_library_error_not_a_command_line_one(tmp_path):
+    import click
+
+    from biahub.registration.engine.disk import _flags, _run_plan, _run_settings
+    from biahub.registration.utils import RunError, resolve_time_indices
+
+    assert not issubclass(RunError, click.ClickException)
+    with pytest.raises(RunError, match="out of range"):
+        resolve_time_indices([5], 3)
+    with pytest.raises(RunError, match="selects no timepoints"):
+        resolve_time_indices([], 3)
+    for read in (_run_settings, _run_plan):
+        with pytest.raises(RunError, match="run with --init first"):
+            read(tmp_path)
+    with pytest.raises(RunError, match="run --step flag first"):
+        _flags(tmp_path)

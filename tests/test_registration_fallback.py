@@ -1,17 +1,27 @@
 import numpy as np
+import pytest
 
 from biahub.core.transform import Transform
-from biahub.registration.engine import RunJournal, repair
-from biahub.registration.policies import FixedSeed
+from biahub.registration.engine import repair
+from biahub.registration.engine.policies import FixedInitialTransform
+from biahub.registration.estimators import (
+    CandidateUnavailableError,
+    EstimationError,
+    EstimatorBase,
+)
 
 
-class _EchoEstimator:
-    """Test double: estimate() just returns whatever seed it was given (or identity
-    if none), so repair's candidate-selection logic can be tested without a real
+class _EchoEstimator(EstimatorBase):
+    """Test double: estimate() just returns whatever initial transform it was given (or
+    identity if none), so repair's candidate-selection logic can be tested without a real
     estimator or real image data."""
 
-    def estimate(self, mov, ref, seed=None):
-        return seed if seed is not None else Transform.from_translation([0.0, 0.0, 0.0])
+    def estimate(self, mov, ref, initial_transform=None):
+        return (
+            initial_transform
+            if initial_transform is not None
+            else Transform.from_translation([0.0, 0.0, 0.0])
+        )
 
 
 def _score_by_closeness(transform: Transform, target: np.ndarray) -> float:
@@ -23,9 +33,9 @@ def _score_by_closeness(transform: Transform, target: np.ndarray) -> float:
 def test_repair_picks_the_best_scoring_candidate_not_the_first_or_last():
     target = np.array([10.0, 10.0, 10.0])
     candidates = {
-        "far": FixedSeed(Transform.from_translation([0.0, 0.0, 0.0])),
-        "close": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0])),  # best
-        "medium": FixedSeed(Transform.from_translation([5.0, 5.0, 5.0])),
+        "far": FixedInitialTransform(Transform.from_translation([0.0, 0.0, 0.0])),
+        "close": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0])),  # best
+        "medium": FixedInitialTransform(Transform.from_translation([5.0, 5.0, 5.0])),
     }
 
     result = repair(
@@ -40,7 +50,7 @@ def test_repair_picks_the_best_scoring_candidate_not_the_first_or_last():
     )
 
     assert result.accepted is True
-    assert result.source == "close"
+    assert result.repaired_from == "close"
     np.testing.assert_allclose(result.transform.matrix[:3, 3], [9.0, 9.0, 9.0])
 
 
@@ -48,8 +58,8 @@ def test_repair_keeps_current_when_no_candidate_beats_it():
     target = np.array([10.0, 10.0, 10.0])
     current = Transform.from_translation([9.9, 9.9, 9.9])  # already very close
     candidates = {
-        "far": FixedSeed(Transform.from_translation([0.0, 0.0, 0.0])),
-        "medium": FixedSeed(Transform.from_translation([5.0, 5.0, 5.0])),
+        "far": FixedInitialTransform(Transform.from_translation([0.0, 0.0, 0.0])),
+        "medium": FixedInitialTransform(Transform.from_translation([5.0, 5.0, 5.0])),
     }
 
     result = repair(
@@ -64,22 +74,22 @@ def test_repair_keeps_current_when_no_candidate_beats_it():
     )
 
     assert result.accepted is False
-    assert result.source == "unchanged"
+    assert result.repaired_from == "unchanged"
     assert result.transform is current
 
 
 def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
     target = np.array([10.0, 10.0, 10.0])
 
-    class _RaisingEstimator:
-        def estimate(self, mov, ref, seed=None):
-            if seed is not None and seed.matrix[0, 3] == 999.0:
-                raise RuntimeError("simulated candidate failure")
-            return seed
+    class _RaisingEstimator(EstimatorBase):
+        def estimate(self, mov, ref, initial_transform=None):
+            if initial_transform is not None and initial_transform.matrix[0, 3] == 999.0:
+                raise EstimationError("simulated candidate failure")
+            return initial_transform
 
     candidates = {
-        "broken": FixedSeed(Transform.from_translation([999.0, 0.0, 0.0])),
-        "good": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0])),
+        "broken": FixedInitialTransform(Transform.from_translation([999.0, 0.0, 0.0])),
+        "good": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0])),
     }
 
     result = repair(
@@ -94,53 +104,51 @@ def test_repair_skips_a_candidate_that_raises_without_failing_the_whole_pass():
     )
 
     assert result.accepted is True
-    assert result.source == "good"
-    assert result.failures == {"broken": "RuntimeError: simulated candidate failure"}
+    assert result.repaired_from == "good"
+    assert result.failures == {"broken": "EstimationError: simulated candidate failure"}
     assert set(result.scores) == {"good"}
 
 
-def test_repair_journals_candidate_failures_and_they_round_trip_through_disk(tmp_path):
-    journal = RunJournal()
+def test_repair_names_each_failed_candidate():
     target = np.array([10.0, 10.0, 10.0])
 
-    class _RaisingSeedPolicy:
-        def seed_for(self, t):
-            raise ValueError("not enough good timepoints yet")
+    class _RaisingInitialTransformPolicy:
+        keep_unless_beaten = False
 
-    repair(
+        def initial_for(self, t):
+            raise CandidateUnavailableError("not enough good timepoints yet")
+
+    result = repair(
         t=3,
         mov=None,
         ref=None,
         estimator=_EchoEstimator(),
         current_transform=Transform.from_translation([0.0, 0.0, 0.0]),
         current_score=_score_by_closeness(Transform.from_translation([0.0, 0.0, 0.0]), target),
-        candidates={"consensus": _RaisingSeedPolicy()},
+        candidates={"consensus": _RaisingInitialTransformPolicy()},
         score_fn=lambda t: _score_by_closeness(t, target),
-        journal=journal,
     )
 
-    (attempt,) = journal.attempts
-    assert attempt.accepted is False
-    assert attempt.failures == {"consensus": "ValueError: not enough good timepoints yet"}
-
-    path = tmp_path / "journal.json"
-    journal.save(path)
-    (reloaded,) = RunJournal.load(path).attempts
-    assert reloaded.failures == attempt.failures
+    assert result.accepted is False
+    assert result.failures == {
+        "consensus": "CandidateUnavailableError: not enough good timepoints yet"
+    }
 
 
-def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whole_pass():
-    """E.g. `ConsensusSeed` raises when too few timepoints score well enough yet --
-    that must be skipped like any other candidate failure, not crash `repair`."""
+def test_repair_skips_a_candidate_whose_initial_for_raises_without_failing_the_pass():
+    """E.g. `ConsensusInitialTransform` raises `CandidateUnavailableError` when too few timepoints
+    score well enough yet -- skipped like any other candidate failure, not crash `repair`."""
     target = np.array([10.0, 10.0, 10.0])
 
-    class _RaisingSeedPolicy:
-        def seed_for(self, t):
-            raise ValueError("not enough good timepoints yet")
+    class _RaisingInitialTransformPolicy:
+        keep_unless_beaten = False
+
+        def initial_for(self, t):
+            raise CandidateUnavailableError("not enough good timepoints yet")
 
     candidates = {
-        "not_ready": _RaisingSeedPolicy(),
-        "good": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0])),
+        "not_ready": _RaisingInitialTransformPolicy(),
+        "good": FixedInitialTransform(Transform.from_translation([9.0, 9.0, 9.0])),
     }
 
     result = repair(
@@ -155,25 +163,48 @@ def test_repair_skips_a_candidate_whose_seed_for_raises_without_failing_the_whol
     )
 
     assert result.accepted is True
-    assert result.source == "good"
+    assert result.repaired_from == "good"
 
 
-def test_repair_records_to_the_journal_when_given_one():
-    journal = RunJournal()
+def test_a_repair_candidate_with_a_bug_is_not_hidden_as_a_failed_candidate():
+    # only EstimationError and CandidateUnavailableError mean "this candidate failed";
+    # any other exception is a bug and propagates instead of being recorded as a lost
+    # candidate
     target = np.array([10.0, 10.0, 10.0])
-    candidates = {"close": FixedSeed(Transform.from_translation([9.0, 9.0, 9.0]))}
 
-    repair(
-        t=3,
-        mov=None,
-        ref=None,
-        estimator=_EchoEstimator(),
-        current_transform=Transform.from_translation([0.0, 0.0, 0.0]),
-        current_score=_score_by_closeness(Transform.from_translation([0.0, 0.0, 0.0]), target),
-        candidates=candidates,
-        score_fn=lambda t: _score_by_closeness(t, target),
-        journal=journal,
+    class _BuggyPolicy:
+        keep_unless_beaten = False
+
+        def initial_for(self, t):
+            raise TypeError("a bug")
+
+    with pytest.raises(TypeError, match="a bug"):
+        repair(
+            t=3,
+            mov=None,
+            ref=None,
+            estimator=_EchoEstimator(),
+            current_transform=Transform.from_translation([0.0, 0.0, 0.0]),
+            current_score=0.0,
+            candidates={"buggy": _BuggyPolicy()},
+            score_fn=lambda t: _score_by_closeness(t, target),
+        )
+
+
+def test_a_sweep_outcome_scoring_nan_is_not_folded_over_a_finite_estimate():
+    # `not score <= current` let a NaN outcome replace a finite estimate
+    from biahub.registration.engine.fallback import PassResult, _fold_sweep
+    from biahub.registration.engine.series import SeriesResult
+
+    kept = Transform.from_translation([1.0, 0.0, 0.0])
+    result = SeriesResult(transforms={0: kept}, scores={0: 0.8})
+    nan_outcome = PassResult(
+        transform=Transform.from_translation([5.0, 0.0, 0.0]),
+        score=float("nan"),
+        accepted=True,
+        repaired_from="trial_0",
+        scores={},
+        failures={},
     )
-
-    assert journal.attempted_this_run(3, pass_name="repair") is True
-    assert journal.accepted_this_run(3, pass_name="repair") is True
+    _fold_sweep(result, 0, nan_outcome)
+    assert result.transforms[0] is kept and result.scores[0] == 0.8

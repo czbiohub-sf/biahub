@@ -158,7 +158,7 @@ biahub apply-transform    -m ./labelfree.zarr/*/*/* -c ./stabilization/transform
                           -o ./labelfree_stabilized.zarr
 
 # REGISTER (moving light-sheet onto the label-free reference; refine an existing transform
-# by giving it as `transform.seed` in the config)
+# by giving it as `transform.initial` in the config)
 biahub estimate-transform -m ./lightsheet_deskewed.zarr/0/0/0 \
                           -r ./labelfree_reconstructed.zarr/0/0/0 \
                           -c ./estimate-registration.yml -o ./registration/transforms.yml

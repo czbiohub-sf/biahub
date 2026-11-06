@@ -21,6 +21,24 @@ TransformType = Literal["affine", "similarity", "euclidean", "rigid"]
 Backend = Literal["scipy", "ants"]
 
 
+def polar(linear: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Split a linear map into rotation @ symmetric stretch (polar decomposition)."""
+    u, sigma, vt = np.linalg.svd(linear)
+    rotation = u @ vt
+    if np.linalg.det(rotation) < 0:  # keep a proper rotation; the reflection goes in stretch
+        u[:, -1] *= -1
+        rotation = u @ vt
+    stretch = rotation.T @ linear
+    return rotation, stretch
+
+
+def rotation_angles(rotation: np.ndarray) -> tuple[float, float]:
+    """Return (total rotation angle, in-plane yx angle), in degrees, of a ZYX rotation."""
+    total = np.degrees(np.arccos(np.clip((np.trace(rotation) - 1) / 2, -1.0, 1.0)))
+    yx = np.degrees(np.arctan2(rotation[2, 1], rotation[1, 1]))
+    return float(total), float(yx)
+
+
 class Transform:
     """
     Geometric transform for 2D/3D volumes.
@@ -57,7 +75,9 @@ class Transform:
         matrix: NDArray[np.floating],
         transform_type: TransformType = "affine",
     ):
-        matrix = np.asarray(matrix, dtype=np.float64)
+        # a copy: freezing the caller's own array (np.asarray keeps a float64 one) would
+        # make it read-only for the caller
+        matrix = np.array(matrix, dtype=np.float64)
 
         if matrix.shape == (3, 3):
             self._ndim = 2
@@ -165,6 +185,85 @@ class Transform:
 
         return cls(matrix, transform_type="euclidean")
 
+    @staticmethod
+    def _yx_centres(start_shape: tuple, end_shape: tuple | None) -> tuple:
+        """Return the yx centres of two grids: (n - 1) / 2, voxel centres being 0 .. n - 1."""
+        cy_start, cx_start = (np.array(start_shape)[-2:] - 1) / 2
+        cy_end, cx_end = (
+            (cy_start, cx_start) if end_shape is None else (np.array(end_shape)[-2:] - 1) / 2
+        )
+        return cy_start, cx_start, cy_end, cx_end
+
+    @classmethod
+    def from_scaling(
+        cls, factors_zyx: tuple, start_shape: tuple, end_shape: tuple | None = None
+    ) -> Transform:
+        """Scale z, y and x from a `start_shape` grid onto an `end_shape` grid (3D, forward).
+
+        y and x are scaled about the start grid's yx centre, which lands on the end grid's
+        (default: the same shape); z is scaled about plane 0.
+        """
+        cy_start, cx_start, cy_end, cx_end = cls._yx_centres(start_shape, end_shape)
+        sz, sy, sx = factors_zyx[-3], factors_zyx[-2], factors_zyx[-1]
+        matrix = np.array(
+            [
+                [sz, 0, 0, 0],
+                [0, sy, 0, -cy_start * sy + cy_end],
+                [0, 0, sx, -cx_start * sx + cx_end],
+                [0, 0, 0, 1],
+            ]
+        )
+        return cls(matrix, transform_type="affine")
+
+    @classmethod
+    def from_rotation_yx(
+        cls, angle_deg: float, start_shape: tuple, end_shape: tuple | None = None
+    ) -> Transform:
+        """Rotate in the yx plane by `angle_deg` about the yx centres (3D, forward; z kept).
+
+        The start grid's yx centre lands on the end grid's (default: the same shape).
+        """
+        cy_start, cx_start, cy_end, cx_end = cls._yx_centres(start_shape, end_shape)
+        theta = np.radians(angle_deg)
+        cos, sin = np.cos(theta), np.sin(theta)
+        matrix = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, cos, -sin, -cy_start * cos + sin * cx_start + cy_end],
+                [0, sin, cos, -cy_start * sin - cx_start * cos + cx_end],
+                [0, 0, 0, 1],
+            ]
+        )
+        return cls(matrix, transform_type="euclidean")
+
+    @classmethod
+    def from_flip_x(cls, shape: tuple) -> Transform:
+        """Flip x (left-right) within a grid, about its own x centre (3D, forward)."""
+        _, cx = (np.array(shape)[-2:] - 1) / 2  # voxel centres run 0 .. n - 1
+        matrix = np.array(
+            [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, -1, 2 * cx],
+                [0, 0, 0, 1],
+            ]
+        )
+        return cls(matrix, transform_type="affine")
+
+    @classmethod
+    def from_yx(
+        cls, yx: Transform, z_shift: float = 0.0, transform_type: TransformType | None = None
+    ) -> Transform:
+        """Return the 3D transform that applies a 2D (y, x) one in every z plane.
+
+        z moves by `z_shift`; the type is the 2D transform's unless given.
+        """
+        matrix = np.eye(4)
+        matrix[0, 3] = z_shift
+        matrix[1:3, 1:3] = yx.linear
+        matrix[1:3, 3] = yx.translation
+        return cls(matrix, transform_type=transform_type or yx.transform_type)
+
     @classmethod
     def from_skimage(
         cls,
@@ -212,11 +311,7 @@ class Transform:
             if ndim == 2:
                 return cls(params, transform_type=transform_type)
             elif ndim == 3:
-                # Embed 2D transform in 3D (YX plane, Z unchanged)
-                matrix_3d = np.eye(4, dtype=np.float64)
-                matrix_3d[1:3, 1:3] = params[:2, :2]  # YX linear part
-                matrix_3d[1:3, 3] = params[:2, 2]  # YX translation
-                return cls(matrix_3d, transform_type=transform_type)
+                return cls.from_yx(cls(params, transform_type=transform_type))
         elif params.shape == (4, 4):
             # 3D transform
             if ndim == 3:
@@ -229,6 +324,53 @@ class Transform:
     # ==================== Algebraic Operations ====================
 
     @classmethod
+    def fit(
+        cls,
+        src: NDArray[np.floating],
+        dst: NDArray[np.floating],
+        transform_type: TransformType = "affine",
+        solver: Literal["least_squares", "skimage"] = "least_squares",
+    ) -> Transform:
+        """Return the transform of `transform_type` that best maps src_i onto dst_i.
+
+        `src` and `dst` are matched (N, D) points, D 2 or 3. "similarity" and "euclidean" /
+        "rigid" use scikit-image's estimators. "affine" depends on `solver`:
+        "least_squares" (default) fits each destination coordinate by ordinary least
+        squares (N >= D + 1), minimizing the distances in `dst`; "skimage" uses
+        scikit-image's `AffineTransform` estimator (an SVD of the homogeneous system),
+        what the beads method has always fitted with -- the two agree on exact
+        correspondences and differ slightly (sub-pixel) on noisy ones. Raises ValueError
+        when the fit fails (too few or degenerate pairs).
+        """
+        src = np.asarray(src, dtype=float)
+        dst = np.asarray(dst, dtype=float)
+        if solver not in ("least_squares", "skimage"):
+            raise ValueError(f"solver must be 'least_squares' or 'skimage', got {solver!r}")
+        if transform_type == "affine" and solver == "least_squares":
+            ndim = src.shape[1]
+            design = np.hstack([src, np.ones((len(src), 1))])
+            coeffs, *_ = np.linalg.lstsq(design, dst, rcond=None)
+            matrix = np.eye(ndim + 1)
+            matrix[:ndim, :ndim] = coeffs[:ndim].T
+            matrix[:ndim, ndim] = coeffs[ndim]
+        else:
+            from skimage.transform import (
+                AffineTransform,
+                EuclideanTransform,
+                SimilarityTransform,
+            )
+
+            model_class = {
+                "affine": AffineTransform,
+                "similarity": SimilarityTransform,
+            }.get(transform_type, EuclideanTransform)
+            model = model_class.from_estimate(src, dst)
+            if not model:
+                raise ValueError(f"{transform_type} fit failed on {len(src)} pairs")
+            matrix = np.asarray(model.params, dtype=float)
+        return cls(matrix, transform_type=transform_type)
+
+    @classmethod
     def from_inverse(cls, matrix, transform_type: TransformType = "affine") -> Transform:
         """Forward Transform from a legacy inverse-direction (reference -> moving) matrix.
 
@@ -236,7 +378,7 @@ class Transform:
         `affine_transform_zyx*`, `ants.estimate` results) is inverse-direction; this is the
         one place that becomes an engine (forward) Transform.
         """
-        return cls(np.asarray(matrix, dtype=float), transform_type=transform_type).invert()
+        return cls(matrix, transform_type=transform_type).invert()
 
     def to_inverse(self) -> list[list[float]]:
         """Legacy inverse-direction matrix (nested list, YAML-ready) from this forward Transform."""
@@ -291,6 +433,21 @@ class Transform:
         """Compose transforms using @ operator."""
         return self.compose(other)
 
+    def on_grid(self, scale, offset=0.0) -> Transform:
+        """Return this transform in the coordinates of another grid.
+
+        Index `i` of the other grid sits at `scale * i + offset` in this transform's
+        coordinates (per axis, or one number for all). A grid `f` times coarser has
+        `scale = f`; a transform fitted in µm, wanted in voxels, has `scale` = the voxel
+        size. A point mapped by the result lands where this transform sends it.
+        """
+        to_here = np.eye(self.ndim + 1)
+        to_here[: self.ndim, : self.ndim] = np.diag(np.broadcast_to(scale, self.ndim))
+        to_here[: self.ndim, self.ndim] = np.broadcast_to(offset, self.ndim)
+        return Transform(
+            np.linalg.inv(to_here) @ self._matrix @ to_here, transform_type=self._type
+        )
+
     # ==================== Application Methods ====================
 
     def apply_points(self, points: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -332,6 +489,114 @@ class Transform:
         # Convert back from homogeneous
         return transformed[:, :-1]
 
+    def displacement_to(
+        self, other: Transform, shape_zyx: tuple, voxel_um: tuple, samples: int = 9
+    ) -> dict:
+        """Return how far apart this and `other` put a volume of `shape_zyx`, in µm.
+
+        Points are sampled over the input volume (`shape_zyx`, where the transforms map
+        from) and their two images compared, in output voxels scaled by `voxel_um` (the
+        output's z, y, x). `max_um` is exact (the difference of two affine maps is largest
+        at a corner); `mean_um` is the mean over a `samples`-per-axis grid. `max_z_um` and
+        `max_yx_um` split the largest gap into its z part and its yx part.
+        """
+        axes = [np.linspace(0, n - 1, samples) for n in shape_zyx]
+        grid = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, len(shape_zyx))
+        corners = np.stack(
+            np.meshgrid(*[[0, n - 1] for n in shape_zyx], indexing="ij"), -1
+        ).reshape(-1, len(shape_zyx))
+        um = np.asarray(voxel_um, dtype=float)
+
+        def gaps(points):
+            return (self.apply_points(points) - other.apply_points(points)) * um
+
+        corner_gaps = gaps(corners)
+        return {
+            "max_um": float(np.linalg.norm(corner_gaps, axis=1).max()),
+            "mean_um": float(np.linalg.norm(gaps(grid), axis=1).mean()),
+            "max_z_um": float(np.abs(corner_gaps[:, 0]).max()),
+            "max_yx_um": float(np.linalg.norm(corner_gaps[:, 1:], axis=1).max()),
+        }
+
+    def decompose(self, mov_um, ref_um) -> dict:
+        """Return this (forward, 3D) transform's geometry in physical units, to judge it.
+
+        The voxel matrix is first expressed in µm (`diag(ref_um) @ L @ diag(mov_um)^-1`), so a
+        scale of 1 means the same physical size; then split into rotation, per-axis scale and
+        shear. Translation is the reference-side offset in µm.
+        """
+        mov_um, ref_um = np.asarray(mov_um, float), np.asarray(ref_um, float)
+        linear = np.diag(ref_um) @ self.linear @ np.diag(1.0 / mov_um)
+        rotation, stretch = polar(linear)
+        total, yx = rotation_angles(rotation)
+        scale = np.diag(stretch).copy()
+        shear = stretch - np.diag(scale)
+        return {
+            "scale_zyx": scale.tolist(),
+            "rotation_deg": total,
+            "rotation_yx_deg": yx,
+            "shear": float(np.abs(shear).max()),
+            "translation_um": (self.translation * ref_um).tolist(),
+        }
+
+    def output_voxel_size(self, input_um) -> tuple[float, ...]:
+        """Return the voxel size of `apply`'s output, from the input's (`input_um`, ZYX).
+
+        One output step along axis j is column j of the inverse matrix in input voxels;
+        each input axis is scaled by its own voxel size before the norm, so a rotation
+        that mixes axes of different sizes takes the size it lands on. Only the last
+        `ndim` values of `input_um` are read (an OME-NGFF scale has T and C first).
+        """
+        steps = np.linalg.inv(self._matrix)[: self._ndim, : self._ndim]
+        um = np.asarray(input_um, dtype=float)[-self._ndim :]
+        return tuple(float(v) for v in np.linalg.norm(steps * um[:, None], axis=0))
+
+    @staticmethod
+    def _moving_bounds(mov_shape: tuple) -> tuple[float, list]:
+        """Where `apply` has moving data along each axis: (lower, [upper per axis]).
+
+        ANTs (3D) samples up to half a voxel beyond the outer centres, the upper edge
+        excluded; scipy (2D) up to the outer centres.
+        """
+        if len(mov_shape) == 3:
+            return -0.5, [n - 0.5 - 1e-9 for n in mov_shape]
+        return 0.0, [n - 1 + 1e-9 for n in mov_shape]
+
+    def covers(self, points, mov_shape: tuple) -> NDArray[np.bool_]:
+        """Return whether `apply` has moving data at each reference-grid point (N, D)."""
+        moving = self.invert().apply_points(np.asarray(points, dtype=float))
+        lower, upper = self._moving_bounds(mov_shape)
+        return np.all((moving >= lower) & (moving <= np.asarray(upper)), axis=1)
+
+    def coverage(self, mov_shape: tuple, ref_shape: tuple) -> NDArray[np.bool_]:
+        """Return where `apply` has moving data on the reference grid (boolean).
+
+        The same as warping a volume of ones, without the warp: each reference voxel maps back
+        into the moving volume, and along a row (the last axis) an affine map is a line, so
+        the covered part of each row is one interval. The edge is the resampler's: ANTs (3D)
+        samples up to half a voxel beyond the outer centres, the upper edge excluded; scipy
+        (2D) up to the outer centres.
+        """
+        inverse = np.linalg.inv(self._matrix)
+        ndim = len(ref_shape)
+        starts = np.indices(ref_shape[:-1], dtype=float).reshape(ndim - 1, -1)  # each row's
+        first = np.full(starts.shape[1], -np.inf)
+        last = np.full(starts.shape[1], np.inf)
+        for axis in range(ndim):
+            at_zero = inverse[axis, : ndim - 1] @ starts + inverse[axis, ndim]  # moving coord
+            step = inverse[axis, ndim - 1]  # its change per voxel along the row
+            lower, upper = self._moving_bounds(mov_shape)
+            upper = upper[axis]
+            if step == 0:
+                outside = (at_zero < lower) | (at_zero > upper)
+                first[outside], last[outside] = np.inf, -np.inf
+                continue
+            a, b = (lower - at_zero) / step, (upper - at_zero) / step
+            first = np.maximum(first, np.minimum(a, b))
+            last = np.minimum(last, np.maximum(a, b))
+        x = np.arange(ref_shape[-1])
+        return ((x >= first[:, None]) & (x <= last[:, None])).reshape(ref_shape)
+
     def apply(
         self,
         moving: NDArray,
@@ -340,6 +605,7 @@ class Transform:
         mode: str = "constant",
         cval: float = 0.0,
         backend: Backend = "ants",
+        interpolation: str = "linear",
     ) -> NDArray:
         """
         Apply transform to align moving image with reference space.
@@ -356,6 +622,8 @@ class Transform:
             How to handle boundaries ('constant', 'edge', 'reflect', 'wrap'). scipy only.
         cval : float, default=0.0
             Fill value for constant mode. scipy backend only.
+        interpolation : {'linear', 'nearest'}, default='linear'
+            Resampling interpolation ('nearest' sets order 0 on the scipy backend).
         backend : {'scipy', 'ants'}, default='ants'
             Resampler. ANTs (linear interpolation) is the default because it is what the
             registration pipeline has always warped with, so re-detected bead positions
@@ -388,9 +656,11 @@ class Transform:
         ):
             backend = "scipy"
         if backend == "scipy":
+            if interpolation in ("nearest", "nearestneighbor"):
+                order = 0
             return self._apply_scipy(moving, output_shape, order, mode, cval)
         elif backend == "ants":
-            return self._apply_ants(moving, reference)
+            return self._apply_ants(moving, reference, interpolation)
         else:
             raise ValueError(f"Unknown backend: {backend}")
 
@@ -403,10 +673,9 @@ class Transform:
         cval: float,
     ) -> NDArray:
         """Apply transform using scipy.ndimage."""
-        # scipy applies inverse transform: output[i] = input[inv_matrix @ i]
-        inv_matrix = np.linalg.inv(self._matrix)
-        affine_matrix = inv_matrix[:-1, :-1]
-        offset = inv_matrix[:-1, -1]
+        # scipy applies inverse transform: output[i] = input[inverse @ i]
+        inverse = self.invert()
+        affine_matrix, offset = inverse.linear, inverse.translation
 
         return affine_transform(
             moving,
@@ -418,7 +687,16 @@ class Transform:
             cval=cval,
         )
 
-    def _apply_ants(self, moving: NDArray, reference: NDArray | None) -> NDArray:
+    # Interpolation names, as ANTs calls them.
+    _ANTS_INTERPOLATION = {
+        "linear": "linear",
+        "nearest": "nearestneighbor",
+        "nearestneighbor": "nearestneighbor",  # ANTs' own spelling
+    }
+
+    def _apply_ants(
+        self, moving: NDArray, reference: NDArray | None, interpolation: str = "linear"
+    ) -> NDArray:
         """Apply transform using ANTs."""
         try:
             import ants
@@ -447,7 +725,16 @@ class Transform:
         transform_ants = self.invert().to_ants()
 
         # Apply
-        result_ants = transform_ants.apply_to_image(moving_ants, reference=reference_ants)
+        if interpolation not in self._ANTS_INTERPOLATION:
+            raise ValueError(
+                f"interpolation must be one of {sorted(self._ANTS_INTERPOLATION)}, got "
+                f"{interpolation!r}"
+            )
+        result_ants = transform_ants.apply_to_image(
+            moving_ants,
+            reference=reference_ants,
+            interpolation=self._ANTS_INTERPOLATION[interpolation],
+        )
 
         return result_ants.numpy()
 
@@ -535,7 +822,7 @@ class Transform:
         transform_type: TransformType = "affine",
     ) -> Transform:
         """Create Transform from nested list."""
-        return cls(np.array(matrix_list), transform_type=transform_type)
+        return cls(matrix_list, transform_type=transform_type)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -548,10 +835,7 @@ class Transform:
     @classmethod
     def from_dict(cls, data: dict) -> Transform:
         """Create Transform from dictionary."""
-        return cls(
-            np.array(data["matrix"]),
-            transform_type=data.get("transform_type", "affine"),
-        )
+        return cls(data["matrix"], transform_type=data.get("transform_type", "affine"))
 
     # ==================== String Representations ====================
 

@@ -139,7 +139,7 @@ def config_filepaths() -> Callable:
     return decorator
 
 
-def config_filepath() -> Callable:
+def config_filepath(help: str = "Path to YAML configuration file.") -> Callable:
     def decorator(f: Callable) -> Callable:
         return click.option(
             "--config-filepath",
@@ -147,7 +147,7 @@ def config_filepath() -> Callable:
             required=True,
             type=click.Path(exists=True, file_okay=True, dir_okay=False),
             callback=_str_to_path,
-            help="Path to YAML configuration file.",
+            help=help,
         )(f)
 
     return decorator
@@ -308,15 +308,11 @@ def cluster() -> Callable:
     return decorator
 
 
-def init_only() -> Callable:
+def init_only(
+    help: str = "Only initialize the output store and exit; skip per-position processing.",
+) -> Callable:
     def decorator(f: Callable) -> Callable:
-        return click.option(
-            "--init",
-            "init_only",
-            is_flag=True,
-            default=False,
-            help="Only initialize the output store and exit; skip per-position processing.",
-        )(f)
+        return click.option("--init", "init_only", is_flag=True, default=False, help=help)(f)
 
     return decorator
 
@@ -368,3 +364,22 @@ def num_processes() -> Callable:
         )(f)
 
     return decorator
+
+
+def refusals_as_usage_errors(command: Callable) -> Callable:
+    """Show the library's refusals (`RunError`) as usage errors: message, exit code 2.
+
+    Goes directly above the command's `def`, under its click decorators.
+    """
+    import functools
+
+    from biahub.registration.utils import RunError
+
+    @functools.wraps(command)
+    def run(*args, **kwargs):
+        try:
+            return command(*args, **kwargs)
+        except RunError as error:
+            raise click.UsageError(str(error)) from error
+
+    return run

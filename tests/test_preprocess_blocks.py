@@ -1,0 +1,279 @@
+"""Preprocessing blocks: named steps, each on a list of volumes, before a method."""
+
+import numpy as np
+import pytest
+import yaml
+
+from pydantic import TypeAdapter, ValidationError
+
+from biahub.registration.estimators import EstimatorBase
+from biahub.registration.preprocess import apply_image_blocks, build_mask
+from biahub.settings import PreprocessBlocks
+
+BLOCKS = TypeAdapter(PreprocessBlocks)
+
+
+def _parse(text):
+    return BLOCKS.validate_python(yaml.safe_load(text))
+
+
+# --- the config form ----------------------------------------------------------------------
+
+
+def test_blocks_are_read_and_written_as_name_and_parameters():
+    text = """
+- clip_percentiles: {volumes: [moving], low: 2.0, high: 99.0}
+- sobel: {}
+- mask_circle: {volumes: [reference], radius: 0.9}
+- mask_box: {volumes: [reference], box: [all, [10, 50], [10, 50]]}
+"""
+    blocks = _parse(text)
+    assert [type(b).__name__ for b in blocks] == [
+        "ClipPercentiles",
+        "Sobel",
+        "MaskCircle",
+        "MaskBox",
+    ]
+    assert blocks[1].volumes == ["moving", "reference"]  # image blocks default to both
+    # written back in the form it was read in, so a run's resolved settings read the same
+    dumped = BLOCKS.dump_python(blocks)
+    assert dumped[0] == {"clip_percentiles": {"volumes": ["moving"], "low": 2.0, "high": 99.0}}
+    assert dumped[3] == {
+        "mask_box": {"volumes": ["reference"], "box": ["all", [10, 50], [10, 50]]}
+    }
+    assert BLOCKS.validate_python(dumped) == blocks
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("- sobel: {volumes: []}", "at least one"),
+        ("- sobel: {volumes: [moving, moving]}", "more than once"),
+        ("- sobel: {volumes: [phase]}", "moving"),
+        ("- mask_circle: {radius: 0.9}", "volumes"),  # a mask names its grid
+        ("- mask_box: {volumes: [moving, reference], box: [all, all, all]}", "one volume"),
+        ("- mask_box: {volumes: [reference], box: [all, [50, 10], all]}", "start"),
+        ("- mask_circle: {volumes: [reference], radius: 1.5}", "radius"),
+        ("- clip_percentiles: {low: 99, high: 1}", "low"),
+        ("- blur: {}", "blur"),
+        ("- {sobel: {}, clip_percentiles: {}}", "one block"),
+    ],
+)
+def test_blocks_refuse_what_cannot_work(text, message):
+    with pytest.raises(ValidationError, match=message):
+        _parse(text)
+
+
+# --- what the blocks do -------------------------------------------------------------------
+
+
+def test_image_blocks_apply_in_order_to_their_targets_only():
+    rng = np.random.default_rng(0)
+    volume = rng.normal(100, 10, size=(4, 16, 16)).astype(np.float32)
+    volume[0, 0, 0] = 1e6  # a hot pixel
+    blocks = _parse("- clip_percentiles: {volumes: [moving], low: 1, high: 99}")
+
+    moving = apply_image_blocks(volume, blocks, "moving")
+    assert moving.max() < 1e3 and moving.max() == pytest.approx(np.percentile(volume, 99))
+    np.testing.assert_array_equal(apply_image_blocks(volume, blocks, "reference"), volume)
+
+    sobel_after_clip = apply_image_blocks(
+        volume, _parse("- clip_percentiles: {}\n- sobel: {}"), "moving"
+    )
+    from skimage import filters
+
+    clipped = np.clip(volume, *np.percentile(volume, [1.0, 99.5]))
+    np.testing.assert_allclose(sobel_after_clip, filters.sobel(clipped), rtol=1e-5)
+
+
+def test_masks_combine_and_are_none_without_a_mask_block():
+    shape = (3, 40, 60)
+    assert build_mask(shape, _parse("- sobel: {}"), "reference") is None
+
+    circle = build_mask(
+        shape, _parse("- mask_circle: {volumes: [reference], radius: 1.0}"), "reference"
+    )
+    assert circle.shape == shape and circle[:, 20, 30].all() and not circle[:, 0, 0].any()
+    assert (circle[0] == circle[2]).all()  # the same circle on every z slice
+    # radius is a fraction of the half-width of the shorter axis, centred on (y, x)
+    assert circle[1, 20, 30 + 20].all() and not circle[1, 20, 30 + 21].any()
+
+    both = build_mask(
+        shape,
+        _parse(
+            "- mask_circle: {volumes: [reference], radius: 1.0}\n"
+            "- mask_box: {volumes: [reference], box: [[1, 2], all, [30, 60]]}"
+        ),
+        "reference",
+    )
+    expected = circle.copy()
+    expected[[0, 2]] = False
+    expected[:, :, :30] = False
+    np.testing.assert_array_equal(both, expected)
+    # the moving volume is not masked by reference blocks
+    assert (
+        build_mask(
+            shape, _parse("- mask_circle: {volumes: [reference], radius: 1.0}"), "moving"
+        )
+        is None
+    )
+
+
+def test_a_box_outside_its_volume_is_refused():
+    blocks = _parse("- mask_box: {volumes: [reference], box: [all, [0, 100], all]}")
+    with pytest.raises(ValueError, match="outside"):
+        build_mask((3, 40, 60), blocks, "reference")
+
+
+# --- applied before the method --------------------------------------------------------------
+
+
+class _Recording(EstimatorBase):
+    """A method that records what it was given (and takes a competitor, like beads)."""
+
+    accepts_competitor = True
+
+    def trace(self):
+        return {"best_candidate": "hungarian", "blocks": None}
+
+    def __init__(self):
+        self.seen = {}
+
+    def estimate(
+        self, mov, ref, initial_transform=None, competitor=None, ref_mask=None, mov_mask=None
+    ):
+        self.seen = dict(
+            mov=mov,
+            ref=ref,
+            initial_transform=initial_transform,
+            competitor=competitor,
+            ref_mask=ref_mask,
+            mov_mask=mov_mask,
+        )
+        from biahub.core.transform import Transform
+
+        return Transform.identity(3)
+
+
+def test_the_method_gets_prepared_volumes_and_masks_and_keeps_its_interface():
+
+    from biahub.registration.preprocess import PreprocessedEstimator
+
+    blocks = _parse(
+        "- clip_percentiles: {volumes: [moving], low: 0, high: 50}\n"
+        "- mask_box: {volumes: [reference], box: [all, [0, 8], all]}"
+    )
+    inner = _Recording()
+    wrapped = PreprocessedEstimator(inner, blocks)
+    mov = np.arange(4 * 16 * 16, dtype=np.float32).reshape(4, 16, 16)
+    ref = mov.copy()
+
+    wrapped.estimate(mov, ref, initial_transform="s", competitor="c")
+    assert inner.seen["mov"].max() == pytest.approx(np.percentile(mov, 50))
+    np.testing.assert_array_equal(inner.seen["ref"], ref)  # no image block on the reference
+    assert inner.seen["ref_mask"][:, :8].all() and not inner.seen["ref_mask"][:, 8:].any()
+    assert inner.seen["mov_mask"] is None
+    assert (inner.seen["initial_transform"], inner.seen["competitor"]) == ("s", "c")
+    # the engine reads the method's members through the wrapper
+    assert (wrapped.uses_initial_transform, wrapped.accepts_competitor) == (True, True)
+    assert wrapped.trace()["best_candidate"] == "hungarian"
+
+
+@pytest.mark.parametrize(
+    "method", ["bead_matching", "phase_cross_corr", "focus_finding", "manual"]
+)
+def test_mask_blocks_are_refused_for_methods_that_cannot_use_them(method, tmp_path):
+    from biahub.settings import EstimateTransformSettings
+
+    with pytest.raises(ValidationError, match="mask blocks need"):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "cross", "channel": "Phase3D"},
+            method=method,
+            preprocess=[{"mask_circle": {"volumes": ["reference"], "radius": 0.9}}],
+        )
+
+
+@pytest.mark.parametrize(
+    "ants, message",
+    [
+        # what #402 wrote into every resolved ANTs config, even with all defaults
+        ({"sobel_filter": False, "crop": False, "clip": False}, "remove them"),
+        ({"sobel_filter": True}, "- sobel: {}"),
+        ({"clip": True}, "- clip_percentiles: {}"),
+        ({"ref_mask_radius": 0.9, "crop": True}, "radius: 0.9"),
+        ({"crop": True}, "mask_box"),
+    ],
+)
+def test_the_old_ants_fields_point_to_preprocess_blocks(ants, message):
+    from biahub.settings import EstimateTransformSettings
+
+    with pytest.raises(ValidationError, match=message):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "cross", "channel": "Phase3D"},
+            method="ants",
+            ants=ants,
+        )
+
+
+def test_a_methods_own_score_judges_the_raw_volumes(monkeypatch):
+    # Blocks change what a method estimates from, not what it is judged on: the bead
+    # estimators' internal choices (which candidate, which pass) score the raw volumes,
+    # like the engine's decision -- a clipped copy could pick a different winner.
+    from biahub.registration.engine import core as engine
+    from biahub.settings import (
+        BeadsMatchSettings,
+        DetectPeaksSettings,
+        EstimateTransformSettings,
+    )
+    from tests.test_estimate_transform import _synthetic_bead_volume
+
+    seen = []
+
+    def recording_score(transform, mov, ref):
+        seen.append((np.asarray(mov), np.asarray(ref)))
+        return 1.0
+
+    monkeypatch.setattr(engine, "_score_fn", lambda settings: recording_score)
+    peaks = DetectPeaksSettings(
+        threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
+    )
+    settings = EstimateTransformSettings(
+        moving={"channel": "GFP"},
+        reference={"frame": "cross", "channel": "Phase3D"},
+        method="bead_matching",
+        bead_matching=BeadsMatchSettings(
+            moving_peaks_settings=peaks, reference_peaks_settings=peaks
+        ),
+        preprocess=[{"clip_percentiles": {"low": 0, "high": 99.9}}],
+    )
+    estimator, _score = engine.build_estimator(settings, (32, 48, 48))
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, (32, 48, 48))
+    mov = np.roll(ref, 2, axis=2)
+    estimator.estimate(mov, ref)
+    assert seen  # the estimator scored its candidates
+    for m, r in seen:
+        np.testing.assert_array_equal(m, mov)
+        np.testing.assert_array_equal(r, ref)
+
+
+def test_log1p_and_gaussian_blur_blocks():
+    # the neuromast stabilization prototype's preprocessing: log1p, then a slight blur
+    from scipy import ndimage
+
+    from biahub.registration.preprocess import blocks_footprint
+
+    rng = np.random.default_rng(0)
+    volume = rng.normal(100, 30, size=(6, 24, 24)).astype(np.float32)
+    volume[0, 0, 0] = -5.0  # below zero: clipped before the log
+    blocks = _parse("- log1p: {}\n- gaussian_blur: {sigma: 1.0}")
+    out = apply_image_blocks(volume, blocks, "moving")
+    expected = ndimage.gaussian_filter(np.log1p(np.clip(volume, 0, None)), 1.0)
+    np.testing.assert_allclose(out, expected, rtol=1e-6)
+    # a blur reaches ~4 sigma: the score keeps that far from the warp's padding
+    assert blocks_footprint(_parse("- gaussian_blur: {sigma: 1.5}")) == 6
+    assert blocks_footprint(_parse("- log1p: {}")) == 0
+    with pytest.raises(ValidationError):
+        _parse("- gaussian_blur: {sigma: 0}")

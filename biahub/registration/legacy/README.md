@@ -48,11 +48,13 @@ biahub convert-settings -c "xyz_stabilization_settings/*.yml" -o transforms.yml 
 - An `estimate-registration` / `estimate-stabilization` config becomes an
   `EstimateTransformSettings` for `estimate-transform`; a `register` / `stabilize` config
   becomes a `TransformSettings` for `apply-transform`.
-- `approx_transform` becomes `transform.seed` (`seed_direction: inverse`, the direction the
-  old pipeline stored), and `compute_approx_transform` becomes `transform.seed_from_shapes`.
-- `use_prev_t_transform` becomes `transform.seed_from: previous_timepoint` for beads, the
-  only method that read it; the other methods estimated each timepoint independently
-  whatever the flag said.
+- `approx_transform` becomes `transform.initial: {from: matrix, direction: inverse}` (the
+  direction the old pipeline stored; left out when it is identity), and
+  `compute_approx_transform` becomes `{from: shapes, rotate90: -1, fliplr: false}`, the
+  orientation the old pipeline built in.
+- `use_prev_t_transform` becomes `transform.initial.propagate: true` for beads, the only
+  method that read it; the other methods estimated each timepoint independently whatever
+  the flag said.
 - `estimate-registration` always read the source channel from the source store and the
   target from the target store, so its config becomes a `reference.frame: cross` estimate,
   even when both channels have the same name.
@@ -60,6 +62,11 @@ biahub convert-settings -c "xyz_stabilization_settings/*.yml" -o transforms.yml 
   stack-reg; the unified method has one, so the conversion keeps the one the
   `stabilization_type` needs and prints which crop it dropped.
 - Phase-cross-correlation's `t_reference` becomes `reference.frame`.
+- ANTs preparation fields become `preprocess` blocks: `sobel_filter` -> `sobel` (and a
+  `sobel` score block, as the old score compared edges), `ref_mask_radius` ->
+  `mask_circle` on the reference, `clip` -> `clip_percentiles` (its fixed mantis limits
+  are replaced, with a note); `crop` is dropped with a note (ANTs no longer warps the
+  moving volume first, so there is no empty border to crop).
 
 What has no equivalent is dropped, with a note printed at conversion time:
 
@@ -81,7 +88,7 @@ What has no equivalent is dropped, with a note printed at conversion time:
   `note` in the transforms file, rather than silently holding the previous transform.
 - **The transforms file** holds one matrix per timepoint with its score and status: one
   list shared by every position (registration on the beads FOV) or one list per position
-  (stabilization). How it is applied (timepoints, canvas, interpolation, channels) is set
+  (stabilization). How it is applied (timepoints, crop, interpolation, channels) is set
   by `apply-transform` options, not by the file.
 
 ## Removing the legacy code

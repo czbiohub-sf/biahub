@@ -1,10 +1,13 @@
-"""Alignment metrics: how well a transform brings `mov` onto `ref`.
+"""Alignment metrics: every measure of how well a transform brings `mov` onto `ref`.
+
+The engine decides with some of them (a score per transform) and the evaluation
+analyses with all of them (residuals in voxels or µm); both call them from here.
 
 Two families, because the pipeline registers across modalities:
 
 - Bead metrics (`bead_alignment_metrics`, `residual_score`) need beads visible in both
-  channels. They complement `beads.overlap_score`, which is a bead-count ratio quantized
-  at ~1/N per bead, with continuous residuals in voxels.
+  channels. They complement `bead_matching.overlap_score`, which is a bead-count ratio
+  quantized at ~1/N per bead, with continuous residuals in voxels.
 - Intensity metrics work on any pair of channels. Plain correlation is meaningless
   between, say, phase and fluorescence (the correct transform can score ~0.1), so
   `normalized_mutual_information` -- the cross-modal similarity ANTs' Mattes metric
@@ -21,13 +24,20 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from numpy.typing import ArrayLike
+from scipy.ndimage import shift as ndi_shift
 from scipy.spatial import cKDTree
 from skimage import filters
 
-from biahub.core.transform import Transform
+from biahub.core.nodes.solvers import mutual_nearest
+from biahub.core.transform import Transform, polar, rotation_angles
 from biahub.registration.estimators import ScoreFn
-from biahub.registration.methods.beads import overlap_score, peaks_from_beads
-from biahub.registration.methods.pcc import phase_cross_corr
+from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr
+from biahub.registration.methods.landmark.bead_matching import (
+    bead_peaks,
+    overlap_score,
+    warped_bead_peaks,
+)
+from biahub.registration.preprocess import SOBEL_FOOTPRINT, away_from_padding
 from biahub.settings import BeadsMatchSettings
 
 
@@ -36,8 +46,8 @@ class BeadAlignmentMetrics:
     n_mov_peaks: int
     n_ref_peaks: int
     n_matched: int  # reference peaks with a warped moving peak within `radius`
-    overlap: float  # beads.overlap_score
-    median_residual: float  # voxels, over matched pairs; nan when none
+    overlap: float  # bead_matching.overlap_score
+    median_residual: float  # voxels (or µm with ref_um), over matched pairs; nan when none
     rms_residual: float
 
     def to_dict(self) -> dict:
@@ -49,28 +59,29 @@ def bead_alignment_metrics(
     mov: ArrayLike,
     ref: ArrayLike,
     beads_match_settings: BeadsMatchSettings,
+    ref_um: tuple | None = None,
 ) -> BeadAlignmentMetrics | None:
     """Warp, re-detect beads, and measure how the two peak sets line up.
 
-    Returns None when peaks cannot be detected on either side.
+    Beads pair within the settings' radius, in voxels. The residuals are in reference
+    voxels, or in µm with the reference's voxel size `ref_um` (each axis scaled). Returns
+    None when peaks cannot be detected on either side.
     """
     radius = beads_match_settings.qc_settings.score_centroid_mask_radius
-    ref = np.asarray(ref)
-    warped = transform.apply(np.asarray(mov), reference=ref)
-    peaks = peaks_from_beads(
-        mov=warped,
-        ref=ref,
-        mov_peaks_settings=beads_match_settings.source_peaks_settings,
-        ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose=False,
-    )
-    if peaks is None:
+    mov, ref = np.asarray(mov), np.asarray(ref)
+    # each warp and detection once per job (a score, the report and the record ask again)
+    mov_peaks = warped_bead_peaks(
+        transform, mov, ref, beads_match_settings.moving_peaks_settings
+    ).astype(float)
+    ref_peaks = bead_peaks(ref, beads_match_settings.reference_peaks_settings).astype(float)
+    if len(mov_peaks) < 2 or len(ref_peaks) < 2:  # too few to pair
         return None
-    mov_peaks, ref_peaks = (np.asarray(p, dtype=float) for p in peaks)
-    if len(mov_peaks) == 0 or len(ref_peaks) == 0:
-        return None
-    distances, _ = cKDTree(mov_peaks).query(ref_peaks, distance_upper_bound=radius)
-    matched = distances[np.isfinite(distances)]
+    distances, nearest = cKDTree(mov_peaks).query(ref_peaks, distance_upper_bound=radius)
+    paired = np.isfinite(distances)
+    matched = distances[paired]
+    if ref_um is not None:  # the same pairs, measured in µm
+        gaps = (ref_peaks[paired] - mov_peaks[nearest[paired]]) * np.asarray(ref_um, float)
+        matched = np.linalg.norm(gaps, axis=1)
     return BeadAlignmentMetrics(
         n_mov_peaks=int(len(mov_peaks)),
         n_ref_peaks=int(len(ref_peaks)),
@@ -87,7 +98,7 @@ def residual_score(
     ref: ArrayLike,
     beads_match_settings: BeadsMatchSettings,
 ) -> float:
-    """Continuous bead score in [0, 1]: overlap weighted by how tightly matched beads sit.
+    """Continuous bead score: overlap weighted by how tightly matched beads sit (>= 0).
 
     `overlap * (1 - median_residual / radius)`: the same quantity `overlap_score`
     measures, but a transform whose matched beads land 0.5 voxel off outscores one whose
@@ -107,6 +118,25 @@ def _overlap_pair(transform: Transform, mov: ArrayLike, ref: ArrayLike):
     return warped, ref, mask
 
 
+class Prewarped:
+    """Stands in for a transform when the moving volume is already warped onto the reference.
+
+    Lets several metrics share one warp: each calls `transform.apply`, which hands the
+    volume back unchanged.
+    """
+
+    def apply(self, moving, reference=None, **kwargs):
+        return np.asarray(moving)
+
+
+PREWARPED = Prewarped()
+
+
+def _footprint(prepare, *, sobel: bool = False) -> int:
+    """Return how far the score's blocks (and any built-in Sobel) reach, in voxels."""
+    return getattr(prepare, "footprint", 0) + (SOBEL_FOOTPRINT if sobel else 0)
+
+
 def normalized_mutual_information(
     transform: Transform,
     mov: ArrayLike,
@@ -114,6 +144,7 @@ def normalized_mutual_information(
     bins: int = 64,
     percentiles: tuple[float, float] = (0.5, 99.5),
     sobel: bool = False,
+    prepare=None,
 ) -> float:
     """Compute normalized mutual information of the warped moving volume and the reference.
 
@@ -121,15 +152,21 @@ def normalized_mutual_information(
     clipped to `percentiles` before binning so a few hot voxels do not collapse the
     histogram. Independent of the intensity relation between the two channels, which is
     what makes it usable across modalities; `sobel` compares edge magnitudes instead of
-    intensities. nan when the volumes do not overlap.
+    intensities. nan when the volumes do not overlap. `prepare(warped, ref, overlap)`
+    (the score's blocks) runs after the overlap is found, before comparing.
     """
     warped, ref, mask = _overlap_pair(transform, mov, ref)
     if mask.sum() < bins:
         return float("nan")
+    if prepare is not None:
+        warped, ref = prepare(warped, ref, mask)
     if sobel:
         # MI of edge magnitudes: what the fault detectors in registration-eval found most
         # reliable between fluorescence and virtual staining.
         warped, ref = filters.sobel(warped), filters.sobel(ref)
+    mask = away_from_padding(mask, _footprint(prepare, sobel=sobel))
+    if mask.sum() < bins:
+        return float("nan")
     a, b = warped[mask], ref[mask]
     a_lo, a_hi = np.percentile(a, percentiles)
     b_lo, b_hi = np.percentile(b, percentiles)
@@ -154,38 +191,162 @@ def normalized_mutual_information(
     return float(2.0 * (h_a + h_b - h_ab) / (h_a + h_b))
 
 
-def gradient_correlation(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> float:
+def gradient_correlation(
+    transform: Transform, mov: ArrayLike, ref: ArrayLike, prepare=None
+) -> float:
     """Pearson correlation of Sobel gradient magnitudes over the overlap, in [-1, 1].
 
     Edges exist in every modality even when intensities do not correlate; cheaper than
     mutual information and adequate when both channels show the same structures.
     """
-    warped, ref, mask = _overlap_pair(transform, mov, ref)
-    if mask.sum() < 2:
-        return float("nan")
-    a = filters.sobel(warped)[mask]
-    b = filters.sobel(ref)[mask]
-    a = a - a.mean()
-    b = b - b.mean()
-    denominator = np.sqrt((a * a).sum() * (b * b).sum())
-    return float((a * b).sum() / denominator) if denominator > 0 else float("nan")
+    return correlation_score(transform, mov, ref, sobel_filter=True, prepare=prepare)
 
 
-def residual_shift(transform: Transform, mov: ArrayLike, ref: ArrayLike) -> float:
-    """Remaining misalignment after `transform`, in voxels, as a displacement not a similarity.
+def residual_shift(
+    transform: Transform, mov: ArrayLike, ref: ArrayLike, ref_um: tuple | None = None
+) -> float:
+    """Remaining misalignment after `transform`, as a displacement not a similarity.
 
     Phase cross-correlation between the Sobel edges of the warped moving volume and the
-    reference; the norm of the recovered shift. A displacement stays interpretable when
-    similarity metrics are depressed by defocus or bleaching (registration-eval's
-    `mch_eshift`), and 0 means aligned regardless of modality.
+    reference; the norm of the recovered shift, in reference voxels, or in µm with the
+    reference's voxel size `ref_um` (each axis scaled before the norm). A displacement
+    stays interpretable when similarity metrics are depressed by defocus or bleaching
+    (registration-eval's `mch_eshift`), and 0 means aligned regardless of modality.
     """
     warped, ref, mask = _overlap_pair(transform, mov, ref)
-    if mask.sum() < 8:
+    inside = away_from_padding(mask, SOBEL_FOOTPRINT)
+    if inside.sum() < 8:
         return float("nan")
-    shift, _ = phase_cross_corr(
-        filters.sobel(ref).astype(np.float32), filters.sobel(warped).astype(np.float32)
-    )
+    # edges of the content only: the padding's edge would dominate the correlation
+    ref_edges = np.where(inside, filters.sobel(ref), 0).astype(np.float32)
+    warped_edges = np.where(inside, filters.sobel(warped), 0).astype(np.float32)
+    shift, _ = phase_cross_corr(ref_edges, warped_edges)
+    if ref_um is not None:
+        shift = np.asarray(shift, float) * np.asarray(ref_um, float)
     return float(np.linalg.norm(shift))
+
+
+# The centroid anchor (reference.anchor): where the sample is in a frame, and its track
+# smoothed over time.
+
+
+def intensity_centroid(
+    volume: ArrayLike, *, bg_percentile: float, downsample: int, blur_sigma: float
+) -> np.ndarray:
+    """Return the ZYX centroid of `volume`'s signal, in full-resolution voxels.
+
+    The anchor's measure of where the sample is (dynatrack's intensity centre of mass):
+    the volume binned by `downsample` (an axis shorter than it, e.g. a projection's z,
+    is not binned), blurred by `blur_sigma` binned voxels, and weighted by its intensity
+    above the `bg_percentile` percentile. NaN when nothing is above it.
+    """
+    from scipy import ndimage
+
+    v = np.asarray(volume, dtype=np.float32)
+    factors = [downsample if n >= downsample else 1 for n in v.shape]
+    v = v[tuple(slice(0, n // f * f) for n, f in zip(v.shape, factors, strict=True))]
+    shape = [x for n, f in zip(v.shape, factors, strict=True) for x in (n // f, f)]
+    v = v.reshape(shape).mean(axis=(1, 3, 5))
+    v = ndimage.gaussian_filter(v, blur_sigma)
+    weights = np.clip(v - np.percentile(v, bg_percentile), 0, None)
+    if not weights.sum() > 0:
+        return np.full(3, np.nan)
+    factors = np.asarray(factors, dtype=float)
+    # binned index i covers full-resolution voxels i*f .. i*f + f - 1
+    return np.asarray(ndimage.center_of_mass(weights)) * factors + (factors - 1) / 2
+
+
+def smooth_track(track: ArrayLike, *, median: int, sigma: float) -> np.ndarray:
+    """Return a (T, 3) centroid track smoothed over time, the anchor's slow component.
+
+    NaN rows (frames with no centroid) are interpolated from their neighbours; a median
+    over `median` timepoints drops single-frame jumps, then a Gaussian of `sigma`
+    timepoints smooths what is left. Rows are taken in order, one per timepoint.
+    """
+    from scipy import ndimage
+
+    track = np.array(track, dtype=float)
+    rows = np.arange(len(track))
+    for axis in range(track.shape[1]):
+        known = np.isfinite(track[:, axis])
+        if not known.any():
+            raise ValueError("no timepoint has a centroid to anchor on")
+        track[:, axis] = np.interp(rows, rows[known], track[known, axis])
+        track[:, axis] = ndimage.median_filter(track[:, axis], median, mode="nearest")
+        track[:, axis] = ndimage.gaussian_filter1d(track[:, axis], sigma, mode="nearest")
+    return track
+
+
+# Leftover motion: the raw shift between consecutive frames, to a quarter voxel. The job
+# plan reserves 18 frames for it: the two frames read, and the 16 its phase correlation
+# holds at its peak (measured).
+LEFTOVER_MOTION_UPSAMPLE = 4
+LEFTOVER_MOTION_VOLUMES = 18
+
+
+def raw_shift(previous: ArrayLike, frame: ArrayLike) -> np.ndarray | None:
+    """Return the ZYX shift (voxels) moving `frame` onto `previous`, its raw frame before.
+
+    Phase cross-correlation on the raw volumes, no transform: what leftover motion is
+    derived from (`leftover_motion`). None when either frame has no data.
+    """
+    previous = np.asarray(previous, dtype=np.float32)
+    frame = np.asarray(frame, dtype=np.float32)
+    if not np.any(np.nan_to_num(previous)) or not np.any(np.nan_to_num(frame)):
+        return None
+    shift, _ = phase_cross_corr(previous, frame, upsample_factor=LEFTOVER_MOTION_UPSAMPLE)
+    return np.asarray(shift, dtype=float)
+
+
+def leftover_motion(
+    pairs: list[tuple[int, int, ArrayLike | None]],
+    corrections: dict[int, ArrayLike] | None,
+    voxel_um: ArrayLike,
+) -> dict:
+    """How much a stabilized series still moves from frame to frame, in µm.
+
+    `pairs`: (t_from, t_to, raw shift moving t_to onto t_from, in voxels; None: none).
+    `corrections`: each timepoint's translation (voxels, a forward transform's: the shift
+    applied to the volume); None for the unregistered series. With translations a and b
+    applied to t_from and t_to, what still moves t_to onto t_from is raw - (b - a) -- no
+    warp, so nothing aliases and the raw shifts serve any set of corrections. Exact for
+    translations; a rotation or scale is left out (first order).
+
+    Measures single-frame jumps, not slow drift: a series that wanders slowly moves
+    little from one frame to the next. Returns the mean and max norm, the mean yx norm
+    (comparable with a projection's), each pair's shift, and the pairs skipped.
+    """
+    um = np.asarray(voxel_um, dtype=float)
+    rows, skipped = [], []
+    for t_from, t_to, raw in pairs:
+        if raw is None:
+            skipped.append([t_from, t_to])
+            continue
+        shift = np.asarray(raw, dtype=float)
+        if corrections is not None:
+            shift = shift - (
+                np.asarray(corrections[t_to], float) - np.asarray(corrections[t_from], float)
+            )
+        shift = shift * um
+        rows.append(
+            {
+                "t_from": t_from,
+                "t_to": t_to,
+                "shift_z_um": float(shift[0]),
+                "shift_y_um": float(shift[1]),
+                "shift_x_um": float(shift[2]),
+                "motion_um": float(np.linalg.norm(shift)),
+                "motion_yx_um": float(np.hypot(shift[1], shift[2])),
+            }
+        )
+    motion = [r["motion_um"] for r in rows]
+    return {
+        "mean_um": float(np.mean(motion)) if rows else None,
+        "max_um": float(np.max(motion)) if rows else None,
+        "mean_yx_um": float(np.mean([r["motion_yx_um"] for r in rows])) if rows else None,
+        "pairs": rows,
+        "skipped": skipped,
+    }
 
 
 def score_transform(
@@ -197,29 +358,13 @@ def score_transform(
     """Overlap score of a candidate transform, independent of any estimator's own scoring.
 
     Warps `mov` with `transform`, re-detects beads, and scores their overlap against
-    `ref` -- the same sequence `optimize_transform` uses internally, duplicated here
-    (rather than calling `optimize_transform`) because that function also refines the
-    transform, which would score something other than what was passed in. Used as the
+    `ref`, without refining the transform (an estimator's pass would score something
+    other than what was passed in). Used as the
     `score_fn` a fallback pass (e.g. `registration.engine.repair`) needs to compare
-    candidate seeds against each other and against the current transform.
+    candidate initial transforms against each other and against the current transform.
     """
-    warped = transform.apply(np.asarray(mov), reference=np.asarray(ref))
-    peaks = peaks_from_beads(
-        mov=warped,
-        ref=np.asarray(ref),
-        mov_peaks_settings=beads_match_settings.source_peaks_settings,
-        ref_peaks_settings=beads_match_settings.target_peaks_settings,
-        verbose=False,
-    )
-    if peaks is None:
-        return float("nan")
-    mov_peaks, ref_peaks = peaks
-    return overlap_score(
-        mov_peaks=mov_peaks,
-        ref_peaks=ref_peaks,
-        radius=beads_match_settings.qc_settings.score_centroid_mask_radius,
-        verbose=False,
-    )
+    metrics = bead_alignment_metrics(transform, mov, ref, beads_match_settings)
+    return float("nan") if metrics is None else metrics.overlap
 
 
 def correlation_score(
@@ -227,21 +372,26 @@ def correlation_score(
     mov: np.ndarray,
     ref: np.ndarray,
     sobel_filter: bool = False,
+    prepare=None,
 ) -> float:
     """Pearson correlation between `mov` warped by `transform` and `ref`, over their overlap.
 
     An intensity analogue of the bead overlap score: continuous in [-1, 1], nan when
     the warped volume and the reference do not overlap. Optionally compares Sobel
-    magnitudes instead, for cross-modality pairs registered that way.
+    magnitudes instead, for cross-modality pairs registered that way. `prepare(warped,
+    ref, overlap)` (the score's blocks) runs after the overlap is found, before comparing.
     """
-    ref = np.asarray(ref, dtype=np.float32)
-    warped = transform.apply(np.asarray(mov, dtype=np.float32), reference=ref)
-    mask = (warped != 0) & (ref != 0)
+    warped, ref, mask = _overlap_pair(transform, mov, ref)
+    if mask.sum() < 2:
+        return float("nan")
+    if prepare is not None:
+        warped, ref = prepare(warped, ref, mask)
+    if sobel_filter:
+        warped, ref = filters.sobel(warped), filters.sobel(ref)
+    mask = away_from_padding(mask, _footprint(prepare, sobel=sobel_filter))
     if mask.sum() < 2:
         return float("nan")
     a, b = warped[mask], ref[mask]
-    if sobel_filter:
-        a, b = filters.sobel(warped)[mask], filters.sobel(ref)[mask]
     a = a - a.mean()
     b = b - b.mean()
     denominator = np.sqrt((a * a).sum() * (b * b).sum())
@@ -250,18 +400,318 @@ def correlation_score(
     return float((a * b).sum() / denominator)
 
 
-def beads_score_fn(
-    beads_match_settings: BeadsMatchSettings, metric: str = "overlap"
+# The intensity metrics a score or report can name; they take the score's `prepare`.
+INTENSITY_METRIC_FNS = {
+    "mutual_information": normalized_mutual_information,
+    "correlation": correlation_score,
+    "gradient_correlation": gradient_correlation,
+}
+
+
+def metric_fn(
+    name: str, bead_settings: BeadsMatchSettings | None = None, prepare=None
 ) -> ScoreFn:
-    """Build a bead score function: overlap (production's ratio), residual, or mutual information."""
-    if metric == "overlap":
-        return lambda transform, mov, ref: score_transform(
-            transform, mov, ref, beads_match_settings
+    """Return the metric a config names as a score function (transform, mov, ref) -> float.
+
+    "overlap" and "residual" are bead metrics (`bead_settings`: the beads method's
+    detection and matching); "mutual_information", "correlation" and
+    "gradient_correlation" are intensity metrics, run after `prepare` (the score's
+    preprocessing) when given.
+    """
+    if name == "overlap":
+        return lambda transform, mov, ref: score_transform(transform, mov, ref, bead_settings)
+    if name == "residual":
+        return lambda transform, mov, ref: residual_score(transform, mov, ref, bead_settings)
+    if name not in INTENSITY_METRIC_FNS:
+        raise ValueError(f"unknown score metric {name!r}")
+    fn = INTENSITY_METRIC_FNS[name]
+    return lambda transform, mov, ref: fn(transform, mov, ref, prepare=prepare)
+
+
+# --- residuals: matched landmarks and image patches, in µm (used by the evaluation) ---
+
+# Fewer matched points than this do not constrain an affine residual (12 parameters,
+# fitted to noisy centres: DragonFly nuclei gave a scale of 0.86 from 8 points).
+MIN_POINTS_FOR_AFFINE = 10
+
+
+def displacement_stats(diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
+    """Return statistics of matched residual displacements (N x 3, voxels, ZYX) in µm."""
+    diff = np.asarray(diff_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
+    if len(diff) == 0:
+        return {"n": 0}
+    dist = np.linalg.norm(diff, axis=1)
+    median_zyx = np.median(diff, axis=0)
+    return {
+        "n": int(len(diff)),
+        "median_um": float(np.median(dist)),
+        "p90_um": float(np.percentile(dist, 90)),
+        "median_zyx_um": median_zyx.tolist(),
+        "mad_zyx_um": np.median(np.abs(diff - median_zyx), axis=0).tolist(),
+        "rms_zyx_um": np.sqrt((diff**2).mean(axis=0)).tolist(),
+    }
+
+
+def residual_affine(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
+    """Fit residual displacement = a + B @ mapped position over matched points, in µm.
+
+    `points_vox` are the reference positions and `diff_vox` reference minus mapped moving,
+    so what is left is a map acting on the mapped positions (`points - diff`): fitted
+    there, a moving set at 0.8 x the reference reads a scale of 1.25.
+
+    A residual that grows across the field is a scale or rotation error of the transform,
+    which median distances alone hide; a constant residual is a shift. Returns the residual
+    map's per-axis scale and rotation (1 and 0 for no such error), its shift in µm, and the
+    displacement it accumulates across the extent of the points (`trend_um`, per axis).
+    """
+    diff = np.asarray(diff_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
+    ref = np.asarray(points_vox, dtype=float).reshape(-1, 3) * np.asarray(voxel_um, float)
+    pts = ref - diff  # the mapped positions, where the residual map acts
+    n = int(len(pts))
+    if n < MIN_POINTS_FOR_AFFINE:
+        return {"n": n, "scale_zyx": None, "rotation_yx_deg": None}
+    # positions about their centre: points at one depth (tiles) make a constant column,
+    # which would otherwise share the shift with a false z gradient
+    centre = pts.mean(axis=0)
+    design = np.c_[np.ones(n), pts - centre]
+    coef, *_ = np.linalg.lstsq(design, diff, rcond=None)
+    gradient = coef[1:].T  # diff ~ shift + gradient @ pos
+    shift = coef[0] - gradient @ centre
+    rotation, stretch = polar(np.eye(3) + gradient)
+    _total, yx = rotation_angles(rotation)
+    extent = pts.max(axis=0) - pts.min(axis=0)
+    return {
+        "n": n,
+        "scale_zyx": np.diag(stretch).tolist(),
+        "rotation_yx_deg": yx,
+        "shift_um": shift.tolist(),
+        "trend_um": (gradient @ extent).tolist(),
+    }
+
+
+def _residuals(points_vox: ArrayLike, diff_vox: ArrayLike, voxel_um: ArrayLike) -> dict:
+    """Return each residual with where it was measured, in µm (for the overlays)."""
+    um = np.asarray(voxel_um, float)
+    return {
+        "position_um": (np.asarray(points_vox, float).reshape(-1, 3) * um).tolist(),
+        "diff_um": (np.asarray(diff_vox, float).reshape(-1, 3) * um).tolist(),
+    }
+
+
+# --- layer 2: point-based residuals -----------------------------------------------------
+# Points seen in both channels (beads, nuclei, or points a person clicked), mapped through
+# the transform without warping any image, and compared where they pair up.
+
+
+def point_residuals(
+    transform: Transform,
+    mov_points: np.ndarray,
+    ref_points: np.ndarray,
+    ref_um: tuple,
+    radius_um: float = 1.0,
+    axes: str = "zyx",
+    paired: bool = False,
+) -> dict:
+    """Return how far `transform` leaves each point from its partner, in µm.
+
+    `mov_points` and `ref_points` are N x 3 voxel coordinates (z, y, x) in their own
+    volumes; the moving ones are mapped onto the reference (no warping), whose voxel size
+    is `ref_um`. `paired` points correspond row by row (points a person clicked in both
+    channels); otherwise they pair by mutual nearest neighbour within `radius_um`, measured
+    on `axes` ("zyx", or "yx" for objects long in z such as nuclei). Displacements are
+    reference minus mapped moving, in reference voxels, summarised by `displacement_stats`
+    and `residual_affine`.
+    """
+    mov_points = np.asarray(mov_points, dtype=float).reshape(-1, 3)
+    ref_points = np.asarray(ref_points, dtype=float).reshape(-1, 3)
+    mapped = transform.apply_points(mov_points) if len(mov_points) else mov_points
+    if paired:
+        if len(mov_points) != len(ref_points):
+            raise ValueError(
+                f"paired points need one partner each: {len(mov_points)} moving, "
+                f"{len(ref_points)} reference"
+            )
+        i = j = np.arange(len(mov_points))
+        matched_by = "given pairs"
+    else:
+        cols = slice(1, 3) if axes == "yx" else slice(0, 3)
+        um = np.asarray(ref_um, float)
+        i, j = mutual_nearest(
+            mapped[:, cols] * um[cols], ref_points[:, cols] * um[cols], radius_um
         )
-    if metric == "residual":
-        return lambda transform, mov, ref: residual_score(
-            transform, mov, ref, beads_match_settings
-        )
-    if metric == "mutual_information":
-        return normalized_mutual_information
-    raise ValueError(f"unknown score_metric {metric!r}")
+        matched_by = f"mutual nearest within {radius_um} um ({axes})"
+    diff = ref_points[j] - mapped[i]
+    return {
+        "n_mov": int(len(mov_points)),
+        "n_ref": int(len(ref_points)),
+        "n_matched": int(len(i)),
+        "matched_by": matched_by,
+        "stats": displacement_stats(diff, ref_um),
+        "affine": residual_affine(ref_points[j], diff, ref_um),
+        "residuals": _residuals(ref_points[j], diff, ref_um),
+    }
+
+
+# --- layer 3: image-based residuals -----------------------------------------------------
+# For data without landmarks: local shifts between the warped moving volume and the
+# reference, measured by phase correlation and summarised like matched points.
+
+
+@dataclass
+class ComparablePair:
+    """The warped moving volume and the reference, prepared once for layer 3's measures."""
+
+    warped: np.ndarray
+    ref: np.ndarray
+    has_data: np.ndarray  # where the warped moving volume has data
+    compare: str
+
+
+def prepare_pair(transform: Transform, mov: ArrayLike, ref: ArrayLike, compare: str = "edges"):
+    """Return the pair `tile_residuals` and `z_residuals` compare, to share between them.
+
+    `edges` takes the Sobel magnitude in each volume's own grid before warping, so the
+    empty padding carries no edges and cross-modal pairs compare structure; `intensity`
+    compares the volumes as they are.
+    """
+    if compare not in ("edges", "intensity"):
+        raise ValueError(f"compare must be 'edges' or 'intensity', got {compare!r}")
+    mov = np.nan_to_num(np.asarray(mov, dtype=np.float32))
+    ref = np.nan_to_num(np.asarray(ref, dtype=np.float32))
+    if compare == "edges":
+        mov, ref = filters.sobel(mov).astype(np.float32), filters.sobel(ref).astype(np.float32)
+    if transform.is_identity and mov.shape == ref.shape:
+        # the unregistered pair: an identity warp returns the volume unchanged
+        return ComparablePair(mov, ref, np.ones(ref.shape, dtype=bool), compare)
+    warped = transform.apply(mov, reference=ref)
+    return ComparablePair(warped, ref, transform.coverage(mov.shape, ref.shape), compare)
+
+
+def _pair(transform, mov, ref, compare: str, pair: ComparablePair | None) -> ComparablePair:
+    if pair is None:
+        return prepare_pair(transform, mov, ref, compare)
+    if pair.compare != compare:
+        raise ValueError(f"the pair was prepared for {pair.compare!r}, not {compare!r}")
+    return pair
+
+
+def _zscore(a: np.ndarray) -> np.ndarray:
+    return (a - a.mean()) / (a.std() + 1e-9)
+
+
+def tile_residuals(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    voxel_um: tuple,
+    compare: str = "edges",
+    tile_px: int = 256,
+    grid: int = 7,
+    min_ncc: float = 0.5,
+    max_shift_px: float | None = None,
+    min_coverage: float = 0.95,
+    pair: ComparablePair | None = None,
+) -> dict:
+    """Return local yx residuals over a grid of tiles of the max projections, in µm.
+
+    Each tile of the warped moving projection is phase-correlated with the reference's; a
+    tile counts when it is mostly real data, its shift is plausible (under `max_shift_px`,
+    default a quarter tile) and its shifted copy correlates above `min_ncc`. Displacements
+    follow `point_residuals`' convention (reference minus mapped moving) and are summarised
+    by `displacement_stats` and `residual_affine` (a radial pattern = a scale error).
+    `pair` (from `prepare_pair`) skips preparing the volumes again.
+    """
+    pair = _pair(transform, mov, ref, compare, pair)
+    warped, ref_p, has_data = pair.warped, pair.ref, pair.has_data
+    w_mip, r_mip = warped.max(axis=0), ref_p.max(axis=0)
+    covered = has_data.mean(axis=0) >= 0.5
+    _, ny, nx = ref_p.shape
+    size = min(tile_px, ny, nx)  # a tile fits the image, and is exactly the window's size
+    max_shift = size / 4 if max_shift_px is None else max_shift_px
+    h = size // 2
+    window = np.outer(np.hanning(size), np.hanning(size))
+    points, diffs = [], []
+    # distinct centres only: a tile that fits the image once is one measurement
+    for cy in np.unique(np.linspace(h, ny - (size - h), grid).astype(int)):
+        for cx in np.unique(np.linspace(h, nx - (size - h), grid).astype(int)):
+            tile = (slice(cy - h, cy - h + size), slice(cx - h, cx - h + size))
+            if covered[tile].mean() < min_coverage:
+                continue
+            r, w = r_mip[tile], w_mip[tile]
+            if r.std() == 0 or w.std() == 0:
+                continue
+            r, w = _zscore(r), _zscore(w)
+            shift, _ = phase_cross_corr(r * window, w * window, upsample_factor=10)
+            if np.abs(shift).max() > max_shift:
+                continue
+            # the shared window pulls the peak toward zero shift (~5% short on nuclei):
+            # measure the remainder once more, where that pull is a share of almost nothing
+            moved = ndi_shift(w, shift, order=1, mode="nearest")
+            remainder, _ = phase_cross_corr(r * window, moved * window, upsample_factor=10)
+            shift = shift + remainder
+            if np.abs(shift).max() > max_shift:
+                continue
+            moved = ndi_shift(w, shift, order=1, mode="nearest")
+            if np.corrcoef(r.ravel(), moved.ravel())[0, 1] < min_ncc:
+                continue
+            points.append((ref_p.shape[0] / 2, cy, cx))
+            diffs.append((0.0, *shift))  # moving shifted by `shift` matches: ref - mapped
+    points, diffs = np.array(points).reshape(-1, 3), np.array(diffs).reshape(-1, 3)
+    return {
+        "compare": compare,
+        "n_tiles": int(len(points)),
+        "stats": displacement_stats(diffs, voxel_um),
+        "affine": residual_affine(points, diffs, voxel_um),
+        "residuals": _residuals(points, diffs, voxel_um),
+    }
+
+
+def z_residuals(
+    transform: Transform,
+    mov: ArrayLike,
+    ref: ArrayLike,
+    voxel_um: tuple,
+    compare: str = "edges",
+    crop_px: int = 768,
+    min_coverage: float = 0.5,
+    pair: ComparablePair | None = None,
+) -> dict:
+    """Return the residual shift in the centre and 4 corner crops (3D phase correlation), µm.
+
+    Different corners show a tilt (`tilt_dz_um`: the spread of their z residuals). A crop
+    that is mostly padding is skipped; in intensity mode the padding is filled with the
+    crop's median so its edge does not dominate the correlation. `pair` (from
+    `prepare_pair`) skips preparing the volumes again.
+    """
+    pair = _pair(transform, mov, ref, compare, pair)
+    warped, ref_p, has_data = pair.warped, pair.ref, pair.has_data
+    _, ny, nx = ref_p.shape
+    cy, cx = min(crop_px, ny), min(crop_px, nx)
+    starts = {
+        "centre": ((ny - cy) // 2, (nx - cx) // 2),
+        "top_left": (0, 0),
+        "top_right": (0, nx - cx),
+        "bottom_left": (ny - cy, 0),
+        "bottom_right": (ny - cy, nx - cx),
+    }
+    um = np.asarray(voxel_um, float)
+    crops = {}
+    for name, (y0, x0) in starts.items():
+        box = (slice(None), slice(y0, y0 + cy), slice(x0, x0 + cx))
+        w, r, cov = warped[box], ref_p[box], has_data[box]
+        if cov.mean() < min_coverage or r.std() == 0 or w[cov].std() == 0:
+            crops[name] = None
+            continue
+        if compare == "intensity":
+            w = np.where(cov, w, np.median(w[cov]))
+        shift, _ = phase_cross_corr(_zscore(r), _zscore(w), upsample_factor=10)
+        crops[name] = (np.asarray(shift) * um).tolist()
+    # one value per distinct place: corners of a crop as big as the image are one place
+    corner_dz = list(
+        {starts[k]: v[0] for k, v in crops.items() if k != "centre" and v is not None}.values()
+    )
+    return {
+        "compare": compare,
+        "crops_um": crops,
+        "tilt_dz_um": float(max(corner_dz) - min(corner_dz)) if len(corner_dz) > 1 else None,
+    }

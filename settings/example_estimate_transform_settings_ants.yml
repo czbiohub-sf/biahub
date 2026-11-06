@@ -3,46 +3,31 @@ moving:
 reference:
   frame: cross
   channel: Phase3D
+preprocess:
+- sobel:
+    volumes:
+    - moving
+    - reference
 method: ants
-ants:
-  sobel_filter: true
-  crop: false
-  ref_mask_radius: null
-  clip: false
+ants: {}
+score:
+  preprocess:
+  - sobel:
+      volumes:
+      - moving
+      - reference
 transform:
   type: affine
-  seed:
-  - - 1.0
-    - 0.0
-    - 0.0
-    - 0.0
-  - - 0.0
-    - 1.0
-    - 0.0
-    - 0.0
-  - - 0.0
-    - 0.0
-    - 1.0
-    - 0.0
-  - - 0.0
-    - 0.0
-    - 0.0
-    - 1.0
-  seed_direction: inverse
-  seed_from_shapes: false
 time_indices: all
 fallback:
   flag:
     k_mad: 2.0
-    floor: 0.8
-    hard_fail: 0.4
   repair:
     candidates:
     - t-1
     - t+1
     - consensus
-    - seed
-    consensus_threshold: 0.75
+    - initial
     consensus_min_good: 5
     max_timepoints: null
     polish_rounds: 3

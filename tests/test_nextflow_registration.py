@@ -94,7 +94,7 @@ def _focus_config(tmp_path):
         EstimateTransformSettings(
             moving=ChannelSettings(channel="Phase3D"),
             reference=ReferenceSettings(frame="first"),
-            method="focus-finding",
+            method="focus_finding",
             focus_finding=FocusSettings(axes="xyz", center_crop_xy=[48, 48]),
         ),
         config,
@@ -113,7 +113,7 @@ CASES = {
     ),
     "beads-propagated": (
         lambda tmp: _beads_plate(tmp),
-        lambda tmp: _write_config(tmp, seed_from="previous_timepoint"),
+        lambda tmp: _write_config(tmp, propagate=True),
         True,
     ),
     "ants": (
@@ -128,22 +128,23 @@ CASES = {
         lambda tmp: _write_config(
             tmp,
             method="ants",
-            ants=AntsRegistrationSettings(sobel_filter=True),
+            preprocess=[{"sobel": {}}],
+            score={"preprocess": [{"sobel": {}}]},
             transform_type="similarity",
         ),
         True,
     ),
-    "phase-cross-corr": (
+    "phase_cross_corr": (
         _drifting_plate,
         lambda tmp: _write_config(
             tmp,
             reference="first",
-            method="phase-cross-corr",
+            method="phase_cross_corr",
             phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
         ),
         False,
     ),
-    "focus-finding": (_write_defocusing_plate, _focus_config, False),
+    "focus_finding": (_write_defocusing_plate, _focus_config, False),
 }
 
 
@@ -215,7 +216,7 @@ def test_registration_nf_stabilizes_each_position_and_refuses_manual(tmp_path):
     config = _write_config(
         tmp_path,
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
     out = tmp_path / "run"
@@ -316,9 +317,9 @@ def test_registration_nf_reruns_when_a_file_is_rewritten_in_place(tmp_path):
     assert not np.array_equal(first, second)
 
 
-@pytest.mark.parametrize("seed_from", ["input", "previous_timepoint"])
+@pytest.mark.parametrize("propagate", [False, True])
 def test_registration_nf_finishes_past_a_broken_chunk_and_resume_redoes_it(
-    tmp_path, seed_from
+    tmp_path, propagate
 ):
     # A timepoint whose data cannot be read: the run retries it, then finishes with that
     # timepoint as a stand-in (the error in its note); once the data is fixed, -resume
@@ -332,7 +333,7 @@ def test_registration_nf_finishes_past_a_broken_chunk_and_resume_redoes_it(
     chunk = plate / "0" / "c" / "1" / "1" / "0" / "0" / "0"  # t=1, the moving channel
     assert chunk.is_file()
     chunk.write_bytes(b"not a chunk")
-    config = _write_config(tmp_path, seed_from=seed_from)
+    config = _write_config(tmp_path, propagate=propagate)
     params = (
         "--moving", store, "--reference", store, "--estimate_config", config,
         "--estimate_positions", "A/1/0", "--output", tmp_path / "run", "-resume",
@@ -397,3 +398,58 @@ def test_registration_nf_applies_a_channel_whose_name_has_an_apostrophe(tmp_path
     )  # fmt: skip
     with open_ome_zarr(tmp_path / "run" / "data.zarr" / "A" / "1" / "0") as position:
         assert "5'EU" in position.channel_names
+
+
+def test_registration_nf_reruns_the_estimate_when_its_initial_transform_file_is_edited(
+    tmp_path,
+):
+    # transform.initial.file is named by the config; the file itself is staged too, so
+    # rewriting it in place reruns the estimate instead of reusing the old initial
+    # transform's results.
+    import json
+
+    from biahub.core.transform import Transform
+    from biahub.settings import InitialTransformSettings, TransformEntry, TransformSettings
+    from biahub.utils.config import yaml_to_model
+
+    plate = _beads_plate(tmp_path)
+    store = plate.parents[2]
+    initial_transform_file = tmp_path / "plate.yml"
+
+    def write_initial_transform(inverse_shift):
+        model_to_yaml(
+            TransformSettings(
+                direction="inverse",
+                moving_channels=["GFP"],
+                reference_channel="Phase3D",
+                transforms=[
+                    TransformEntry(matrix=Transform.from_translation(inverse_shift).to_list())
+                ],
+            ),
+            initial_transform_file,
+        )
+
+    write_initial_transform(APPLIED_SHIFT_ZYX)
+    config = _write_config(tmp_path)
+    settings = yaml_to_model(config, EstimateTransformSettings)
+    settings.transform.initial = InitialTransformSettings(from_="file", file="plate.yml")
+    model_to_yaml(settings, config)
+    params = (
+        "--moving", store, "--reference", store, "--estimate_config", config,
+        "--estimate_positions", "A/1/0", "--output", tmp_path / "run", "-resume",
+    )  # fmt: skip
+
+    def initial_transform_x():
+        initial_transforms = json.loads(
+            (tmp_path / "run" / "transforms" / "initial_transforms.json").read_text()
+        )
+        return initial_transforms["0"][2][3]  # forward x translation the run started from
+
+    _nextflow(tmp_path, *params)
+    assert initial_transform_x() == pytest.approx(-APPLIED_SHIFT_ZYX[2])
+    entries = load_transform_settings(tmp_path / "run" / "transforms.yml").transforms
+    assert {e.initialized_from for e in entries} <= {"file", "file+refined"}
+
+    write_initial_transform((0.0, 0.0, 0.0))  # same path, new contents
+    _nextflow(tmp_path, *params)
+    assert initial_transform_x() == pytest.approx(0.0)

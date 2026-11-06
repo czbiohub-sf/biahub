@@ -37,15 +37,14 @@ def test_estimate_registration_converts_to_a_cross_reference_estimate():
     unified, notes = convert_settings(legacy)
     assert isinstance(unified, EstimateTransformSettings)
     assert unified.reference.frame == "cross" and unified.reference.channel == "Phase3D"
-    assert unified.moving.channel == "GFP" and unified.method == "beads"
-    assert (
-        unified.transform.seed == INVERSE.tolist()
-        and unified.transform.seed_direction == "inverse"
-    )
+    assert unified.moving.channel == "GFP" and unified.method == "bead_matching"
+    initial = unified.transform.initial
+    assert initial.from_ == "matrix"
+    assert initial.matrix == INVERSE.tolist() and initial.direction == "inverse"
     assert unified.transform.type == "affine" and unified.time_indices == [0, 5]
-    assert unified.beads is not None
+    assert unified.bead_matching is not None
     # legacy use_prev_t_transform (default true) is propagation, no longer dropped
-    assert unified.transform.seed_from == "previous_timepoint"
+    assert unified.transform.propagates
     assert not any("use_prev_t_transform" in n for n in notes)
 
 
@@ -61,7 +60,7 @@ def test_same_channel_estimate_registration_stays_a_cross_registration():
     # Legacy estimate-registration read GFP from the source store and GFP from the target
     # store: a cross-store registration, not stabilization against itself.
     assert unified.reference.frame == "cross" and unified.reference.channel == "GFP"
-    assert unified.method == "phase-cross-corr"
+    assert unified.method == "phase_cross_corr"
     assert any("kept as a cross-store registration" in n for n in notes)
 
 
@@ -77,7 +76,7 @@ def test_focus_finding_stabilization_converts_type_to_axes(stabilization_type):
         affine_transform_settings={"use_prev_t_transform": False},
     )
     unified, notes = convert_settings(legacy)
-    assert unified.method == "focus-finding" and unified.reference.frame == "previous"
+    assert unified.method == "focus_finding" and unified.reference.frame == "previous"
     assert unified.focus_finding.axes == stabilization_type
     assert unified.focus_finding.center_crop_xy == [600, 500]
     assert notes == []
@@ -114,7 +113,7 @@ def test_stabilize_config_converts_to_a_self_grid_series():
     unified, _ = convert_settings(legacy)
     assert unified.direction == "inverse" and unified.timepoints() == [0, 1, 2]
     assert unified.moving_channels == ["GFP", "Phase3D"] and unified.reference_channel is None
-    assert unified.method == "phase-cross-corr" and unified.voxel_size == [1, 1, 2, 0.5, 0.5]
+    assert unified.method == "phase_cross_corr" and unified.voxel_size == [1, 1, 2, 0.5, 0.5]
 
 
 def test_convert_settings_cli_writes_a_config_the_strict_loaders_accept(tmp_path):
@@ -193,7 +192,7 @@ def test_estimate_registration_without_propagation_converts_to_independent_estim
         affine_transform_settings={"use_prev_t_transform": False},
     )
     unified, _ = convert_settings(legacy)
-    assert unified.transform.seed_from == "input"
+    assert not unified.transform.propagates
 
 
 @pytest.mark.parametrize(
@@ -233,7 +232,7 @@ def test_estimate_registration_without_propagation_converts_to_independent_estim
 )
 def test_use_prev_t_transform_maps_to_propagation_only_for_beads(legacy, expected):
     unified, _ = convert_settings(legacy)
-    assert unified.transform.seed_from == expected
+    assert unified.transform.propagates is (expected == "previous_timepoint")
 
 
 def test_legacy_manual_time_index_becomes_time_indices():
@@ -277,3 +276,74 @@ def test_converting_different_focus_and_stackreg_crops_says_which_one_is_used():
     unified, notes = convert_settings(legacy)
     assert unified.focus_finding.center_crop_xy == [600, 600]
     assert any("center_crop_xy" in note and "900" in note for note in notes)
+
+
+@pytest.mark.parametrize("sobel", [True, False])
+def test_a_converted_ants_config_keeps_scoring_the_way_it_did(sobel):
+    # The legacy ANTs score compared Sobel edges when sobel_filter was on; the converted
+    # config says so in its score blocks.
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="ants",
+        ants_registration_settings={"sobel_filter": sobel},
+    )
+    converted, _notes = convert_settings(legacy)
+    assert [b.kind for b in converted.score.preprocess] == (["sobel"] if sobel else [])
+
+
+def test_a_converted_ants_config_gets_its_preparation_as_blocks():
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="ants",
+        ants_registration_settings={
+            "sobel_filter": True,
+            "clip": True,
+            "ref_mask_radius": 0.9,
+            "crop": True,
+        },
+    )
+    converted, notes = convert_settings(legacy)
+    assert [type(b).__name__ for b in converted.preprocess] == [
+        "ClipPercentiles",
+        "Sobel",
+        "MaskCircle",
+    ]
+    assert converted.preprocess[2].volumes == ["reference"]
+    assert converted.preprocess[2].radius == 0.9
+    assert any("clip" in n for n in notes) and any("crop dropped" in n for n in notes)
+
+
+def test_a_mask_radius_without_crop_converts_to_no_mask():
+    # the old pipeline used ref_mask_radius only to choose its crop
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="ants",
+        ants_registration_settings={"ref_mask_radius": 0.9, "crop": False},
+    )
+    converted, notes = convert_settings(legacy)
+    assert converted.preprocess == []
+    assert any("ref_mask_radius" in n for n in notes)
+
+
+def test_a_legacy_beads_config_converts_its_detections_to_the_volumes_names():
+    peaks = {"threshold_abs": 50.0}
+    legacy = EstimateRegistrationSettings(
+        source_channel_name="GFP",
+        target_channel_name="Phase3D",
+        estimation_method="beads",
+        beads_match_settings={"source_peaks_settings": peaks, "target_peaks_settings": peaks},
+    )
+    unified, _ = convert_settings(legacy)
+    assert unified.bead_matching.moving_peaks_settings.threshold_abs == 50.0
+    assert unified.bead_matching.reference_peaks_settings.threshold_abs == 50.0
+    stabilization = EstimateStabilizationSettings(
+        stabilization_estimation_channel="GFP",
+        stabilization_channels=["GFP"],
+        stabilization_type="xyz",
+        stabilization_method="beads",
+        beads_match_settings={"source_peaks_settings": peaks},
+    )
+    assert stabilization.beads_match_settings.moving_peaks_settings.threshold_abs == 50.0

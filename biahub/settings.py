@@ -1,8 +1,9 @@
+import copy
 import warnings
 
 from itertools import product
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NamedTuple
 
 import numpy as np
 import torch
@@ -19,12 +20,16 @@ from pydantic import (
     NonNegativeInt,
     PositiveFloat,
     PositiveInt,
+    TypeAdapter,
+    ValidationError,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
 
-# All settings classes inherit from MyBaseModel, which forbids extra parameters to guard against typos
+# All settings classes inherit from MyBaseModel, which forbids extra parameters to guard
+# against typos
 class MyBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -169,8 +174,8 @@ class TrackastraConfig(MyBaseModel):
 
     ``model`` is a pretrained name (``general_2d``, ``ctc``) or a path to a trained
     model folder. ``mode`` links greedily (``greedy``, or ``greedy_nodiv`` without
-    divisions) or with an ILP (``ilp``, via motile and ilpy: Gurobi with a full licence, else SCIP).
-    The model predicts in pixel space and needs no distance settings.
+    divisions) or with an ILP (``ilp``, via motile and ilpy: Gurobi with a full licence,
+    else SCIP). The model predicts in pixel space and needs no distance settings.
     """
 
     model: str = "general_2d"
@@ -388,20 +393,21 @@ class SpectralMatchSettings(MyBaseModel):
     max_iter: int = Field(60, ge=1)
 
 
-class SeedCorrectionSettings(MyBaseModel):
-    """Correct a per-timepoint seed by bead displacement voting before estimating.
+class InitialTransformCorrectionSettings(MyBaseModel):
+    """Correct a per-timepoint initial transform by bead displacement voting first.
 
-    For a series whose geometry drifts beyond the static seed's capture range while the
-    bead field is too thin for the matchers to re-acquire from scratch. The moving volume
-    is warped with the seed, beads are detected densely (`vote_peaks_settings`) and each
-    votes for its displacement to every reference bead within `capture_radius`; the mean
-    of the densest `cluster_radius`-ball of votes is the residual drift. "voteseed"
-    composes that translation into the seed; "votefit" additionally fits an affine on the
-    cluster's members, kept only if it lowers the peaks' median nearest-neighbour distance.
-    Candidates only compete against the unchanged seed, so a bad vote cannot make it worse.
+    For a series whose geometry drifts beyond the static initial transform's capture
+    range while the bead field is too thin for the matchers to re-acquire from scratch.
+    The moving volume is warped with the initial transform, beads are detected densely
+    (`vote_peaks_settings`) and each votes for its displacement to every reference bead
+    within `capture_radius`; the mean of the densest `cluster_radius`-ball of votes is
+    the residual drift. "vote_translation" composes that translation into the initial
+    transform; "vote_fit" also fits the run's transform type on the cluster's members,
+    kept only if it lowers the peaks' median nearest-neighbour distance. Candidates only
+    compete against the unchanged initial transform, so a bad vote cannot make it worse.
     """
 
-    mode: Literal["none", "voteseed", "votefit"] = "none"
+    mode: Literal["none", "vote_translation", "vote_fit"] = "none"
     vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
         threshold_abs=200.0, nms_distance=8, min_distance=0, block_size=[16, 16, 16]
     )
@@ -411,14 +417,14 @@ class SeedCorrectionSettings(MyBaseModel):
 
 
 class VoteIcpSettings(MyBaseModel):
-    """Tunables for `estimation_mode: vote_icp` (see `pointcloud.vote_icp_register`).
+    """Tunables for `estimation_mode: vote_icp` (see `core.nodes.point_set.vote_icp_register`).
 
-    The capture radius starts wide enough to reach a badly drifted seed and shrinks
-    geometrically each iteration (default 80 -> 40 -> 20 -> 10, then held), so early
-    rounds recover the bulk misalignment and late rounds only see unambiguous neighbours.
-    `vote_peaks_settings` is the dense detection on the raw moving volume for the reach
-    stage; a precision stage re-runs at short range with the pipeline's own
-    `source_peaks_settings` and is kept only on a strict score win.
+    The capture radius starts wide enough to reach a badly drifted initial transform and
+    shrinks geometrically each iteration (default 80 -> 40 -> 20 -> 10, then held), so
+    early rounds recover the bulk misalignment and late rounds only see unambiguous
+    neighbours. `vote_peaks_settings` is the dense detection on the raw moving volume
+    for the reach stage; a precision stage re-runs at short range with the pipeline's
+    own `moving_peaks_settings` and is kept only on a strict score win.
     """
 
     vote_peaks_settings: DetectPeaksSettings = DetectPeaksSettings(
@@ -446,28 +452,66 @@ class QCBeadsRegistrationSettings(MyBaseModel):
     score_centroid_mask_radius: int = 6
 
 
+# The legacy pipeline's names for the two detections; its configs are converted, a new
+# config with them is refused.
+LEGACY_BEAD_KEYS = {
+    "source_peaks_settings": "moving_peaks_settings",
+    "target_peaks_settings": "reference_peaks_settings",
+}
+
+
 class BeadsMatchSettings(MyBaseModel):
     algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
-    source_peaks_settings: DetectPeaksSettings | None = Field(
+    moving_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
-    target_peaks_settings: DetectPeaksSettings | None = Field(
+    reference_peaks_settings: DetectPeaksSettings | None = Field(
         default_factory=DetectPeaksSettings
     )
     match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
     hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
     spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
-    # Second arm of the estimate: acquire the correspondence with spectral matching, then
-    # refine with `algorithm`; the higher-scoring arm wins. "on_low_score" runs it only when
-    # the first arm scores below qc_settings.score_threshold.
-    spectral_arm: Literal["off", "on_low_score", "always"] = "off"
-    # "matching": detect -> match -> fit (the configured algorithm, plus the spectral arm);
-    # "vote_icp": correspond-by-voting ICP over the peak clouds (pointcloud.vote_icp_register).
+    # A second candidate: acquire the correspondence with spectral matching, then refine
+    # with `algorithm`; the higher-scoring candidate wins. "on_low_score" runs it only when
+    # `algorithm` alone scores below qc_settings.score_threshold.
+    spectral: Literal["off", "on_low_score", "always"] = "off"
+    # "matching": detect -> match -> fit (the configured algorithm, plus `spectral`);
+    # "vote_icp": correspond-by-voting ICP over the peak clouds
+    # (core.nodes.point_set.vote_icp_register).
     estimation_mode: Literal["matching", "vote_icp"] = "matching"
     vote_icp_settings: VoteIcpSettings = VoteIcpSettings()
-    seed_correction_settings: SeedCorrectionSettings = SeedCorrectionSettings()
+    initial_transform_correction_settings: InitialTransformCorrectionSettings = (
+        InitialTransformCorrectionSettings()
+    )
     filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
     qc_settings: QCBeadsRegistrationSettings = QCBeadsRegistrationSettings()
+
+    @model_validator(mode="before")
+    @classmethod
+    def refuse_legacy_keys(cls, data):
+        for old, new in LEGACY_BEAD_KEYS.items():
+            if isinstance(data, dict) and old in data:
+                raise ValueError(
+                    f"{old} is now {new}; `biahub convert-settings` rewrites a legacy config"
+                )
+        return data
+
+
+class LocalPhaseCrossCorrSettings(MyBaseModel):
+    """Local phase cross-correlation: a shift per tile of the max projections, fitted in yx.
+
+    As `biahub.registration.evaluate.tile_residuals`: `compare` edges (Sobel in each
+    volume's grid) or intensity, tiles of `tile_px` on a `grid` x `grid` layout, kept
+    when their shifted copy correlates above `min_ncc`. `rounds` re-measures with the
+    corrected transform (one warp each).
+    """
+
+    compare: Literal["edges", "intensity"] = "edges"
+    tile_px: PositiveInt = 256
+    grid: PositiveInt = 7
+    min_ncc: float = Field(0.5, ge=-1, le=1)
+    min_tiles: PositiveInt = 6
+    rounds: PositiveInt = 2
 
 
 class PhaseCrossCorrSettings(MyBaseModel):
@@ -480,6 +524,21 @@ class PhaseCrossCorrSettings(MyBaseModel):
     X_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Y_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
     Z_slice: list | list[list | Literal["all"]] | Literal["all"] = "all"
+    # Local: a shift per tile, fitted in yx (z stays the initial transform's), instead of one
+    # translation for the whole volume.
+    local: LocalPhaseCrossCorrSettings | None = None
+    # 1: whole-pixel shifts. Above 1: refined to 1/upsample_factor of a pixel (an upsampled
+    # DFT around the peak) -- chained whole-pixel steps add up to a drift.
+    upsample_factor: PositiveInt = 1
+
+    @model_validator(mode="after")
+    def check_upsample_factor(self) -> "PhaseCrossCorrSettings":
+        if self.upsample_factor > 1 and self.function_type == "custom_padding":
+            raise ValueError(
+                "upsample_factor > 1 refines the plain phase correlation; function_type "
+                "custom_padding has no sub-pixel step (use function_type: custom)"
+            )
+        return self
 
 
 class FocusSettings(MyBaseModel):
@@ -502,6 +561,18 @@ class FocusSettings(MyBaseModel):
         if len(v) != 2 or any(c <= 0 for c in v):
             raise ValueError("center_crop_xy must be two positive integers (X, Y)")
         return v
+
+
+class ShapesSettings(MyBaseModel):
+    """The shapes method: the registration from the two grids (shapes and voxel sizes).
+
+    The moving grid is flipped left-right when `fliplr`, turned by `rotate90` quarter
+    turns in yx, then rescaled by the voxel-size ratio onto the reference grid. Both are
+    given: a turn or a flip depends on how the two cameras are mounted.
+    """
+
+    rotate90: int
+    fliplr: bool
 
 
 # --------------------------------------------------------------------------------------
@@ -709,47 +780,187 @@ class AffineTransformSettings(MyBaseModel):
         return v
 
 
+# --- preprocessing blocks ---------------------------------------------------------------
+# Named steps applied before a method, each to the volumes it names: image blocks change
+# pixels, mask blocks say where to compare. A config writes them as a list of
+# `- <name>: {<parameters>}` and a run's resolved settings write them back the same way.
+
+Volume = Literal["moving", "reference"]
+
+
+class _Block(MyBaseModel):
+    """One preprocessing step on the volumes in `volumes`; `kind` is its name in the config."""
+
+    kind: str
+    volumes: list[Volume]
+
+    @field_validator("volumes")
+    @classmethod
+    def _check_target(cls, v):
+        if not v:
+            raise ValueError("volumes needs at least one of moving, reference")
+        if len(set(v)) != len(v):
+            raise ValueError(f"volumes names a volume more than once: {v}")
+        return v
+
+    @model_serializer(mode="wrap")
+    def _as_named(self, handler):
+        fields = handler(self)
+        return {fields.pop("kind"): fields}
+
+
+class ClipPercentiles(_Block):
+    """Clip each volume to its own `low`-`high` percentiles (outliers, background)."""
+
+    kind: Literal["clip_percentiles"] = "clip_percentiles"
+    volumes: list[Volume] = ["moving", "reference"]
+    low: float = Field(1.0, ge=0, le=100)
+    high: float = Field(99.5, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _low_below_high(self):
+        if self.low >= self.high:
+            raise ValueError(f"low ({self.low}) must be below high ({self.high})")
+        return self
+
+
+class Sobel(_Block):
+    """Edge strength (3D gradient magnitude): match structure, not intensity (cross-modal)."""
+
+    kind: Literal["sobel"] = "sobel"
+    volumes: list[Volume] = ["moving", "reference"]
+
+
+class Log1p(_Block):
+    """log(1 + v), negatives clipped to 0: compresses bright structure so dim structure counts."""
+
+    kind: Literal["log1p"] = "log1p"
+    volumes: list[Volume] = ["moving", "reference"]
+
+
+class GaussianBlur(_Block):
+    """Gaussian blur of `sigma` voxels (every axis): steadies a noisy comparison."""
+
+    kind: Literal["gaussian_blur"] = "gaussian_blur"
+    volumes: list[Volume] = ["moving", "reference"]
+    sigma: float = Field(gt=0)
+
+
+class MaskCircle(_Block):
+    """Compare only inside a circle in yx, the same on every z slice, centred on the volume.
+
+    `radius` is a fraction of the half-width of the shorter yx axis, e.g. 0.9 to leave out
+    a bright well edge (mantis v1).
+    """
+
+    kind: Literal["mask_circle"] = "mask_circle"
+    volumes: list[Volume]
+    radius: float = Field(gt=0, le=1)
+
+
+AxisRange = Literal["all"] | Annotated[list[NonNegativeInt], Field(min_length=2, max_length=2)]
+
+
+class MaskBox(_Block):
+    """Compare only inside a box: one `[start, stop]` voxel range (or `all`) per z, y, x.
+
+    Its voxels belong to one volume's grid, so it names exactly one volume.
+    """
+
+    kind: Literal["mask_box"] = "mask_box"
+    volumes: list[Volume]
+    box: Annotated[list[AxisRange], Field(min_length=3, max_length=3)]
+
+    @field_validator("volumes")
+    @classmethod
+    def _one_target(cls, v):
+        if len(v) != 1:
+            raise ValueError(f"a box is in one volume's voxels: give one volume, not {v}")
+        return v
+
+    @field_validator("box")
+    @classmethod
+    def _ranges(cls, v):
+        for axis, r in zip("zyx", v, strict=True):
+            if r != "all" and r[0] >= r[1]:
+                raise ValueError(f"box {axis} range {r}: start must be below stop")
+        return v
+
+
+IMAGE_BLOCKS = (ClipPercentiles, Sobel, Log1p, GaussianBlur)
+MASK_BLOCKS = (MaskCircle, MaskBox)
+# Methods that can restrict their comparison to a mask.
+MASK_METHODS = {"ants"}
+_BLOCK_TYPES = {b.model_fields["kind"].default: b for b in IMAGE_BLOCKS + MASK_BLOCKS}
+
+
+def _named_block(item):
+    """`{<name>: {<parameters>}}` as written in a config -> the block's fields."""
+    if isinstance(item, _Block):
+        return item
+    if not isinstance(item, dict) or len(item) != 1:
+        raise ValueError(
+            f"each preprocessing entry is one block, `- <name>: {{...}}`; got {item}"
+        )
+    ((name, params),) = item.items()
+    if name not in _BLOCK_TYPES:
+        raise ValueError(
+            f"unknown preprocessing block {name!r}; known: {sorted(_BLOCK_TYPES)}"
+        )
+    return {"kind": name, **(params or {})}
+
+
+PreprocessBlock = Annotated[
+    Annotated[
+        ClipPercentiles | Sobel | Log1p | GaussianBlur | MaskCircle | MaskBox,
+        Field(discriminator="kind"),
+    ],
+    BeforeValidator(_named_block),
+]
+PreprocessBlocks = list[PreprocessBlock]
+
+
 class AntsRegistrationSettings(MyBaseModel):
     """Settings for the ANTs registration backend.
 
-    Field names and defaults mirror the keyword arguments of
-    ``biahub.registration.methods.ants.preprocess_zyx``, which is what consumes them.
-
-    Attributes
-    ----------
-    sobel_filter : bool
-        Apply a Sobel filter (3D gradient magnitude) to both volumes before
-        registering, so ANTs matches structural edges rather than raw
-        intensity. Needed for cross-modality pairs such as fluorescence
-        against a virtual-staining prediction.
-    crop : bool
-        Crop both volumes to their overlapping region with the LIR algorithm
-        before registering.
-    ref_mask_radius : float | None
-        Radius of a circular mask applied to the reference channel, as a
-        fraction of image width in ``(0, 1]``. ``None`` applies no mask.
-    clip : bool
-        Clip both volumes to hardcoded intensity limits. Those limits assume a
-        **phase** reference (``np.clip(ref, 0, 0.5)``); leave this off for any
-        other reference, e.g. a virtual-staining prediction whose values range
-        well above 0.5.
+    The transform family comes from `transform.type`; preparation (Sobel, clipping,
+    masks) is the config's `preprocess` blocks. ANTs' search (iterations, shrink factors,
+    smoothing) uses `biahub.registration.methods.intensity.ants.DEFAULT_ANTS_KWARGS`.
     """
 
-    sobel_filter: bool = False
-    crop: bool = False
-    ref_mask_radius: float | None = None
-    clip: bool = False
-
-    @field_validator("ref_mask_radius")
+    @model_validator(mode="before")
     @classmethod
-    def check_ref_mask_radius(cls, v):
-        # preprocess_zyx raises on this too, but only after the data is
-        # loaded -- catching it at config-parse time is much cheaper.
-        if v is not None and not (0 < v <= 1):
-            raise ValueError(
-                "ref_mask_radius must be given as a fraction of image width, i.e. (0, 1]."
+    def point_old_fields_to_preprocess(cls, data):
+        # The fields this block had before preprocess blocks; every resolved config of
+        # that version holds them, even with all defaults.
+        if not isinstance(data, dict):
+            return data
+        old = [k for k in ("sobel_filter", "crop", "ref_mask_radius", "clip") if k in data]
+        if not old:
+            return data
+        blocks, notes = [], []
+        if data.get("clip"):
+            blocks.append("- clip_percentiles: {}")
+            notes.append(
+                "clip_percentiles clips each volume to its own 1st-99.5th percentiles, "
+                "not the old fixed limits"
             )
-        return v
+        if data.get("sobel_filter"):
+            blocks.append("- sobel: {}")
+        # the old mask was applied only when cropping
+        if data.get("crop") and data.get("ref_mask_radius") is not None:
+            blocks.append(
+                f"- mask_circle: {{volumes: [reference], radius: {data['ref_mask_radius']}}}"
+            )
+        if data.get("crop"):
+            notes.append(
+                "crop is gone: ANTs no longer warps the moving volume first, so there is no "
+                "empty border to crop; to use only part of the field, add a mask_box block"
+            )
+        message = f"ants {old} are no longer settings: remove them"
+        if blocks:
+            message += "; under preprocess:, write " + ", ".join(blocks)
+        raise ValueError(". ".join([message, *notes]))
 
 
 class ManualSettings(MyBaseModel):
@@ -1244,57 +1455,116 @@ class ChannelSettings(MyBaseModel):
     channel: str
 
 
-class TransformFitSettings(MyBaseModel):
-    """What kind of transform to fit and where to start.
+InitialSource = Literal["matrix", "shapes", "file"]
 
-    `seed` is a 4x4 matrix in `seed_direction`: "inverse" (reference -> moving, the
-    convention of every transform on disk and of the legacy `approx_transform`) or
-    "forward" (moving -> reference, the engine's own convention).
 
-    `seed_from` says where each timepoint starts: `input` -- the seed, for every
-    timepoint (independent estimates, fanned out per timepoint); `previous_timepoint` --
-    the previous timepoint's result, with the input seed competing on the first pass
-    (sequential, as the legacy `use_prev_t_transform`).
+class InitialTransformSettings(MyBaseModel):
+    """`transform.initial`: where every estimate starts (absent, or no `from`: identity).
+
+    `from: matrix` -- `matrix` (4x4) in `direction`: "inverse" (reference -> moving, the
+    convention of every transform on disk) or "forward" (moving -> reference).
+    `from: shapes` -- the initial transform from the two stores' shapes and voxel
+    sizes (their OME-NGFF scale), after `rotate90` quarter turns in yx and `fliplr`.
+    `from: file` -- each position and timepoint's transform in a transforms `file` (an
+    earlier result, e.g. a pooled plate transform): the estimate from it is kept only
+    when it scores strictly better, and the entry records `initialized_from`.
+
+    `propagate`: each timepoint starts from the previous one's result, the initial
+    transform competing on the first pass (sequential, as the legacy
+    `use_prev_t_transform`). A file gives every timepoint its own, so not with `file`.
     """
 
-    type: Literal["euclidean", "similarity", "affine"] = "euclidean"
-    seed: list = np.eye(4).tolist()
-    seed_direction: TransformDirection = "inverse"
-    seed_from_shapes: bool = False
-    seed_from: Literal["input", "previous_timepoint"] = "input"
+    model_config = ConfigDict(
+        extra="forbid", serialize_by_alias=True, validate_by_name=True, validate_by_alias=True
+    )
 
-    @field_validator("seed")
-    @classmethod
-    def check_seed(cls, v):
-        if np.asarray(v, dtype=float).shape != (4, 4):
-            raise ValueError("seed must be a 4x4 matrix")
-        return v
+    from_: InitialSource | None = Field(None, alias="from")
+    matrix: list | None = None
+    direction: TransformDirection | None = None
+    rotate90: int | None = None
+    fliplr: bool | None = None
+    file: str | None = None
+    propagate: bool = False
+
+    @model_validator(mode="after")
+    def check_source(self) -> "InitialTransformSettings":
+        needs = {
+            "matrix": ("matrix", "direction"),
+            "shapes": ("rotate90", "fliplr"),
+            "file": ("file",),
+        }
+        for source, fields in needs.items():
+            for name in fields:
+                given = getattr(self, name) is not None
+                if self.from_ == source and not given:
+                    raise ValueError(f"transform.initial from {source} needs {name}")
+                if self.from_ != source and given:
+                    raise ValueError(
+                        f"transform.initial.{name} is for from: {source}; got from: {self.from_}"
+                    )
+        if self.matrix is not None and np.asarray(self.matrix, dtype=float).shape != (4, 4):
+            raise ValueError("transform.initial.matrix must be a 4x4 matrix")
+        if self.from_ == "file" and self.propagate:
+            raise ValueError(
+                "transform.initial from a file starts every timepoint from the file; it does "
+                "not combine with propagate"
+            )
+        return self
+
+
+class TransformFitSettings(MyBaseModel):
+    """What kind of transform to fit (`type`), and where it starts (`initial`)."""
+
+    type: Literal["euclidean", "similarity", "affine"] = "euclidean"
+    initial: InitialTransformSettings | None = None
+
+    @property
+    def propagates(self) -> bool:
+        """Each timepoint starts from the previous one's result (`initial.propagate`)."""
+        return self.initial is not None and self.initial.propagate
+
+    @property
+    def initial_file(self) -> str | None:
+        """The transforms file every timepoint starts from (`from: file`), else None."""
+        init = self.initial
+        return init.file if init is not None and init.from_ == "file" else None
+
+
+# Absolute thresholds measured on the bead overlap score (a fraction of beads matched):
+# with score.metric overlap they are the defaults; other metrics have no absolute scale
+# (a correct cross-modal correlation is ~0.1), so they are off unless a config sets them.
+BEAD_OVERLAP_THRESHOLDS = {"floor": 0.80, "hard_fail": 0.40, "consensus": 0.75}
 
 
 class FlagSettings(MyBaseModel):
     """Adaptive flagging line.
 
-    A timepoint is flagged below median - k_mad * MAD AND below `floor`, or below
-    `hard_fail` regardless.
+    A timepoint is flagged below median - k_mad * MAD (and below `floor`, when set), or
+    below `hard_fail` (when set) regardless. Left out, `floor` and `hard_fail` are the
+    bead overlap's (`BEAD_OVERLAP_THRESHOLDS`) with score.metric overlap, else off.
     """
 
     k_mad: float = 2.0
-    floor: float = 0.80
-    hard_fail: float = 0.40
+    floor: float | None = None
+    hard_fail: float | None = None
 
 
-RepairCandidate = Literal["t-1", "t+1", "consensus", "seed"]
+RepairCandidate = Literal["t-1", "t+1", "consensus", "initial"]
 
 
 class RepairSettings(MyBaseModel):
-    """Repair pass over flagged timepoints: candidate seeds in the order they are tried.
+    """Repair pass over flagged timepoints: where to start again, in the order tried.
 
-    `polish_rounds`: after a candidate is accepted, re-estimate seeded from it up to this
-    many times, keeping a round only on a strict score gain (0 disables).
+    `t-1` / `t+1`: a non-flagged neighbour's transform; `consensus`: the run's median over
+    well-scoring timepoints; `initial`: the run's `transform.initial`. `polish_rounds`:
+    after a candidate is accepted, re-estimate started from it up to this many times,
+    keeping a round only on a strict score gain (0 disables).
     """
 
-    candidates: list[RepairCandidate] = ["t-1", "t+1", "consensus", "seed"]
-    consensus_threshold: float = 0.75
+    candidates: list[RepairCandidate] = ["t-1", "t+1", "consensus", "initial"]
+    # left out: the bead overlap's 0.75 with score.metric overlap, else the timepoints
+    # flagging did not flag
+    consensus_threshold: float | None = None
     consensus_min_good: int = 5
     max_timepoints: int | None = None
     polish_rounds: NonNegativeInt = 3
@@ -1304,15 +1574,16 @@ class SweepSettings(MyBaseModel):
     """Sweep pass: re-estimate flagged timepoints under alternative method settings.
 
     `grid` is a list of sub-grids; each maps a dotted path into the estimate config (e.g.
-    `beads.hungarian_match_settings.cost_threshold`) to the values to try. The trials are
+    `bead_matching.hungarian_match_settings.cost_threshold`) to the values to try. The trials are
     the union of each sub-grid's cross product, so parameters that are inert together
     (hungarian vs spectral) are swept without paying for their product. Paths are checked
     when the config loads. Each flagged timepoint keeps the best of its original, repaired
-    and swept transforms; `max_timepoints` caps the sweep to the worst flagged timepoints.
+    and swept transforms; `max_timepoints` caps the sweep to the worst flagged timepoints
+    (None, as repair's: every flagged one -- a trial grid costs per flagged timepoint).
     """
 
     grid: list[dict[str, list]] = Field(min_length=1)
-    max_timepoints: int | None = 25
+    max_timepoints: int | None = None
 
     @field_validator("grid")
     @classmethod
@@ -1348,32 +1619,226 @@ def trial_name(overrides: dict[str, Any]) -> str:
 
 class FallbackSettings(MyBaseModel):
     flag: FlagSettings = FlagSettings()
-    repair: RepairSettings | None = RepairSettings()
+    # off unless the config asks for it: a method that ignores where it starts gains nothing
+    repair: RepairSettings | None = None
     sweep: SweepSettings | None = None
 
 
-EstimationMethod = Literal["beads", "ants", "phase-cross-corr", "manual", "focus-finding"]
+class NucleiSettings(MyBaseModel):
+    """Settings for the nuclei method: landmark-based, as beads, with nuclei for landmarks.
+
+    Detection as `nuclei_matching.detect_nuclei` (areas in µm², so they hold
+    across instruments); matching with the same graph matchers as beads (`algorithm` and
+    its settings, and the match filters); `iterations` passes, each re-detecting on the
+    moving volume warped by the current transform. The fit is yx plus a z shift: a cell
+    layer constrains no z scale or tilt.
+    """
+
+    min_area_um2: PositiveFloat = 8.0
+    max_area_um2: PositiveFloat = 320.0
+    min_solidity: float = Field(0.9, gt=0, le=1)
+    smooth_um: float = Field(0.2, ge=0)
+    algorithm: Literal["hungarian", "match_descriptor", "spectral"] = "hungarian"
+    hungarian_match_settings: HungarianMatchSettings = HungarianMatchSettings()
+    spectral_match_settings: SpectralMatchSettings = SpectralMatchSettings()
+    match_descriptor_settings: MatchDescriptorSettings = MatchDescriptorSettings()
+    filter_matches_settings: FilterMatchesSettings = FilterMatchesSettings()
+    iterations: PositiveInt = 2
+
+
+EstimationMethod = Literal[
+    "bead_matching",
+    "ants",
+    "phase_cross_corr",
+    "manual",
+    "focus_finding",
+    "nuclei_matching",
+    "shapes",
+]
 # The settings block each method reads.
 METHOD_BLOCKS: dict[str, str] = {
-    "beads": "beads",
+    "bead_matching": "bead_matching",
     "ants": "ants",
-    "phase-cross-corr": "phase_cross_corr",
+    "phase_cross_corr": "phase_cross_corr",
     "manual": "manual",
+    "focus_finding": "focus_finding",
+    "nuclei_matching": "nuclei_matching",
+    "shapes": "shapes",
+}
+TransformType = Literal["euclidean", "similarity", "affine"]
+
+
+# The transform types a method can fit, where it cannot fit every one: focus finding and
+# (global) phase correlation measure a translation, manual fits euclidean or similarity,
+# shapes rescales by the voxel-size ratio.
+METHOD_TRANSFORM_TYPES: dict[str, tuple[str, ...]] = {
+    "focus_finding": ("euclidean",),
+    "phase_cross_corr": ("euclidean",),
+    "manual": ("euclidean", "similarity"),
+    "shapes": ("affine",),
+}
+
+
+# The legacy pipeline's method names (estimation_method / stabilization_method).
+RENAMED_METHODS = {
+    "beads": "bead_matching",
+    "phase-cross-corr": "phase_cross_corr",
     "focus-finding": "focus_finding",
 }
+
+
+def _check_method_name(name):
+    if name in RENAMED_METHODS:
+        raise ValueError(f"method {name!r} is now {RENAMED_METHODS[name]!r}")
+
+
+def _named_method_block(item):
+    """Turn `{<method>: {preprocess, transform: {type}, <settings>}}` into a block's fields."""
+    if isinstance(item, MethodBlock):
+        return item
+    if not isinstance(item, dict) or len(item) != 1:
+        raise ValueError(
+            f"each block of a stack names one method, `- <method>: {{...}}`; got {item}"
+        )
+    ((method, body),) = item.items()
+    _check_method_name(method)
+    body = dict(body or {})
+    transform = body.pop("transform", None) or {}
+    if set(transform) - {"type"}:
+        raise ValueError(
+            f"a block's transform sets only its type; {sorted(set(transform) - {'type'})} "
+            "belong to the run's transform"
+        )
+    return {
+        "method": method,
+        "preprocess": body.pop("preprocess", []),
+        "type": transform.get("type"),
+        "settings": body,
+    }
+
+
+class MethodBlock(MyBaseModel):
+    """One block of a stack: a method with its own preparation, transform type and settings.
+
+    Written `- <method>: {preprocess: [...], transform: {type: ...}, <the method's
+    settings>}`; `type` unset takes the run's `transform.type`. The settings are checked
+    when the run's settings build each block (`EstimateTransformSettings.stack_settings`).
+    """
+
+    method: EstimationMethod
+    preprocess: PreprocessBlocks = []
+    type: TransformType | None = None
+    settings: dict[str, Any] = {}
+
+    @model_serializer(mode="wrap")
+    def _as_named(self, handler):
+        fields = handler(self)
+        body = dict(fields["settings"])
+        if fields["preprocess"]:
+            body["preprocess"] = fields["preprocess"]
+        if fields["type"] is not None:
+            body["transform"] = {"type": fields["type"]}
+        return {fields["method"]: body}
+
+
+MethodStack = list[Annotated[MethodBlock, BeforeValidator(_named_method_block)]]
+_METHOD_NAME = TypeAdapter(EstimationMethod)
+_METHOD_STACK = TypeAdapter(MethodStack)
+
+
+# What each method measures from, and what it can estimate. Landmark-based methods detect
+# structures seen in both channels and match them (graph matching); intensity-based ones
+# compare the images directly; manual ones take the registration from a person (clicked
+# points, or the setup's turn and flip with the stores' voxel sizes). The family says
+# whether a method can work on a dataset (landmarks, shared image structure, or a person
+# who knows the setup); the estimate says where it goes in a stack (translations make
+# coarse first blocks).
+METHOD_FAMILIES: dict[str, tuple[str, str]] = {
+    "bead_matching": ("landmark-based", "affine"),
+    "nuclei_matching": ("landmark-based", "yx linear and a z shift"),
+    "phase_cross_corr": ("intensity-based", "translation; yx linear when local"),
+    "ants": ("intensity-based", "linear (the transform type)"),
+    "focus_finding": ("intensity-based", "translation (z by focus, yx by stackreg)"),
+    "manual": ("manual", "linear (clicked pairs)"),
+    "shapes": ("manual", "linear (voxel-size scaling, quarter turns, a flip)"),
+}
+
+
 ScoreMetric = Literal[
     "overlap", "residual", "mutual_information", "correlation", "gradient_correlation"
 ]
+# Metrics that compare intensities after the candidate warp; the bead metrics detect beads
+# on the raw volumes instead.
+INTENSITY_METRICS = {"mutual_information", "correlation", "gradient_correlation"}
+
+
+class ScoreSettings(MyBaseModel):
+    """How a candidate transform is judged: the one number every decision uses.
+
+    `metric`: None is the method's default (DEFAULT_SCORE_METRIC). `preprocess`: image
+    blocks applied to the two volumes after the candidate warp, inside their raw overlap,
+    just before comparing (e.g. sobel to compare edges); intensity metrics only. The
+    method's own `preprocess` never changes the score.
+    """
+
+    metric: ScoreMetric | None = None
+    preprocess: PreprocessBlocks = []
+    # Also computed for every transform and written next to its score, on the raw warped
+    # pair (no score blocks): a fixed yardstick across runs. Never used for decisions.
+    report: list[ScoreMetric] = []
+
+    @field_validator("preprocess")
+    @classmethod
+    def _image_blocks_only(cls, v):
+        masks = [b.kind for b in v if not isinstance(b, IMAGE_BLOCKS)]
+        if masks:
+            raise ValueError(f"score preprocess takes image blocks only, not {masks}")
+        return v
+
+
 DEFAULT_SCORE_METRIC: dict[str, str] = {
-    "beads": "overlap",
+    "bead_matching": "overlap",
     "ants": "correlation",
-    "phase-cross-corr": "correlation",
+    "phase_cross_corr": "correlation",
     "manual": "gradient_correlation",
-    "focus-finding": "correlation",
+    "focus_finding": "correlation",
+    "nuclei_matching": "correlation",
+    "shapes": "correlation",
 }
 
 
-ReferenceFrame = Literal["cross", "first", "previous"]
+ReferenceFrame = Literal["cross", "first", "previous", "neighbours"]
+
+
+class AnchorSettings(MyBaseModel):
+    """`reference.anchor`: the slow component the neighbour median follows, removed.
+
+    Each timepoint's centroid (`type: centroid`: the moving volume binned by
+    `downsample`, blurred by `blur_sigma` binned voxels, weighted by its intensity above
+    the `bg_percentile` percentile) is smoothed over time (a median of `smooth_median`
+    timepoints, then a Gaussian of `smooth_sigma`), and the translation (frame centre -
+    smoothed centroid) is added to every timepoint's transform: the sample is moved to
+    the centre and held there. Every value is given; none has a default.
+    """
+
+    type: Literal["centroid"]
+    bg_percentile: float = Field(ge=0, lt=100)
+    downsample: PositiveInt
+    blur_sigma: float = Field(ge=0)
+    smooth_median: PositiveInt  # timepoints
+    smooth_sigma: float = Field(ge=0)  # timepoints
+
+
+class LeftoverMotionSettings(MyBaseModel):
+    """`reference.leftover_motion: {}`: how much a stabilization still moves, frame to frame.
+
+    Each estimate job also measures the raw shift from the run's previous timepoint (phase
+    cross-correlation on the moving volumes, to a quarter voxel); the run reports, for its
+    transforms and for the unregistered series, the shift left between consecutive frames
+    in µm (`biahub.registration.metrics.leftover_motion`). It measures single-frame jumps,
+    not slow drift. Exact for translations; marked approximate when a transform rotates
+    or scales. No settings yet.
+    """
 
 
 class ReferenceSettings(MyBaseModel):
@@ -1381,11 +1846,28 @@ class ReferenceSettings(MyBaseModel):
 
     `frame: cross` -- `channel` of the reference store at the same timepoint
     (registration). `frame: first` / `previous` -- the moving channel's own first /
-    previous timepoint (stabilization); `channel` is then omitted.
+    previous timepoint (stabilization); `channel` is then omitted. `frame: neighbours` --
+    the median of the moving channel's frames within t +- `window` (t excluded): absolute
+    transforms that measure single-frame jumps without a chain, while slow drift moves
+    the median with it.
+
+    `previous` chains each step onto the run's first frame, so a step's error is carried
+    by every later frame: on long series, whole-pixel phase correlation drifted by about
+    0.5 px per frame (-384 px over 761 frames on a neuromast timelapse) while the sample
+    stayed in place. Check the chained translation against the sample before applying.
+
+    `anchor` (with `neighbours` only) adds the slow component back as a move to the
+    frame centre: see `AnchorSettings`. On a `previous` chain it would hide the drift.
+    `leftover_motion` (stabilizations only) reports how still the result is: see
+    `LeftoverMotionSettings`.
     """
 
     frame: ReferenceFrame = "cross"
     channel: str | None = None
+    # frames on each side of t for `frame: neighbours`: given there, and only there
+    window: PositiveInt | None = None
+    anchor: AnchorSettings | None = None
+    leftover_motion: LeftoverMotionSettings | None = None
 
     @model_validator(mode="after")
     def check_channel(self) -> "ReferenceSettings":
@@ -1396,7 +1878,35 @@ class ReferenceSettings(MyBaseModel):
                 f"reference frame '{self.frame}' aligns the moving channel onto itself; "
                 "drop reference.channel"
             )
+        if self.frame == "neighbours" and self.window is None:
+            raise ValueError(
+                "reference frame 'neighbours' needs its window: frames on each side of t "
+                "(e.g. window: 6)"
+            )
+        if self.frame != "neighbours" and self.window is not None:
+            raise ValueError(
+                f"reference.window is read only by frame neighbours; got '{self.frame}'"
+            )
+        if self.anchor is not None and self.frame != "neighbours":
+            raise ValueError(
+                f"reference.anchor needs reference.frame 'neighbours'; got '{self.frame}'"
+            )
+        if self.leftover_motion is not None and self.frame == "cross":
+            raise ValueError(
+                "reference.leftover_motion is for a stabilization (frame first, previous or "
+                "neighbours): a cross registration's transforms map between two grids"
+            )
         return self
+
+
+class PoolSettings(MyBaseModel):
+    """One shared transform from the positions' estimates: the medoid (closest to all).
+
+    `z: median` keeps the medoid's yx and moves z to the positions' median depth, for a
+    plate whose yx agrees across positions and whose z does not.
+    """
+
+    z: Literal["medoid", "median"] = "medoid"
 
 
 class EstimateTransformSettings(MyBaseModel):
@@ -1411,29 +1921,170 @@ class EstimateTransformSettings(MyBaseModel):
 
     moving: ChannelSettings
     reference: ReferenceSettings
-    method: EstimationMethod
-    beads: BeadsMatchSettings | None = None
+    # Applied, in order, before the method (see the preprocessing blocks above).
+    preprocess: PreprocessBlocks = []
+    # One method by name, or a stack of blocks run coarse to fine (each started from the one
+    # before; the run's score judges every block's result).
+    method: EstimationMethod | MethodStack
+    bead_matching: BeadsMatchSettings | None = None
     ants: AntsRegistrationSettings | None = None
     phase_cross_corr: PhaseCrossCorrSettings | None = None
     manual: ManualSettings | None = None
     focus_finding: FocusSettings | None = None
+    nuclei_matching: NucleiSettings | None = None
+    shapes: ShapesSettings | None = None
     transform: TransformFitSettings = TransformFitSettings()
     time_indices: NonNegativeInt | list[NonNegativeInt] | Literal["all"] = "all"
-    # None: the method's default (beads: overlap, ants / phase-cross-corr /
-    # focus-finding: correlation, manual: gradient_correlation).
-    score_metric: ScoreMetric | None = None
+    score: ScoreSettings = ScoreSettings()
     fallback: FallbackSettings = FallbackSettings()
+    # Estimate on several positions, write one shared transform (their medoid); each
+    # position's own estimate is kept in the run folder (per_position.yml).
+    pool: PoolSettings | None = None
     verbose: bool = False
+
+    @field_validator("method", mode="wrap")
+    @classmethod
+    def check_the_written_form(cls, value, handler):
+        # a name or a stack: check only the form given, so its errors are the only ones
+        if isinstance(value, list) and not value:
+            raise ValueError("a stack needs at least one block under method:")
+        if isinstance(value, str):
+            _check_method_name(value)
+        adapter = _METHOD_STACK if isinstance(value, list) else _METHOD_NAME
+        try:
+            return adapter.validate_python(value)
+        except ValidationError as error:
+            raise ValueError(str(error)) from None
+
+    @model_validator(mode="after")
+    def check_only_the_methods_block_is_given(self) -> "EstimateTransformSettings":
+        if self.is_stack:  # check_stack says it for a stack
+            return self
+        own = METHOD_BLOCKS[self.method]
+        ignored = [
+            f for f in METHOD_BLOCKS.values() if f != own and getattr(self, f) is not None
+        ]
+        if ignored:
+            raise ValueError(
+                f"{', '.join(ignored)} block is read by nothing: method {self.method} "
+                f"reads only its own ({own})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_the_method_fits_the_transform_type(self) -> "EstimateTransformSettings":
+        if self.is_stack:  # each block is checked as its own config (check_stack)
+            return self
+        fits = METHOD_TRANSFORM_TYPES.get(self.method)
+        pcc = self.phase_cross_corr
+        if self.method == "phase_cross_corr" and pcc is not None and pcc.local is not None:
+            fits = None  # local phase correlation fits the type in yx
+        if fits is not None and self.transform.type not in fits:
+            raise ValueError(
+                f"method {self.method} fits {' or '.join(fits)} only; got transform.type "
+                f"{self.transform.type}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_propagation_has_a_start_to_pass(self) -> "EstimateTransformSettings":
+        if self.transform.propagates and self.ignores_initial_transform:
+            raise ValueError(
+                f"transform.initial.propagate starts each timepoint from the previous one's "
+                f"result, but {self.stack_settings()[0].method} ignores where it starts"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_previous_frame_starts_from_steps(self) -> "EstimateTransformSettings":
+        if self.transform.initial_file is not None and self.reference.frame == "previous":
+            raise ValueError(
+                "transform.initial from a file holds absolute transforms, but reference "
+                "frame 'previous' estimates steps (t -> t-1): use frame 'first', "
+                "'neighbours' or 'cross' with a file"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_pool_has_a_shared_frame(self) -> "EstimateTransformSettings":
+        if self.pool is not None and self.reference.frame == "previous":
+            raise ValueError(
+                "pool needs one frame for every position; reference frame 'previous' "
+                "chains each position's matrices onto its own first frame"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_score_blocks_have_an_intensity_metric(self) -> "EstimateTransformSettings":
+        metric = self.effective_score_metric
+        if self.score.preprocess and metric not in INTENSITY_METRICS:
+            raise ValueError(
+                f"score preprocess needs an intensity metric ({sorted(INTENSITY_METRICS)}); "
+                f"{metric!r} detects beads on the raw volumes"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_bead_report_metrics_have_beads(self) -> "EstimateTransformSettings":
+        bead_metrics = [m for m in self.score.report if m not in INTENSITY_METRICS]
+        where = "a final block" if self.is_stack else "method"
+        if bead_metrics and self.final_method != "bead_matching":
+            raise ValueError(
+                f"report metrics {bead_metrics} detect beads: they need {where} bead_matching"
+            )
+        metric = self.effective_score_metric
+        if metric not in INTENSITY_METRICS and self.final_method != "bead_matching":
+            raise ValueError(
+                f"score metric {metric!r} detects beads: it needs {where} bead_matching"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_shapes_has_no_preprocess(self) -> "EstimateTransformSettings":
+        # the shapes method reads only metadata: blocks before it would change nothing
+        blocks = (
+            [b.preprocess for b in self.method if b.method == "shapes"]
+            if self.is_stack
+            else [self.preprocess]
+            if self.method == "shapes"
+            else []
+        )
+        if any(blocks):
+            raise ValueError(
+                "shapes reads no pixels (only the stores' shapes and voxel sizes): remove "
+                "its preprocess blocks"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_masks_have_a_method_that_uses_them(self) -> "EstimateTransformSettings":
+        masks = [b.kind for b in self.preprocess if isinstance(b, MASK_BLOCKS)]
+        if masks and not self.is_stack and self.method not in MASK_METHODS:
+            raise ValueError(
+                f"mask blocks need a method that can use them ({sorted(MASK_METHODS)}); "
+                f"method {self.method!r} cannot use {masks}"
+            )
+        return self
 
     @model_validator(mode="after")
     def fill_method_block(self) -> "EstimateTransformSettings":
         defaults = {
-            "beads": ("beads", BeadsMatchSettings),
+            "bead_matching": ("bead_matching", BeadsMatchSettings),
             "ants": ("ants", AntsRegistrationSettings),
-            "phase-cross-corr": ("phase_cross_corr", PhaseCrossCorrSettings),
+            "phase_cross_corr": ("phase_cross_corr", PhaseCrossCorrSettings),
             "manual": ("manual", ManualSettings),
-            "focus-finding": ("focus_finding", FocusSettings),
+            "focus_finding": ("focus_finding", FocusSettings),
+            "nuclei_matching": ("nuclei_matching", NucleiSettings),
         }
+        if self.is_stack:  # each block brings its own settings
+            return self
+        if self.method == "shapes":  # no defaults: the turn and flip are the setup's
+            if self.shapes is None:
+                raise ValueError(
+                    "method shapes needs its block: shapes: {rotate90: <quarter turns>, "
+                    "fliplr: <true|false>}"
+                )
+            return self
         field, model = defaults[self.method]
         if getattr(self, field) is None:
             setattr(self, field, model())
@@ -1441,7 +2092,7 @@ class EstimateTransformSettings(MyBaseModel):
 
     @model_validator(mode="after")
     def check_manual_is_one_timepoint(self) -> "EstimateTransformSettings":
-        if self.method == "manual" and not isinstance(self.time_indices, int):
+        if "manual" in self.method_names and not isinstance(self.time_indices, int):
             raise ValueError(
                 "manual registers one timepoint (in napari): set time_indices to it, e.g. "
                 f"time_indices: 0; got {self.time_indices!r}"
@@ -1490,6 +2141,16 @@ class EstimateTransformSettings(MyBaseModel):
                 "reference.frame 'previous' needs several timepoints (each is a step from "
                 f"the one before it); got time_indices {ts!r}. Use 'first' for one timepoint."
             )
+        if self.reference.leftover_motion is not None and single:
+            raise ValueError(
+                "reference.leftover_motion compares consecutive timepoints; got "
+                f"time_indices {ts!r}"
+            )
+        if self.reference.frame == "neighbours" and single:
+            raise ValueError(
+                "reference.frame 'neighbours' needs several timepoints (each is compared "
+                f"with the frames around it); got time_indices {ts!r}"
+            )
         return self
 
     @model_validator(mode="after")
@@ -1506,10 +2167,11 @@ class EstimateTransformSettings(MyBaseModel):
 
     @model_validator(mode="after")
     def check_sweep_paths(self) -> "EstimateTransformSettings":
-        if self.fallback.sweep is None:
+        if self.fallback.sweep is None or self.is_stack:  # (a stack refuses sweeps)
             return self
-        # A sweep trial only rebuilds the estimator: the score, seed and reference come
-        # from these settings, so only the method's own block and the fit type can change.
+        # A sweep trial only rebuilds the estimator: the score, initial transform and
+        # reference come from these settings, so only the method's own block and the fit
+        # type can change.
         block = METHOD_BLOCKS[self.method]
         for overrides in self.fallback.sweep.trials():
             for path in overrides:
@@ -1521,6 +2183,70 @@ class EstimateTransformSettings(MyBaseModel):
                     )
         self.sweep_trials()
         return self
+
+    @model_validator(mode="after")
+    def check_stack(self) -> "EstimateTransformSettings":
+        if not self.is_stack:
+            return self
+        sections = [f for f in METHOD_BLOCKS.values() if getattr(self, f) is not None]
+        if sections or self.preprocess:
+            given = sections + (["preprocess"] if self.preprocess else [])
+            raise ValueError(
+                f"with a stack, {given} belong in the blocks: "
+                "`- <method>: {preprocess: [...], <its settings>}`"
+            )
+        if self.fallback.sweep is not None:
+            raise ValueError("fallback.sweep cannot say which block of a stack it varies yet")
+        self.stack_settings()  # every block is checked as its own config
+        return self
+
+    @property
+    def is_stack(self) -> bool:
+        return isinstance(self.method, list)
+
+    @property
+    def method_names(self) -> list[str]:
+        return [b.method for b in self.method] if self.is_stack else [self.method]
+
+    @property
+    def method_label(self) -> str:
+        """The method as written in a transforms file: its name, or a stack's `a > b`."""
+        return " > ".join(self.method_names)
+
+    @property
+    def final_method(self) -> str:
+        """The method that has the last word: the only one, or a stack's last block."""
+        return self.method_names[-1]
+
+    def stack_settings(self) -> list["EstimateTransformSettings"]:
+        """Return one single-method config per block (these settings alone if not a stack).
+
+        Each block's method, settings, preprocess and transform type; the reference,
+        initial transform, score, fallback and time indices are the run's.
+        """
+        if not self.is_stack:
+            return [self]
+        run = self.model_dump()
+        configs = []
+        for k, block in enumerate(self.method, start=1):
+            data = copy.deepcopy(run)
+            if k < len(self.method):
+                # the report and a bead score are the run's, from its final block
+                data["score"]["report"] = [
+                    m for m in run["score"]["report"] if m in INTENSITY_METRICS
+                ]
+                if data["score"]["metric"] not in (None, *INTENSITY_METRICS):
+                    data["score"]["metric"] = None
+            data["method"] = block.method
+            data["preprocess"] = [b.model_dump() for b in block.preprocess]
+            data[METHOD_BLOCKS[block.method]] = block.settings
+            if block.type is not None:
+                data["transform"]["type"] = block.type
+            try:
+                configs.append(EstimateTransformSettings.model_validate(data))
+            except ValidationError as error:
+                raise ValueError(f"block {k} ({block.method}): {error}") from None
+        return configs
 
     def sweep_trials(self) -> dict[str, "EstimateTransformSettings"]:
         """Build each sweep trial's config, by name: these settings plus its overrides."""
@@ -1539,8 +2265,46 @@ class EstimateTransformSettings(MyBaseModel):
         return self.reference.channel or self.moving.channel
 
     @property
+    def ignores_initial_transform(self) -> bool:
+        """Whether the method ignores where it starts (a stack: its first block).
+
+        Correlation-based methods find their answer from the images alone. The same as
+        the estimators' `uses_initial_transform` (a test keeps the two in step).
+        """
+        first = self.stack_settings()[0]
+        if first.method == "phase_cross_corr":
+            return first.phase_cross_corr.local is None  # local refines from its start
+        return first.method in ("focus_finding", "manual", "shapes")
+
+    @property
     def effective_score_metric(self) -> str:
-        return self.score_metric or DEFAULT_SCORE_METRIC[self.method]
+        return self.score.metric or DEFAULT_SCORE_METRIC[self.final_method]
+
+    def fallback_thresholds(self) -> "FallbackThresholds":
+        """Return the absolute flag / repair thresholds this run uses (None: off).
+
+        Each is the config's, else the bead overlap's when the score is the overlap.
+        """
+        beads = (
+            BEAD_OVERLAP_THRESHOLDS
+            if self.effective_score_metric == "overlap"
+            else dict.fromkeys(BEAD_OVERLAP_THRESHOLDS)
+        )
+        flag, repair = self.fallback.flag, self.fallback.repair
+        consensus = repair.consensus_threshold if repair is not None else None
+        return FallbackThresholds(
+            floor=beads["floor"] if flag.floor is None else flag.floor,
+            hard_fail=beads["hard_fail"] if flag.hard_fail is None else flag.hard_fail,
+            consensus=beads["consensus"] if consensus is None else consensus,
+        )
+
+
+class FallbackThresholds(NamedTuple):
+    """A run's absolute fallback thresholds (`fallback_thresholds`); None: off."""
+
+    floor: float | None
+    hard_fail: float | None
+    consensus: float | None
 
 
 EntryStatus = Literal["accepted", "unreliable", "rejected"]
@@ -1558,6 +2322,9 @@ class TransformEntry(MyBaseModel):
     t: NonNegativeInt | None = None
     matrix: list
     score: float | None = None
+    # score.report metrics for this transform (raw warped pair); None for a stand-in.
+    # A metric with no value (nan: no overlap, a flat pair, no beads) is None.
+    report: dict[str, float | None] | None = None
     # How a fallback pass reached this matrix: the winning repair candidate (plus any
     # polish rounds, "consensus_full+polish1") or "sweep:<trial>".
     repaired_from: str | None = None
@@ -1567,8 +2334,11 @@ class TransformEntry(MyBaseModel):
     # (an entry substituted in from another method's run by `substitute-transforms`).
     method: str | None = None
     status: EntryStatus = "accepted"
-    # Where a stand-in matrix came from, e.g. "t=81", "seed", "identity".
+    # Where a stand-in matrix came from, e.g. "t=81", "initial", "file", "identity".
     filled_from: str | None = None
+    # With transform.initial from a file: "file" (its transform, kept as it is) or
+    # "file+refined" (the estimate from it, which scored better).
+    initialized_from: Literal["file", "file+refined"] | None = None
     note: str | None = None
 
     @field_validator("matrix")
@@ -1620,17 +2390,19 @@ class TransformSettings(MyBaseModel):
     `positions` maps each position ("row/col/fov") to its own list -- exactly one of the
     two. Time: within any list, one entry without `t` is the transform for every
     timepoint, otherwise every entry has a `t` and a timepoint without one takes the
-    nearest earlier entry. How the series is applied (canvas, interpolation, which
+    nearest earlier entry. How the series is applied (crop, interpolation, which
     timepoints) is not stored here -- those are `apply-transform` options.
     """
 
     direction: TransformDirection
     moving_channels: list[str]
     reference_channel: str | None = None  # None: stabilization onto the moving store's grid
-    method: str = "beads"
+    # The method that estimated the series; None: not recorded (written by hand, or by
+    # another tool).
+    method: str | None = None
     # What the matrices are relative to: 'previous' means each was chained onto the first
     # frame (cumulative). None: not recorded (files written before this field).
-    reference_frame: Literal["cross", "first", "previous"] | None = None
+    reference_frame: Literal["cross", "first", "previous", "neighbours"] | None = None
     voxel_size: list[float] | None = None
     transforms: list[TransformEntry] | None = None
     positions: dict[str, list[TransformEntry]] | None = None
@@ -1691,6 +2463,36 @@ class TransformSettings(MyBaseModel):
     ) -> np.ndarray:
         """Matrix for timepoint `t` of `position` in `direction`: its own, else the nearest earlier."""
         return self._as(self.entry_for(t, position).matrix, direction)
+
+    def transform_for(self, t: int, position: str | None = None):
+        """Return timepoint `t`'s transform as a forward `Transform`, however it is stored."""
+        from biahub.core.transform import Transform
+
+        return Transform(self.matrix_for(t, "forward", position))
+
+    def set_entry(
+        self,
+        t: int,
+        *,
+        position: str | None = None,
+        status: EntryStatus | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Change timepoint `t`'s own entry (its status, its note); a status change says why.
+
+        The entry for the whole series (no `t`) is the one changed when there is one.
+        """
+        if status is not None and not note:
+            raise ValueError("a change of status needs a note saying why")
+        entries = self.entries_for(position)
+        own = [k for k, e in enumerate(entries) if e.t is None or e.t == t]
+        if not own:
+            raise ValueError(f"no entry for t={t}" + (f" of {position}" if position else ""))
+        k = own[0]
+        update = {"note": note} if note is not None else {}
+        if status is not None:
+            update["status"] = status
+        entries[k] = TransformEntry.model_validate({**entries[k].model_dump(), **update})
 
     def unique_matrices(self, direction: TransformDirection) -> list[np.ndarray]:
         lists = [self.transforms] if self.transforms is not None else self.positions.values()

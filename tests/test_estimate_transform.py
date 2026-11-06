@@ -1,13 +1,16 @@
 import json
 
-import click
 import numpy as np
 import pytest
 
 from iohub import open_ome_zarr
 from scipy.ndimage import shift as ndi_shift
 
+import biahub.registration.engine.cluster as cluster
+
+from biahub.core.transform import Transform
 from biahub.estimate_transform import estimate_transform
+from biahub.registration.utils import RunError
 from biahub.settings import (
     AntsRegistrationSettings,
     BeadsMatchSettings,
@@ -71,29 +74,38 @@ def beads_plate_with_a_blank_timepoint(tmp_path):
 def _write_config(
     tmp_path,
     *,
-    source="GFP",
-    target="Phase3D",
+    moving_channel="GFP",
+    reference_channel="Phase3D",
     reference="cross",
-    method="beads",
+    method="bead_matching",
     transform_type="euclidean",
-    seed_from="input",
+    propagate=False,
     **blocks,
 ):
     peaks = DetectPeaksSettings(
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
-    if method == "beads":
+    if method == "bead_matching":
         blocks.setdefault(
-            "beads",
-            BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+            "bead_matching",
+            BeadsMatchSettings(moving_peaks_settings=peaks, reference_peaks_settings=peaks),
         )
+    # repair is off unless a config asks for it; these runs ask, as the bead template does
+    blocks.setdefault("fallback", {"repair": {}})
     settings = EstimateTransformSettings(
-        moving=ChannelSettings(channel=source),
-        reference=ReferenceSettings(
-            frame=reference, channel=target if reference == "cross" else None
+        moving=ChannelSettings(channel=moving_channel),
+        reference=reference
+        if isinstance(reference, ReferenceSettings)
+        else ReferenceSettings(
+            frame=reference,
+            channel=reference_channel if reference == "cross" else None,
+            window=6 if reference == "neighbours" else None,
         ),
         method=method,
-        transform={"type": transform_type, "seed_from": seed_from},
+        transform={
+            "type": transform_type,
+            **({"initial": {"propagate": True}} if propagate else {}),
+        },
         **blocks,
     )
     path = tmp_path / "estimate.yml"
@@ -130,7 +142,7 @@ def test_estimate_transform_writes_a_register_compatible_series(beads_plate, tmp
     )
     assert set(report["scores"]) == {"0", "1"}
     assert all(score > 0.5 for score in report["scores"].values())
-    assert report["errors"] == {} and report["stand_ins"] == {}
+    assert report["errors"] == {} and report["filled_from"] == {}
     assert (output.with_suffix("") / "run_journal.json").exists()
     assert sorted(p.name for p in (output.with_suffix("") / "timepoints").iterdir()) == [
         "0.json",
@@ -204,7 +216,7 @@ def test_resume_accepts_the_same_inputs_written_another_way(
 
 
 def test_a_failed_job_is_never_filled_from_a_record_on_disk(tmp_path):
-    from biahub.registration.engine import _load_series
+    from biahub.registration.engine.disk import _load_series
 
     stale = {"t": 1, "matrix": np.eye(4).tolist(), "score": 0.9, "error": None}
     (tmp_path / "1.json").write_text(json.dumps(stale))
@@ -227,7 +239,7 @@ def test_resume_refuses_records_it_cannot_check(beads_plate, tmp_path):
         json.dumps({"t": 0, "matrix": np.eye(4).tolist(), "score": 0.9, "error": None})
     )
 
-    with pytest.raises(click.UsageError, match="no run_manifest.json"):
+    with pytest.raises(RunError, match="no run_manifest.json"):
         _run(beads_plate, _write_config(tmp_path), output, resume=True)
 
 
@@ -248,7 +260,7 @@ def test_a_bad_time_selection_is_refused_before_earlier_records_are_cleared(
     _run(beads_plate, _write_config(tmp_path), output)
     records = sorted((output.with_suffix("") / "timepoints").iterdir())
 
-    with pytest.raises(click.UsageError, match="out of range"):
+    with pytest.raises(RunError, match="out of range"):
         _run(beads_plate, _write_config(tmp_path, time_indices=[5]), output)
     assert sorted((output.with_suffix("") / "timepoints").iterdir()) == records
 
@@ -259,7 +271,7 @@ def test_a_reference_with_fewer_timepoints_is_refused_at_init(
     # A cross estimate reads timepoint t of the reference too: a 3-timepoint moving store
     # against a 2-timepoint reference must not start and fail at t=2.
     output = tmp_path / "out" / "registration_settings.yml"
-    with pytest.raises(click.UsageError, match="reference.*2 timepoints"):
+    with pytest.raises(RunError, match="reference.*2 timepoints"):
         estimate_transform(
             [beads_plate_with_a_blank_timepoint],
             _write_config(tmp_path),
@@ -287,8 +299,6 @@ def test_an_sbatch_time_limit_is_kept_by_every_phase(
 ):
     import submitit
 
-    from biahub.registration import engine
-
     times = []
 
     class RecordingExecutor(submitit.AutoExecutor):
@@ -297,7 +307,7 @@ def test_an_sbatch_time_limit_is_kept_by_every_phase(
                 times.append(kwargs["slurm_time"])
             return super().update_parameters(**kwargs)
 
-    monkeypatch.setattr(engine.submitit, "AutoExecutor", RecordingExecutor)
+    monkeypatch.setattr(cluster.submitit, "AutoExecutor", RecordingExecutor)
     sbatch = tmp_path / "time.sbatch"
     sbatch.write_text("#!/bin/bash\n#SBATCH --time=7\n")
     output = tmp_path / "out" / "transforms.yml"
@@ -331,15 +341,13 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
     repair = report["repairs"]["2"]
     assert repair["accepted"] is False
     # No beads in the frame: every candidate fails the same way, and each failure is named.
-    assert set(repair["candidate_failures"]) == {"t-1", "consensus_full", "config_seed"}
+    assert set(repair["candidate_failures"]) == {"t-1", "consensus_full", "initial"}
     failures = repair["candidate_failures"]
-    assert (
-        "EstimationError" in failures["t-1"] and "EstimationError" in failures["config_seed"]
-    )
+    assert "EstimationError" in failures["t-1"] and "EstimationError" in failures["initial"]
     assert failures["consensus_full"].startswith(
-        "ValueError: Consensus seed: only 2 timepoints"
+        "CandidateUnavailableError: Consensus initial transform: only 2 timepoints"
     )
-    assert report["stand_ins"] == {"2": "seed"}
+    assert report["filled_from"] == {"2": "initial"}
     assert (output.with_suffix("") / "repairs" / "2.json").exists()
 
     journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
@@ -348,10 +356,12 @@ def test_estimate_transform_flags_and_tries_to_repair_a_failed_timepoint(
 
     entries = load_transform_settings(output).transforms
     assert [e.t for e in entries] == [0, 1, 2]
-    np.testing.assert_allclose(entries[2].matrix, np.eye(4))  # the input seed (identity here)
+    np.testing.assert_allclose(
+        entries[2].matrix, np.eye(4)
+    )  # the run's initial transform (identity here)
     assert entries[2].score is None and entries[0].score > 0.5
     # ... and the file says so, with the failure, instead of passing as an estimate
-    assert entries[2].status == "unreliable" and entries[2].filled_from == "seed"
+    assert entries[2].status == "unreliable" and entries[2].filled_from == "initial"
     assert "EstimationError" in entries[2].note
     assert [e.status for e in entries[:2]] == ["accepted", "accepted"]
 
@@ -404,7 +414,7 @@ def test_estimate_transform_stabilizes_a_channel_against_itself(
     drifting_plate, tmp_path, t_reference, expected_inverse_factor
 ):
     output = tmp_path / "out" / "stabilization_settings.yml"
-    config = _write_config(tmp_path, source="GFP", reference=t_reference)
+    config = _write_config(tmp_path, moving_channel="GFP", reference=t_reference)
 
     _run(drifting_plate, config, output)
 
@@ -422,15 +432,15 @@ def test_estimate_transform_phase_cross_corr_stabilizes_against_the_first_frame(
     output = tmp_path / "out" / "stabilization_settings.yml"
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(t_reference="first", center_crop_xy=[40, 40]),
     )
 
     _run(drifting_plate, config, output)
 
-    assert load_transform_settings(output).method == "phase-cross-corr"
+    assert load_transform_settings(output).method == "phase_cross_corr"
     for row, factor in zip(_inverse_translations(output), [0, 1, 2], strict=True):
         np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
 
@@ -453,9 +463,9 @@ def test_estimate_transform_several_positions_each_get_their_own_transforms(tmp_
             ).astype(np.float32)
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         # full extent: a centre crop lets beads drift out of the window and biases PCC
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
@@ -493,11 +503,11 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
     # A 1-voxel scoring radius, so a pass's unrefined input does not tie with its refinement
     # (the default 6-voxel radius cannot tell a 2-voxel misalignment from none).
     beads = BeadsMatchSettings(
-        source_peaks_settings=peaks,
-        target_peaks_settings=peaks,
+        moving_peaks_settings=peaks,
+        reference_peaks_settings=peaks,
         qc_settings={"iterations": 2, "score_threshold": 0.4, "score_centroid_mask_radius": 1},
     )
-    config = _write_config(tmp_path, seed_from="previous_timepoint", beads=beads)
+    config = _write_config(tmp_path, propagate=True, bead_matching=beads)
     output = tmp_path / "out" / "transforms.yml"
 
     _run(plate, config, output)
@@ -509,10 +519,10 @@ def test_estimate_transform_previous_timepoint_runs_one_sequential_job(tmp_path)
     for t, row in enumerate(_inverse_translations(output)):
         np.testing.assert_allclose(row, (t + 1) * step, atol=0.5)
     record = json.loads((output.with_suffix("") / "timepoints" / "2.json").read_text())
-    assert {"stand_in", "stand_in_from"} <= set(record)
+    assert {"stand_in", "filled_from"} <= set(record)
 
 
-def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
+def test_repair_is_skipped_for_a_method_that_ignores_initial_transforms(tmp_path, capsys):
     rng = np.random.default_rng(11)
     ref = _synthetic_bead_volume(rng, SHAPE)
     blank = rng.normal(0, 5.0, size=SHAPE).astype(np.float32)
@@ -520,9 +530,9 @@ def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
     plate = _write_plate(tmp_path / "pcc_blank.zarr", [(f, f) for f in frames])
     config = _write_config(
         tmp_path,
-        source="GFP",
+        moving_channel="GFP",
         reference="first",
-        method="phase-cross-corr",
+        method="phase_cross_corr",
         phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
     )
     output = tmp_path / "out" / "transforms.yml"
@@ -533,23 +543,23 @@ def test_repair_is_skipped_for_a_method_that_ignores_seeds(tmp_path, capsys):
         (output.with_suffix("") / "estimate_transform_report.json").read_text()
     )
     assert report["flagged"]  # the noise frame is still flagged ...
-    assert report["repairs"] == {}  # ... but PCC is not re-run from other seeds
+    assert report["repairs"] == {}  # ... but PCC is not re-run from other initial transforms
     assert "repair skipped" in capsys.readouterr().out
 
 
 def test_estimate_transform_manual_runs_in_process_on_one_timepoint(
     beads_plate, tmp_path, monkeypatch
 ):
-    inverse = np.eye(4)
-    inverse[:3, 3] = APPLIED_SHIFT_ZYX  # the annotation tool returns the inverse matrix
+    # the annotation tool returns the forward Transform it fitted
+    clicked = Transform.from_translation([-a for a in APPLIED_SHIFT_ZYX])
     calls = []
 
     def fake_user_assisted_registration(**kwargs):
         calls.append(kwargs)
-        return (inverse,)
+        return clicked
 
     monkeypatch.setattr(
-        "biahub.registration.methods.manual.user_assisted_registration",
+        "biahub.registration.methods.manual.manual.user_assisted_registration",
         fake_user_assisted_registration,
     )
     output = tmp_path / "out" / "registration_settings.yml"
@@ -584,9 +594,11 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
-        method="beads",
-        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
-        score_metric="residual",
+        method="bead_matching",
+        bead_matching=BeadsMatchSettings(
+            moving_peaks_settings=peaks, reference_peaks_settings=peaks
+        ),
+        score={"metric": "residual"},
     )
     config = tmp_path / "unified.yml"
     model_to_yaml(unified, config)
@@ -595,7 +607,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
     _run(beads_plate, config, output)
 
     written = yaml_to_model(output, TransformSettings)
-    assert written.direction == "forward" and written.method == "beads"
+    assert written.direction == "forward" and written.method == "bead_matching"
     assert written.moving_channels == ["GFP"] and written.reference_channel == "Phase3D"
     assert [e.t for e in written.transforms] == [0, 1]
     for entry in written.transforms:  # forward: content moves by -APPLIED_SHIFT
@@ -606,7 +618,7 @@ def test_estimate_transform_accepts_the_unified_config_and_writes_forward_matric
     engine_settings = yaml_to_model(
         output.with_suffix("") / "estimate_transform_settings.yml", EstimateTransformSettings
     )
-    assert engine_settings.score_metric == "residual"
+    assert engine_settings.score.metric == "residual"
 
 
 def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
@@ -618,11 +630,13 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
-        method="beads",
-        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        method="bead_matching",
+        bead_matching=BeadsMatchSettings(
+            moving_peaks_settings=peaks, reference_peaks_settings=peaks
+        ),
         fallback={
             "flag": {"k_mad": 2.0, "floor": 0.8, "hard_fail": 0.4},
-            "repair": {"candidates": ["seed"]},
+            "repair": {"candidates": ["initial"]},
         },
     )
     config = tmp_path / "unified.yml"
@@ -635,10 +649,10 @@ def test_estimate_transform_fallback_settings_reach_flagging_and_repair(
         (output.with_suffix("") / "estimate_transform_report.json").read_text()
     )
     assert report["flagged"] == [2]
-    # Only the seed candidate was configured, so only it was tried.
+    # Only the initial candidate was configured, so only it was tried.
     assert set(report["repairs"]["2"]["candidate_failures"]) | set(
         report["repairs"]["2"]["candidate_scores"]
-    ) == {"config_seed"}
+    ) == {"initial"}
 
 
 @pytest.fixture
@@ -687,7 +701,7 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="Phase3D"),
         reference=ReferenceSettings(frame="first"),
-        method="focus-finding",
+        method="focus_finding",
         focus_finding=FocusSettings(axes="xyz", center_crop_xy=[48, 48]),
     )
     config = tmp_path / "unified.yml"
@@ -697,7 +711,7 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
     _run(defocusing_plate, config, output)
 
     written = yaml_to_model(output, TransformSettings)
-    assert written.method == "focus-finding" and written.reference_channel is None
+    assert written.method == "focus_finding" and written.reference_channel is None
     assert written.moving_channels == ["Phase3D"]
     for t, entry in enumerate(written.transforms):  # forward: undo the drift
         assert entry.t == t
@@ -709,7 +723,9 @@ def test_estimate_transform_focus_finding_stabilizes_z_and_yx_against_the_first_
 def test_previous_reference_needs_contiguous_timepoints(tmp_path):
     # Rejected when the settings are read, before any job is submitted.
     with pytest.raises(Exception, match="contiguous"):
-        _write_config(tmp_path, source="GFP", reference="previous", time_indices=[0, 2])
+        _write_config(
+            tmp_path, moving_channel="GFP", reference="previous", time_indices=[0, 2]
+        )
 
 
 def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
@@ -721,12 +737,16 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
     unified = EstimateTransformSettings(
         moving=ChannelSettings(channel="GFP"),
         reference=ReferenceSettings(frame="cross", channel="Phase3D"),
-        method="beads",
-        beads=BeadsMatchSettings(source_peaks_settings=peaks, target_peaks_settings=peaks),
+        method="bead_matching",
+        bead_matching=BeadsMatchSettings(
+            moving_peaks_settings=peaks, reference_peaks_settings=peaks
+        ),
         fallback={
             "repair": None,
             "sweep": {
-                "grid": [{"beads.hungarian_match_settings.cost_threshold": [0.05, 0.2]}]
+                "grid": [
+                    {"bead_matching.hungarian_match_settings.cost_threshold": [0.05, 0.2]}
+                ]
             },
         },
     )
@@ -744,20 +764,18 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
     # A blank frame: both trials fail, each by name, and nothing is kept.
     assert swept["accepted"] is False
     assert set(swept["candidate_failures"]) == {
-        "beads.hungarian_match_settings.cost_threshold=0.05",
-        "beads.hungarian_match_settings.cost_threshold=0.2",
+        "bead_matching.hungarian_match_settings.cost_threshold=0.05",
+        "bead_matching.hungarian_match_settings.cost_threshold=0.2",
     }
-    assert report["provenance"] == {}
+    assert report["repaired_from"] == {}
     assert (output.with_suffix("") / "sweeps" / "2.json").exists()
     journal = json.loads((output.with_suffix("") / "run_journal.json").read_text())
     assert [(a["t"], a["pass_name"]) for a in journal["attempts"]] == [(2, "sweep")]
 
-    import biahub.registration.engine as engine
-
     def _must_not_run(*args, **kwargs):
         raise AssertionError("resume must reuse the sweep record")
 
-    monkeypatch.setattr(engine, "_sweep_timepoint_job", _must_not_run)
+    monkeypatch.setattr(cluster, "_sweep_timepoint_job", _must_not_run)
     _run(beads_plate_with_a_blank_timepoint, config, output, resume=True)
     resumed = json.loads(
         (output.with_suffix("") / "estimate_transform_report.json").read_text()
@@ -768,9 +786,581 @@ def test_estimate_transform_sweep_runs_on_flagged_timepoints_and_resumes(
 def test_an_ants_estimate_is_sized_for_its_measured_peak_memory():
     # ANTs on a 66 x 2048 x 2048 DragonFly pair peaked at 14.5-22.6 GB (SLURM MaxRSS over
     # 12 jobs); the plan once asked for 12 GB and every first attempt ran out of memory.
-    from biahub.registration.engine import _estimate_job_resources
+    from biahub.registration.engine.core import _estimate_job_resources
 
     cpus, gb_ram_per_cpu = _estimate_job_resources("ants", (66, 2048, 2048))
     assert cpus * gb_ram_per_cpu >= 1.25 * 22.6
-    beads_cpus, beads_gb = _estimate_job_resources("beads", (66, 2048, 2048))
+    beads_cpus, beads_gb = _estimate_job_resources("bead_matching", (66, 2048, 2048))
     assert beads_cpus * beads_gb < cpus * gb_ram_per_cpu  # beads keeps its smaller footprint
+
+
+def test_an_ants_estimate_gets_cpus_for_its_threads(monkeypatch):
+    # ITK sizes its threads from the job's CPUs; a made-up 2-volume shape once capped
+    # every method at 2, so ANTs ran on 2 threads. The single-threaded methods keep 2.
+    from biahub.registration.engine.core import _estimate_job_resources
+
+    monkeypatch.delenv("CI", raising=False)
+    shape = (66, 2048, 2048)
+    assert _estimate_job_resources("ants", shape)[0] == 8
+    assert _estimate_job_resources("bead_matching", shape)[0] == 2
+    ants_gb = _estimate_job_resources("ants", shape)
+    assert ants_gb[0] * ants_gb[1] >= 1.25 * 22.6  # the job's RAM, now over more CPUs
+    monkeypatch.setenv("CI", "true")  # the suite runs serially
+    assert _estimate_job_resources("ants", shape)[0] == 1
+
+
+def test_image_blocks_run_before_the_method_end_to_end(beads_plate, tmp_path):
+    # A clip that keeps every value changes nothing: the run matches one without blocks.
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    plain = tmp_path / "plain" / "transforms.yml"
+    _run(beads_plate, _write_config(tmp_path / "a"), plain)
+    with_blocks = tmp_path / "blocks" / "transforms.yml"
+    config = _write_config(
+        tmp_path / "b", preprocess=[{"clip_percentiles": {"low": 0, "high": 100}}]
+    )
+    assert "clip_percentiles" in config.read_text()  # written back as a named block
+    _run(beads_plate, config, with_blocks)
+    assert [e.matrix for e in load_transform_settings(with_blocks).transforms] == [
+        e.matrix for e in load_transform_settings(plain).transforms
+    ]
+
+
+def test_every_own_transform_reports_raw_metrics_next_to_its_score(
+    beads_plate_with_a_blank_timepoint, tmp_path
+):
+    # Report metrics are computed on the raw warped pair, whatever the score's own blocks:
+    # a fixed yardstick across runs. A stand-in has none.
+    from biahub.core.transform import Transform
+    from biahub.registration.metrics import correlation_score, normalized_mutual_information
+
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(
+        tmp_path,
+        score={
+            "metric": "correlation",
+            "preprocess": [{"sobel": {}}],
+            "report": ["correlation", "mutual_information"],
+        },
+    )
+    output = tmp_path / "out" / "transforms.yml"
+    _run(plate, config, output)
+
+    with open_ome_zarr(plate) as position:
+        data = np.asarray(position.data)
+        gfp, phase = (
+            position.channel_names.index("GFP"),
+            position.channel_names.index("Phase3D"),
+        )
+    entries = load_transform_settings(output).transforms
+    for entry in entries[:2]:
+        transform = Transform(np.asarray(entry.matrix, dtype=float))
+        mov, ref = data[entry.t, gfp], data[entry.t, phase]
+        assert {k: entry.report[k] for k in ("correlation", "mutual_information")} == {
+            "correlation": correlation_score(transform, mov, ref),
+            "mutual_information": normalized_mutual_information(transform, mov, ref),
+        }
+        assert "unregistered_correlation" in entry.report
+    assert entries[2].filled_from is not None and entries[2].report is None
+
+
+def test_a_repaired_timepoint_reports_the_repairs_transform(
+    beads_plate, tmp_path, monkeypatch
+):
+    # The report follows the transform that wins: a repair job records the metrics of its
+    # own transform, and folding it in replaces the estimate's.
+    import biahub.registration.engine.core as engine
+
+    from biahub.core.transform import Transform
+    from biahub.registration.metrics import correlation_score
+    from biahub.utils.config import yaml_to_model
+
+    config = _write_config(tmp_path, score={"report": ["correlation"]})
+    run = tmp_path / "run"
+    engine.init_run(
+        beads_plate, beads_plate, yaml_to_model(config, EstimateTransformSettings), run
+    )
+    settings_path = run / "estimate_transform_settings.yml"
+    for t in (0, 1):
+        cluster._estimate_timepoint_job(
+            beads_plate, beads_plate, settings_path, t, run / "timepoints" / f"{t}.json"
+        )
+    repaired = Transform.from_translation([-1.0, 3.0, -4.0])  # 1 voxel off the estimate
+
+    def accepted_repair(t, *args, **kwargs):
+        return engine.PassResult(
+            transform=repaired, score=2.0, accepted=True, repaired_from="t-1"
+        )
+
+    monkeypatch.setattr(cluster, "repair_timepoint", accepted_repair)
+    record = cluster._repair_timepoint_job(
+        beads_plate,
+        beads_plate,
+        settings_path,
+        1,
+        [0, 1],
+        [1],
+        run / "timepoints",
+        run / "repairs" / "1.json",
+    )
+    with open_ome_zarr(beads_plate) as position:
+        data = np.asarray(position.data)
+        gfp, phase = (
+            position.channel_names.index("GFP"),
+            position.channel_names.index("Phase3D"),
+        )
+    assert record["report"]["correlation"] == correlation_score(
+        repaired, data[1, gfp], data[1, phase]
+    )
+
+    series = engine._load_series(run / "timepoints", [0, 1], "euclidean", resumed=[0, 1])
+    estimate_report = series.reports[1]
+    from biahub.registration.engine.fallback import PassRecord
+
+    outcome = PassRecord.from_dict(record).to_result(
+        "euclidean", fallback=series.transforms[1]
+    )
+    engine._accept(
+        series, 1, outcome.transform, outcome.score, outcome.repaired_from, outcome.report
+    )
+    assert series.reports[1] == record["report"] != estimate_report
+
+
+def test_repair_and_sweep_reports_get_the_score_to_compare_with_unregistered(
+    beads_plate, tmp_path, monkeypatch
+):
+    # Without the score the report cannot warn that a fallback's transform scores below
+    # the unregistered pair.
+    import biahub.registration.engine.core as engine
+
+    from biahub.core.transform import Transform
+    from biahub.utils.config import yaml_to_model
+
+    config = _write_config(
+        tmp_path,
+        score={"report": ["correlation"]},
+        fallback={
+            "repair": {},
+            "sweep": {
+                "grid": [{"bead_matching.hungarian_match_settings.cost_threshold": [0.05]}]
+            },
+        },
+    )
+    run = tmp_path / "run"
+    engine.init_run(
+        beads_plate, beads_plate, yaml_to_model(config, EstimateTransformSettings), run
+    )
+    settings_path = run / "estimate_transform_settings.yml"
+    for t in (0, 1):
+        cluster._estimate_timepoint_job(
+            beads_plate, beads_plate, settings_path, t, run / "timepoints" / f"{t}.json"
+        )
+    accepted = engine.PassResult(
+        transform=Transform.identity(3), score=-1.0, accepted=True, repaired_from="t-1"
+    )
+    monkeypatch.setattr(cluster, "repair_timepoint", lambda *a, **k: accepted)
+    monkeypatch.setattr(cluster, "sweep_timepoint", lambda *a, **k: accepted)
+    scores = []
+    monkeypatch.setattr(
+        cluster, "_report_metrics", lambda *a, score=None, **k: scores.append(score) or {}
+    )
+    cluster._repair_timepoint_job(
+        beads_plate,
+        beads_plate,
+        settings_path,
+        1,
+        [0, 1],
+        [1],
+        run / "timepoints",
+        run / "repairs" / "1.json",
+    )
+    cluster._sweep_timepoint_job(
+        beads_plate,
+        beads_plate,
+        settings_path,
+        1,
+        run / "timepoints",
+        run / "sweeps" / "1.json",
+    )
+    assert scores == [-1.0, -1.0]
+
+
+def test_a_report_metric_with_no_value_is_written_to_the_transforms_file():
+    # a nan report metric (e.g. correlation on a zero-variance pair) is recorded as
+    # None; finalize must still write the entry
+    from biahub.core.transform import Transform
+    from biahub.estimate_transform import transform_entries
+    from biahub.registration.engine import SeriesResult
+
+    report = {"correlation": None, "unregistered_correlation": 0.5, "unregistered_score": None}
+    result = SeriesResult(scores={0: 0.9, 1: 0.8}, reports={0: report})
+    entries = transform_entries(result, [0, 1], [Transform.identity(3)] * 2, hard_fail=0.0)
+    assert entries[0].report == report
+    assert entries[0].status == "accepted"
+
+
+def test_flagging_with_repair_off_does_not_announce_a_repair(
+    beads_plate_with_a_blank_timepoint, tmp_path, capsys
+):
+    # Flagging runs whether or not repair does (it decides `unreliable`); with repair and
+    # sweep off the log said "repair: 1 of 3 timepoints flagged" and then nothing ran.
+    plate = beads_plate_with_a_blank_timepoint
+    config = _write_config(tmp_path, fallback={"repair": None, "sweep": None})
+    _run(plate, config, tmp_path / "out" / "transforms.yml")
+    out = capsys.readouterr().out
+    assert "repair:" not in out
+    assert "repair and sweep are off" in out
+
+
+def test_a_previous_chain_starts_at_the_first_requested_timepoint(drifting_plate, tmp_path):
+    # time_indices [1, 2]: t=1 starts the chain on its own grid (identity) and t=2 is one
+    # step from it. Measured against frame 0, outside the run, t=1 carried a step and the
+    # chain did not start on the first frame it writes.
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path, moving_channel="GFP", reference="previous", time_indices=[1, 2]
+    )
+    _run(drifting_plate, config, output)
+    for row, factor in zip(_inverse_translations(output), [0, 1], strict=True):
+        np.testing.assert_allclose(row, [factor * s for s in APPLIED_SHIFT_ZYX], atol=0.5)
+
+
+def test_a_first_frame_reference_skips_an_empty_frame_zero(tmp_path):
+    # Frame 0 has no data: every timepoint was recorded as "empty frame". The reference is
+    # the first frame with data (t=1), which is identity, and t=2 is one step from it.
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    frames = [np.zeros_like(ref)] + [
+        ndi_shift(ref, shift=tuple(t * s for s in APPLIED_SHIFT_ZYX), order=1, mode="constant")
+        for t in range(2)
+    ]
+    plate = _write_plate(tmp_path / "late.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    _run(plate, _write_config(tmp_path, moving_channel="GFP", reference="first"), output)
+    rows = _inverse_translations(output)
+    np.testing.assert_allclose(rows[1], [0.0, 0.0, 0.0], atol=0.5)
+    np.testing.assert_allclose(rows[2], APPLIED_SHIFT_ZYX, atol=0.5)
+
+
+def test_a_neighbour_median_reference_removes_single_frame_jumps(tmp_path):
+    # A sample that stays put but jumps for one frame at t=3 and t=6 (a fish slipping):
+    # against the median of its neighbours each jump is measured on its own, and the
+    # other timepoints stay at zero -- no chain, nothing accumulates.
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    jumps = {3: (0.0, 4.0, 0.0), 6: (0.0, -3.0, 2.0)}
+    frames = [
+        ndi_shift(ref, shift=jumps.get(t, (0.0, 0.0, 0.0)), order=1, mode="constant")
+        for t in range(9)
+    ]
+    plate = _write_plate(tmp_path / "jumps.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        moving_channel="GFP",
+        reference="neighbours",
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    _run(plate, config, output)
+    assert load_transform_settings(output).reference_frame == "neighbours"
+    for t, row in enumerate(_inverse_translations(output)):
+        np.testing.assert_allclose(row, jumps.get(t, (0.0, 0.0, 0.0)), atol=0.5)
+
+
+def test_a_neighbour_median_reference_needs_several_timepoints():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="neighbours' needs several timepoints"):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "neighbours", "window": 3},
+            method="phase_cross_corr",
+            time_indices=4,
+        )
+
+
+def test_a_neighbour_median_run_plans_memory_for_the_frames_it_holds(tmp_path):
+    # each timepoint holds 2 x window frames and their median besides the method's volumes
+    from biahub.registration.engine import init_run
+    from biahub.settings import EstimateTransformSettings as Settings
+
+    zyx = (171, 768, 794)  # the neuromast timelapse; created empty (metadata only)
+    path = tmp_path / "big.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]) as p:
+        p.create_position("A", "1", "0").create_zeros("0", (3, 2, *zyx), dtype=np.float32)
+    plate = path / "A" / "1" / "0"
+
+    def plan(reference):
+        settings = Settings(
+            moving={"channel": "GFP"}, reference=reference, method="phase_cross_corr"
+        )
+        out = tmp_path / reference["frame"]
+        return init_run(plate, plate, settings, out)["resources"]["estimate"]
+
+    first = plan({"frame": "first"})
+    wide = plan({"frame": "neighbours", "window": 6})
+    gb_per_volume = np.prod(zyx) * 4 / 2**30
+    assert first["mem_gb"] < (10 + 14) * gb_per_volume <= wide["mem_gb"]
+
+
+def test_a_neighbour_median_reference_stabilizes_a_projected_plate(tmp_path):
+    # A projected plate (`biahub project`: Z = 1) is a 1 x Y x X volume per timepoint: the
+    # neighbour median measures the yx jumps; z, which a projection has no depth for, is 0.
+    rng = np.random.default_rng(11)
+    projection = _synthetic_bead_volume(rng, SHAPE).max(axis=0, keepdims=True)
+    jumps = {3: (0.0, 4.0, -2.0), 6: (0.0, -3.0, 2.0)}
+    frames = [
+        ndi_shift(projection, shift=jumps.get(t, (0.0, 0.0, 0.0)), order=1, mode="constant")
+        for t in range(9)
+    ]
+    plate = _write_plate(tmp_path / "projected.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        moving_channel="GFP",
+        reference="neighbours",
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    _run(plate, config, output)
+    for t, row in enumerate(_inverse_translations(output)):
+        np.testing.assert_allclose(row, jumps.get(t, (0.0, 0.0, 0.0)), atol=0.5)
+
+
+ANCHOR = {
+    "type": "centroid",
+    "bg_percentile": 90.0,
+    "downsample": 2,
+    "blur_sigma": 1.0,
+    "smooth_median": 3,
+    "smooth_sigma": 1.0,
+}
+
+
+def test_a_centroid_anchor_removes_the_slow_drift_the_neighbours_follow(tmp_path):
+    # A sample drifting slowly in y (0.2 voxel / frame) with one-frame jumps at t=4 and
+    # t=8: the neighbour median follows the drift, so alone it measures only the jumps;
+    # the anchor adds (FOV centre - smoothed centroid), so each frame's translation is
+    # where its sample is minus the centre: centred and still.
+    from biahub.registration.metrics import intensity_centroid
+
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    jumps = {4: (0.0, 4.0, 0.0), 8: (0.0, 0.0, -3.0)}
+    where = [np.add((0.0, 0.2 * t, 0.0), jumps.get(t, (0.0, 0.0, 0.0))) for t in range(12)]
+    frames = [ndi_shift(ref, shift=w, order=1, mode="constant") for w in where]
+    plate = _write_plate(tmp_path / "drift.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        moving_channel="GFP",
+        reference=ReferenceSettings(frame="neighbours", window=2, anchor=ANCHOR),
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    _run(plate, config, output)
+    centre = (np.asarray(SHAPE) - 1) / 2
+    sample = intensity_centroid(
+        ref, **{k: ANCHOR[k] for k in ("bg_percentile", "downsample", "blur_sigma")}
+    )
+    rows = _inverse_translations(output)
+    for t, row in enumerate(rows):
+        np.testing.assert_allclose(row, sample + where[t] - centre, atol=0.6)
+    # each timepoint's anchor is in the report: its centroid, smoothed, and what was added
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
+    anchor = report["anchor"]["4"]
+    assert set(anchor) == {"centroid", "smoothed", "translation"}
+    np.testing.assert_allclose(anchor["centroid"], sample + where[4], atol=0.6)
+    np.testing.assert_allclose(
+        anchor["translation"], centre - np.asarray(anchor["smoothed"]), atol=1e-9
+    )
+
+
+def test_a_centroid_anchor_needs_a_neighbour_median_reference():
+    from pydantic import ValidationError
+
+    with pytest.raises(
+        ValidationError, match="reference.anchor needs reference.frame 'neighbours'"
+    ):
+        ReferenceSettings(frame="previous", anchor=ANCHOR)
+    with pytest.raises(ValidationError, match="smooth_sigma"):  # no hidden defaults
+        ReferenceSettings(
+            frame="neighbours", anchor={k: v for k, v in ANCHOR.items() if k != "smooth_sigma"}
+        )
+
+
+def test_a_stabilization_reports_its_leftover_motion_against_unregistered(tmp_path):
+    # `reference.leftover_motion`: each job records the raw shift from the frame before,
+    # and the run's report holds the frame-to-frame motion left by its transforms and
+    # by none (µm) -- the jumps at t=3 and t=6 are gone once stabilized.
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    jumps = {3: (0.0, 4.0, 0.0), 6: (0.0, -3.0, 2.0)}
+    frames = [
+        ndi_shift(ref, shift=jumps.get(t, (0.0, 0.0, 0.0)), order=1, mode="constant")
+        for t in range(9)
+    ]
+    plate = _write_plate(tmp_path / "jumps.zarr", [(f, f) for f in frames])
+    output = tmp_path / "out" / "stabilization_settings.yml"
+    config = _write_config(
+        tmp_path,
+        moving_channel="GFP",
+        reference=ReferenceSettings(frame="neighbours", window=6, leftover_motion={}),
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+    )
+    _run(plate, config, output)
+    report = json.loads(
+        (output.with_suffix("") / "estimate_transform_report.json").read_text()
+    )
+    motion = report["leftover_motion"]
+    assert motion["approximate"] is False  # translations only
+    transforms, raw = motion["transforms"], motion["unregistered"]
+    assert [(p["t_from"], p["t_to"]) for p in transforms["pairs"]] == [
+        (t, t + 1) for t in range(8)
+    ]
+    assert transforms["mean_um"] < 0.2 < raw["mean_um"]
+    np.testing.assert_allclose(raw["max_um"], 4.0, atol=0.3)  # into and out of the t=3 jump
+
+
+def test_leftover_motion_is_for_a_stabilization_over_several_timepoints():
+    from pydantic import ValidationError
+
+    assert ReferenceSettings(frame="first", leftover_motion={}).leftover_motion is not None
+    with pytest.raises(ValidationError, match="leftover_motion is for a stabilization"):
+        ReferenceSettings(frame="cross", channel="Phase3D", leftover_motion={})
+    with pytest.raises(ValidationError, match="leftover_motion compares consecutive"):
+        EstimateTransformSettings(
+            moving={"channel": "GFP"},
+            reference={"frame": "first", "leftover_motion": {}},
+            method="phase_cross_corr",
+            time_indices=4,
+        )
+
+
+def test_a_leftover_motion_run_plans_memory_for_its_raw_shift(tmp_path):
+    from biahub.registration.engine import init_run
+    from biahub.registration.metrics import LEFTOVER_MOTION_VOLUMES
+    from biahub.settings import EstimateTransformSettings as Settings
+
+    zyx = (171, 768, 794)  # the neuromast timelapse; created empty (metadata only)
+    path = tmp_path / "big.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]) as p:
+        p.create_position("A", "1", "0").create_zeros("0", (3, 2, *zyx), dtype=np.float32)
+    plate = path / "A" / "1" / "0"
+    settings = Settings(
+        moving={"channel": "GFP"},
+        reference={"frame": "first", "leftover_motion": {}},
+        method="phase_cross_corr",
+    )
+    mem_gb = init_run(plate, plate, settings, tmp_path / "out")["resources"]["estimate"][
+        "mem_gb"
+    ]
+    assert mem_gb >= LEFTOVER_MOTION_VOLUMES * np.prod(zyx) * 4 / 2**30
+
+
+def test_a_job_reads_each_frame_once_and_computes_the_neighbour_median_once(
+    tmp_path, monkeypatch
+):
+    # Each job rebuilt the reference policy for its report (so the neighbour median was
+    # computed again) and read frame t once per use (estimate, report, leftover motion).
+    from collections import Counter
+
+    import biahub.registration.engine.policies as policies
+
+    rng = np.random.default_rng(11)
+    ref = _synthetic_bead_volume(rng, SHAPE)
+    frames = [
+        ndi_shift(ref, shift=(0.0, 0.2 * t, 0.0), order=1, mode="constant") for t in range(5)
+    ]
+    plate = _write_plate(tmp_path / "frames.zarr", [(f, f) for f in frames])
+    reads, medians = Counter(), Counter()
+    real_open = cluster._open_series
+
+    class _Counting:
+        def __init__(self, series):
+            self.series = series
+            self.shape = series.shape
+
+        def __len__(self):
+            return len(self.series)
+
+        def __getitem__(self, t):
+            reads[int(t)] += 1
+            return self.series[t]
+
+    monkeypatch.setattr(
+        cluster, "_open_series", lambda *a: (lambda s, um: (_Counting(s), um))(*real_open(*a))
+    )
+    real_gather = policies.NeighbourMedian._gather
+
+    def counting_gather(self, mov, t):
+        if self._t != t:
+            medians[t] += 1
+        return real_gather(self, mov, t)
+
+    monkeypatch.setattr(policies.NeighbourMedian, "_gather", counting_gather)
+    config = _write_config(
+        tmp_path,
+        moving_channel="GFP",
+        reference=ReferenceSettings(frame="neighbours", window=1, leftover_motion={}),
+        method="phase_cross_corr",
+        phase_cross_corr=PhaseCrossCorrSettings(center_crop_xy=[SHAPE[1], SHAPE[2]]),
+        score={"report": ["correlation"]},
+    )
+    _run(plate, config, tmp_path / "out" / "transforms.yml")
+    assert medians == Counter({t: 1 for t in range(5)})  # one median per job
+    # each job reads the frames it needs once: t, its neighbours t-1 and t+1 (t-1 also
+    # for leftover motion). A self-reference frame never reads the reference series.
+    needed = Counter()
+    for t in range(5):
+        for k in {t - 1, t, t + 1} & set(range(5)):
+            needed[k] += 1
+    assert reads == needed
+
+
+def test_an_estimate_plans_memory_for_the_larger_of_the_two_grids(tmp_path):
+    # a small moving volume registered onto a much larger reference: the job's volumes
+    # live on the reference grid, but the plan was sized from the moving one
+    from biahub.registration.engine import init_run
+    from biahub.settings import EstimateTransformSettings as Settings
+
+    def store(name, zyx):
+        path = tmp_path / f"{name}.zarr"
+        with open_ome_zarr(path, layout="hcs", mode="w", channel_names=[name]) as p:
+            p.create_position("A", "1", "0").create_zeros("0", (2, 1, *zyx), dtype=np.float32)
+        return path / "A" / "1" / "0"
+
+    small, large = store("GFP", (20, 256, 256)), store("Phase3D", (120, 1024, 1024))
+    settings = Settings(
+        moving={"channel": "GFP"},
+        reference={"frame": "cross", "channel": "Phase3D"},
+        method="phase_cross_corr",
+    )
+    plan = init_run(small, large, settings, tmp_path / "run")["resources"]["estimate"]
+    gb_per_reference_volume = 120 * 1024 * 1024 * 4 / 2**30
+    assert plan["mem_gb"] >= 10 * gb_per_reference_volume
+
+
+def test_reference_positions_given_for_a_stabilization_are_said_to_be_unread(
+    beads_plate, tmp_path, capsys
+):
+    # -r was silently ignored when the reference frame is the moving channel itself
+    from biahub.estimate_transform import estimate_transform
+
+    config = _write_config(tmp_path, reference="first", method="phase_cross_corr")
+    output = tmp_path / "out" / "transforms.yml"
+    estimate_transform(
+        [beads_plate],
+        config,
+        output,
+        reference_position_dirpaths=[beads_plate],
+        cluster="debug",
+    )
+    assert (
+        "reference frame 'first' aligns the moving channel onto itself"
+        in capsys.readouterr().out
+    )

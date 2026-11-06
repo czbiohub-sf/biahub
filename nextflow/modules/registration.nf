@@ -8,7 +8,7 @@
 // THE CLI OWNS THE LOGIC, NEXTFLOW OWNS THE FAN-OUT. `biahub estimate-transform
 // --init` checks the config, plans every position and prints a PLAN line: the
 // positions, the timepoints, whether they are estimated in one sequential task
-// (`seed_from: previous_timepoint`), and each phase's resources. Each task then
+// (`transform.initial.propagate`), and each phase's resources. Each task then
 // runs one `--step` in-process (`--cluster debug`): estimate one timepoint (or one
 // position's whole series), flag one position (its PLAN line names the timepoints
 // to repair and sweep), repair / sweep one timepoint, and finalize, which writes
@@ -58,6 +58,29 @@ def step_error_strategy(task) {
     return task.exitStatus in (130..145) + [Integer.MAX_VALUE] ? 'retry' : 'terminate'
 }
 
+// The estimate config and the files it reads (transform.initial.file), staged as each
+// task's `config_file` so an edit to any of them reruns the tasks (#397): the seed file is
+// an earlier result the estimate starts from, and the config only names it.
+def estimate_config_files(config) {
+    def files = [file(config)]
+    def settings = new org.yaml.snakeyaml.Yaml().load(file(config).text)
+    def seed = null
+    if (settings instanceof Map && settings.transform instanceof Map) {
+        def initial = settings.transform.initial
+        if (initial instanceof Map && initial.from == 'file') {
+            seed = initial.file
+        }
+    }
+    if (seed) {
+        def seed_path = seed.toString()
+        if (!new File(seed_path).isAbsolute()) {
+            seed_path = "${file(config).parent}/${seed_path}"
+        }
+        files << file(seed_path)
+    }
+    return files
+}
+
 // One task's resources as a plain map of ints, the shape parse_resources returns.
 def task_resources(res) {
     return [cpus: res.cpus as int, mem_gb: res.mem_gb as int, time_minutes: res.time_minutes as int]
@@ -90,7 +113,7 @@ process init_estimate_transform {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
     val trigger
 
@@ -123,7 +146,7 @@ process estimate_timepoints {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
 
     output:
@@ -146,7 +169,7 @@ process flag_position {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
 
     output:
@@ -180,7 +203,7 @@ process refine_timepoint {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
 
     output:
@@ -201,7 +224,7 @@ process finalize_estimate_transform {
     val reference_zarr
     val positions
     val config
-    path config_file  // staged only for the task hash: see common.nf, #397
+    path config_file, stageAs: 'estimate_inputs/?/*'  // only for the task hash: estimate_config_files
     val transforms
 
     output:
@@ -459,4 +482,85 @@ workflow apply_transform_run_wf {
 
     emit:
     done = applied
+}
+
+
+// --- benchmark: many pipelines on many cases ------------------------------------------
+//
+// One task estimates a whole run in-process (`--cluster debug`): benchmark cases use one
+// or a few timepoints, so the per-timepoint fan-out above is not needed. Then
+// evaluate-transform scores the run's transform and each block of its stack on held-out
+// positions; registration_benchmark_wf.nf joins every table.
+
+// `"<store>/<pos>" "<store>/<pos>" ...`, quoted for the task's shell.
+def position_args(store, positions) {
+    return positions.collect { pos -> "\"${store}/${pos}\"" }.join(' ')
+}
+
+// A failed run is retried when that may help (a signal; exit 3, a crashed job), then left
+// out: the other runs finish, and its absence from benchmark.csv shows it.
+def benchmark_error_strategy(task) {
+    if (task.exitStatus in (130..145) + [Integer.MAX_VALUE]) {
+        return 'retry'
+    }
+    return task.exitStatus == 3 && task.attempt <= 2 ? 'retry' : 'ignore'
+}
+
+// No --resume: Nextflow's task cache decides what reruns (an edited config re-estimates),
+// and the transforms file's content hash keys the evaluation (as `transforms_hash` above).
+process benchmark_estimate {
+    tag "${case_name} / ${pipeline}"
+    label 'cpu'
+    errorStrategy { benchmark_error_strategy(task) }
+    clusterOptions { slurm_logs('benchmark_estimate') }
+    cpus { params.benchmark_cpus as int }
+    memory { retry_memory(params.benchmark_mem_gb as int, task) }
+    time { retry_time(params.benchmark_time_minutes as int, task) }
+
+    input:
+    tuple val(case_name), val(pipeline), val(moving), val(reference), val(estimate_positions),
+        val(config), path(config_file, stageAs: 'estimate_inputs/?/*'), val(transforms)
+
+    output:
+    tuple val(case_name), val(pipeline), val(transforms), env('TRANSFORMS_HASH')
+
+    script:
+    def ref = reference ? "-r ${position_args(reference, estimate_positions)}" : ''
+    """
+    mkdir -p "${slurm_log_dir('benchmark_estimate')}"
+    biahub estimate-transform --cluster debug \\
+        -m ${position_args(moving, estimate_positions)} ${ref} \\
+        -c "${config}" -o "${transforms}"
+    TRANSFORMS_HASH=\$(md5sum "${transforms}" | cut -d' ' -f1)
+    """
+}
+
+process benchmark_evaluate {
+    tag "${case_name} / ${pipeline}"
+    label 'cpu'
+    errorStrategy { benchmark_error_strategy(task) }
+    clusterOptions { slurm_logs('benchmark_evaluate') }
+    cpus { params.benchmark_cpus as int }
+    memory { retry_memory(params.benchmark_mem_gb as int, task) }
+    time { retry_time(params.benchmark_time_minutes as int, task) }
+
+    input:
+    tuple val(case_name), val(pipeline), val(transforms), val(transforms_hash), val(moving),
+        val(reference), val(evaluate_positions), val(options)
+
+    output:
+    path 'evaluation.csv'
+
+    script:
+    def ref_store = reference ?: moving
+    def table = new File(transforms.toString()).parent + '/evaluation.csv'
+    """
+    mkdir -p "${slurm_log_dir('benchmark_evaluate')}"
+    biahub evaluate-transform \\
+        -m ${position_args(moving, evaluate_positions)} \\
+        -r ${position_args(ref_store, evaluate_positions)} \\
+        -c "${transforms}" -o "${table}" --figures ${options} \\
+        --tag 'case=${case_name}' --tag 'pipeline=${pipeline}'
+    cp "${table}" evaluation.csv
+    """
 }

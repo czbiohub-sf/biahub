@@ -1,0 +1,21 @@
+moving:
+  channel: Phase3D
+reference:
+  frame: first
+method: phase_cross_corr
+phase_cross_corr:
+  normalization: magnitude
+  maximum_shift: 1.2
+  function_type: custom
+  center_crop_xy: null
+  X_slice: all
+  Y_slice: all
+  Z_slice: all
+transform:
+  type: euclidean
+time_indices: all
+fallback:
+  flag:
+    k_mad: 2.0
+  repair: null  # the method ignores where it starts: repair would return the same answer
+verbose: true

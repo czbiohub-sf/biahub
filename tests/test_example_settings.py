@@ -161,7 +161,7 @@ def test_ants_settings_are_all_consumed_by_the_engine():
     (which is what the config-driven ANTs path runs), so a config knob can't be silently
     ignored."""
     from biahub.registration.engine import build_estimator
-    from biahub.registration.methods.ants import AntsEstimator
+    from biahub.registration.methods.intensity.ants import AntsEstimator
     from biahub.settings import AntsRegistrationSettings
 
     source = inspect.getsource(AntsEstimator.from_settings) + inspect.getsource(
@@ -170,29 +170,6 @@ def test_ants_settings_are_all_consumed_by_the_engine():
     read = set(re.findall(r"ants_(?:registration_)?settings\.(\w+)", source))
     missing = set(AntsRegistrationSettings.model_fields) - read
     assert not missing, f"AntsRegistrationSettings fields nothing reads: {missing}"
-
-
-def test_ants_settings_defaults_match_preprocess_zyx():
-    """Preprocessing defaults must agree with ``preprocess_zyx``, which consumes them."""
-    from biahub.registration.methods.ants import preprocess_zyx
-    from biahub.settings import AntsRegistrationSettings
-
-    settings = AntsRegistrationSettings()
-    params = inspect.signature(preprocess_zyx).parameters
-    for field in AntsRegistrationSettings.model_fields:
-        assert field in params, f"{field} is not a preprocess_zyx parameter"
-        assert getattr(settings, field) == params[field].default, (
-            f"default mismatch for {field}: settings={getattr(settings, field)} "
-            f"preprocess_zyx={params[field].default}"
-        )
-
-
-@pytest.mark.parametrize("radius", [0, -0.2, 1.5])
-def test_ants_ref_mask_radius_rejects_out_of_range(radius):
-    from biahub.settings import AntsRegistrationSettings
-
-    with pytest.raises(ValidationError):
-        AntsRegistrationSettings(ref_mask_radius=radius)
 
 
 def test_example_stitch_settings(example_stitch_settings):

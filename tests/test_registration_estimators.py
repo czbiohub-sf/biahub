@@ -6,21 +6,25 @@ import pytest
 from scipy.ndimage import shift as ndi_shift
 
 from biahub.core.transform import Transform
-from biahub.registration.estimators import EstimationError, NodeDetector, TransformEstimator
-from biahub.registration.methods.ants import DEFAULT_ANTS_KWARGS, AntsEstimator
-from biahub.registration.methods.beads import (
+from biahub.registration.estimators import (
+    EstimationError,
+    EstimatorBase,
+    NodeDetector,
+    TransformEstimator,
+)
+from biahub.registration.methods.intensity.ants import DEFAULT_ANTS_KWARGS, AntsEstimator
+from biahub.registration.methods.intensity.focus_finding import FocusEstimator, find_focus
+from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
+from biahub.registration.methods.intensity.stackreg import StackregEstimator
+from biahub.registration.methods.landmark.bead_matching import (
     BeadNodeDetector,
     NodeGraphEstimator,
     matches_from_beads,
     transform_from_matches,
 )
-from biahub.registration.methods.focus import FocusEstimator, find_focus
-from biahub.registration.methods.manual import ManualEstimator
-from biahub.registration.methods.pcc import PCCEstimator
-from biahub.registration.methods.stackreg import StackregEstimator
+from biahub.registration.methods.manual.manual import ManualEstimator
 from biahub.registration.metrics import correlation_score
 from biahub.settings import (
-    AffineTransformSettings,
     AntsRegistrationSettings,
     BeadsMatchSettings,
     DetectPeaksSettings,
@@ -47,9 +51,7 @@ def _make_matched_clouds(rng, n=30, translation=(5.0, -3.0, 2.0)):
 
 def test_node_graph_estimator_satisfies_protocols():
     assert isinstance(BeadNodeDetector(DetectPeaksSettings()), NodeDetector)
-    estimator = NodeGraphEstimator.from_beads_settings(
-        BeadsMatchSettings(), AffineTransformSettings()
-    )
+    estimator = NodeGraphEstimator.from_beads_settings(BeadsMatchSettings(), "euclidean")
     assert isinstance(estimator, TransformEstimator)
 
 
@@ -58,13 +60,13 @@ def test_node_graph_estimator_matches_direct_call():
     mov_nodes, ref_nodes = _make_matched_clouds(rng)
 
     beads_match_settings = BeadsMatchSettings()
-    affine_transform_settings = AffineTransformSettings(transform_type="euclidean")
+    transform_type = "euclidean"
 
     estimator = NodeGraphEstimator(
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=beads_match_settings,
-        affine_transform_settings=affine_transform_settings,
+        transform_type=transform_type,
     )
     mov_volume = np.zeros((10, 10, 10))
     ref_volume = np.zeros((10, 10, 10))
@@ -72,7 +74,7 @@ def test_node_graph_estimator_matches_direct_call():
 
     matches = matches_from_beads(mov_nodes, ref_nodes, beads_match_settings)
     expected_transform, _ = transform_from_matches(
-        matches, mov_nodes, ref_nodes, affine_transform_settings, ndim=3
+        matches, mov_nodes, ref_nodes, transform_type
     )
 
     np.testing.assert_allclose(transform.matrix, expected_transform.matrix)
@@ -96,7 +98,7 @@ def test_node_graph_estimator_keeps_the_best_scoring_iteration_not_the_last():
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
         iterations=2,
         score_fn=score_fn,
     )
@@ -115,24 +117,26 @@ def _drifting_estimator(translation, score_fn, iterations):
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
         iterations=iterations,
         score_fn=score_fn,
     )
 
 
 def test_node_graph_estimator_keeps_its_input_when_the_refinement_scores_lower():
-    # The seed is already right; the pass's refinement drifts away and scores lower, so
-    # (as in the legacy pipeline) the pass keeps its input.
+    # The initial transform is already right; the pass's refinement drifts away and
+    # scores lower, so (as in the legacy pipeline) the pass keeps its input.
     translation = np.array([5.0, -3.0, 2.0])
-    seed = Transform.from_translation(translation)
+    initial_transform = Transform.from_translation(translation)
 
     def score_fn(transform, mov, ref):
         return -float(np.abs(transform.translation - translation).sum())
 
     estimator = _drifting_estimator(translation, score_fn, iterations=1)
-    transform = estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)), seed=seed)
-    np.testing.assert_allclose(transform.matrix, seed.matrix)
+    transform = estimator.estimate(
+        np.zeros((10, 10, 10)), np.zeros((10, 10, 10)), initial_transform=initial_transform
+    )
+    np.testing.assert_allclose(transform.matrix, initial_transform.matrix)
 
 
 def test_node_graph_estimator_stops_at_a_perfect_score():
@@ -156,7 +160,7 @@ def test_node_graph_estimator_fails_clearly_with_too_few_nodes():
         mov_detector=_FixedNodeDetector(np.zeros((2, 3))),
         ref_detector=_FixedNodeDetector(np.zeros((30, 3))),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(),
+        transform_type="euclidean",
     )
     with pytest.raises(EstimationError, match="2 moving, 30 reference"):
         estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
@@ -169,7 +173,7 @@ def test_node_graph_estimator_fails_clearly_when_no_iteration_scores():
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
         iterations=2,
         score_fn=lambda transform, mov, ref: float("nan"),
     )
@@ -186,7 +190,7 @@ def test_node_graph_estimator_recovers_known_translation():
         mov_detector=_FixedNodeDetector(mov_nodes),
         ref_detector=_FixedNodeDetector(ref_nodes),
         beads_match_settings=BeadsMatchSettings(),
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
     )
     transform = estimator.estimate(np.zeros((10, 10, 10)), np.zeros((10, 10, 10)))
 
@@ -215,23 +219,23 @@ def _bead_estimator():
         threshold_abs=100, nms_distance=4, min_distance=0, block_size=[8, 8, 8]
     )
     beads_match_settings = BeadsMatchSettings(
-        source_peaks_settings=peaks_settings, target_peaks_settings=peaks_settings
+        moving_peaks_settings=peaks_settings, reference_peaks_settings=peaks_settings
     )
     return NodeGraphEstimator(
         mov_detector=BeadNodeDetector(peaks_settings),
         ref_detector=BeadNodeDetector(peaks_settings),
         beads_match_settings=beads_match_settings,
-        affine_transform_settings=AffineTransformSettings(transform_type="euclidean"),
+        transform_type="euclidean",
     )
 
 
-def test_node_graph_estimator_seed_composition_is_self_consistent():
-    """Regression test for the seed composition math: pre-warping mov by the seed and
-    composing the residual correction with it (`correction @ seed`) must give the exact
-    same result as manually pre-warping mov, fitting the residual with no seed, and
-    composing by hand -- confirms Transform.compose's "apply other first, then self"
-    contract is used in the right order here.
-    """
+def test_node_graph_estimator_initial_transform_composition_is_self_consistent():
+    """Regression test for the initial transform composition math: pre-warping mov by
+    the initial transform and composing the residual correction with it (`correction @
+    initial_transform`) must give the exact same result as manually pre-warping mov,
+    fitting the residual with no initial transform, and composing by hand -- confirms
+    Transform.compose's "apply other first, then self" contract is used in the right
+    order here."""
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)
     ref = _synthetic_bead_volume(rng, shape)
@@ -239,20 +243,20 @@ def test_node_graph_estimator_seed_composition_is_self_consistent():
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
 
     estimator = _bead_estimator()
-    seed = Transform.from_translation([-1.5, 2.5, -3.5])  # plausible, not exact
+    initial_transform = Transform.from_translation([-1.5, 2.5, -3.5])  # plausible, not exact
 
-    mov_warped = seed.apply(mov, reference=ref, order=1, backend="scipy")
+    mov_warped = initial_transform.apply(mov, reference=ref, order=1, backend="scipy")
     correction = estimator.estimate(mov_warped, ref)
-    expected_total = correction @ seed
+    expected_total = correction @ initial_transform
 
-    actual_total = estimator.estimate(mov, ref, seed=seed)
+    actual_total = estimator.estimate(mov, ref, initial_transform=initial_transform)
     np.testing.assert_allclose(actual_total.matrix, expected_total.matrix, atol=1e-6)
 
 
-def test_node_graph_estimator_seed_extends_matching_capture_range():
-    """A large offset that cannot be matched without a seed (too few valid
+def test_node_graph_estimator_initial_transform_extends_matching_capture_range():
+    """A large offset that cannot be matched without an initial transform (too few valid
     correspondences -> EstimationError, not a silent NaN matrix) succeeds exactly once a
-    seed pre-aligns mov close enough for point matching's limited capture range.
+    initial transform pre-aligns mov close enough for point matching's limited capture range.
     """
     rng = np.random.default_rng(11)
     shape = (40, 60, 60)
@@ -265,10 +269,12 @@ def test_node_graph_estimator_seed_extends_matching_capture_range():
     with pytest.raises(EstimationError, match="too few matches"):
         estimator.estimate(mov, ref)
 
-    good_seed = Transform.from_translation([-a for a in big_applied_zyx])
-    with_seed_result = estimator.estimate(mov, ref, seed=good_seed)
+    good_initial_transform = Transform.from_translation([-a for a in big_applied_zyx])
+    with_initial_transform_result = estimator.estimate(
+        mov, ref, initial_transform=good_initial_transform
+    )
     np.testing.assert_allclose(
-        with_seed_result.matrix[:3, 3], [-a for a in big_applied_zyx], atol=0.5
+        with_initial_transform_result.matrix[:3, 3], [-a for a in big_applied_zyx], atol=0.5
     )
 
 
@@ -314,42 +320,68 @@ def test_ants_estimator_satisfies_protocol():
     assert isinstance(AntsEstimator(), TransformEstimator)
 
 
-def test_ants_estimator_from_settings_maps_transform_type_and_preprocessing():
-    estimator = AntsEstimator.from_settings(
-        AntsRegistrationSettings(sobel_filter=True, crop=True, ref_mask_radius=0.9),
-        AffineTransformSettings(transform_type="affine"),
-    )
+def test_ants_estimator_from_settings_maps_the_transform_type():
+    # Preparation (Sobel, clipping, masks) is the preprocess blocks', not the estimator's.
+    estimator = AntsEstimator.from_settings(AntsRegistrationSettings(), "affine")
     assert estimator.ants_kwargs["type_of_transform"] == "Affine"
     assert estimator.ants_kwargs["aff_iterations"] == DEFAULT_ANTS_KWARGS["aff_iterations"]
-    assert (
-        estimator.sobel_filter,
-        estimator.crop,
-        estimator.ref_mask_radius,
-        estimator.clip,
-    ) == (
-        True,
-        True,
-        0.9,
-        False,
-    )
+    assert not any(hasattr(estimator, a) for a in ("sobel_filter", "crop", "clip"))
     assert isinstance(estimator, TransformEstimator)
 
 
-def test_ants_estimator_composes_the_crop_offset_back_into_full_volume_coordinates():
-    """With `crop`, ANTs sees a sub-volume; the correction it returns is in that
-    sub-volume's coordinates and must be shifted back, or the result is off by the crop
-    origin."""
-    rng = np.random.default_rng(7)
-    shape = (24, 48, 48)
-    ref = _synthetic_blob_volume(rng, shape)
-    applied_zyx = (2, -3, 4)
-    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
-    # Zero out a border so the overlap crop has a non-zero origin.
-    ref[:, :8, :] = 0
-    mov[:, :8, :] = 0
+def test_ants_never_warps_the_moving_volume(monkeypatch):
+    # The initial transform goes to ANTs as its initial transform: no pre-warp, so no
+    # zero-filled border for a filter to turn into an edge, and one interpolation
+    # instead of two.
+    def no_warp(*args, **kwargs):
+        raise AssertionError("the moving volume was warped before ANTs")
 
-    transform = AntsEstimator(crop=True).estimate(mov, ref)
-    np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
+    monkeypatch.setattr(Transform, "apply", no_warp)
+    rng = np.random.default_rng(7)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    initial_transform = Transform.from_translation([0.0, 1.0, -1.0])
+    AntsEstimator(ants_kwargs=_FEW_ITERATIONS).estimate(
+        ref, ref, initial_transform=initial_transform
+    )
+
+
+def test_ants_refines_from_a_far_initial_transform_without_cropping():
+    # A large offset, an exact initial transform and Sobel on both volumes, no crop:
+    # ANTs keeps the initial transform's answer (test_ants_never_warps_the_moving_volume
+    # pins the no-warp behaviour).
+    from biahub.registration.preprocess import PreprocessedEstimator
+    from biahub.settings import Sobel
+
+    rng = np.random.default_rng(7)
+    ref = _synthetic_blob_volume(rng, (24, 64, 64))
+    applied_zyx = (0, 12, -10)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
+    truth = Transform.from_translation([-a for a in applied_zyx])
+    estimator = PreprocessedEstimator(AntsEstimator(), [Sobel()])
+    result = estimator.estimate(mov, ref, initial_transform=truth)
+    np.testing.assert_allclose(result.matrix[:3, 3], truth.matrix[:3, 3], atol=0.5)
+
+
+def test_ants_estimator_passes_its_masks_to_ants(monkeypatch):
+    import ants
+
+    from biahub.registration.methods.intensity import ants as ants_method
+
+    seen = {}
+    real = ants.registration
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(ants_method.ants, "registration", recording)
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    ref_mask = np.zeros(ref.shape, dtype=bool)
+    ref_mask[4:20, 8:40, 8:40] = True
+    AntsEstimator(ants_kwargs=_FEW_ITERATIONS).estimate(ref, ref, ref_mask=ref_mask)
+    np.testing.assert_array_equal(seen["mask"].numpy() > 0, ref_mask)
+    assert seen["moving_mask"] is None
 
 
 def test_correlation_score_prefers_the_correct_transform():
@@ -370,12 +402,13 @@ def test_correlation_score_prefers_the_correct_transform():
     ) == pytest.approx(1.0)
 
 
-def test_ants_estimator_seed_is_mechanically_used():
-    """With a correct seed and near-zero optimizer iterations the correction is
-    ~identity, so the result must track the seed -- proving the seed pre-warp and the
-    `correction @ seed` composition are wired, and that the pass runs an invertible
-    transform family (not ants.registration's default SyN, which Transform.from_ants
-    cannot parse). A wildly wrong seed must still return a finite transform."""
+def test_ants_estimator_initial_transform_is_mechanically_used():
+    """With a correct initial transform and near-zero optimizer iterations the correction is
+    ~identity, so the result must track the initial transform -- proving the initial
+    transform pre-warp and the `correction @ initial_transform` composition are wired,
+    and that the pass runs an invertible transform family (not ants.registration's
+    default SyN, which Transform.from_ants
+    cannot parse). A wildly wrong initial transform must still return a finite transform."""
     rng = np.random.default_rng(10)
     shape = (24, 48, 48)
     ref = _synthetic_blob_volume(rng, shape)
@@ -390,23 +423,60 @@ def test_ants_estimator_seed_is_mechanically_used():
             "aff_smoothing_sigmas": (2, 1, 0),
         }
     )
-    true_seed = Transform.from_translation([-a for a in applied_zyx])
-    result = estimator.estimate(mov, ref, seed=true_seed)
-    np.testing.assert_allclose(result.matrix[:3, 3], true_seed.matrix[:3, 3], atol=1.0)
+    true_initial_transform = Transform.from_translation([-a for a in applied_zyx])
+    result = estimator.estimate(mov, ref, initial_transform=true_initial_transform)
+    np.testing.assert_allclose(
+        result.matrix[:3, 3], true_initial_transform.matrix[:3, 3], atol=1.0
+    )
 
-    huge_seed = Transform.from_translation([15.0, -10.0, 8.0])
-    assert np.all(np.isfinite(estimator.estimate(mov, ref, seed=huge_seed).matrix))
+    huge_initial_transform = Transform.from_translation([15.0, -10.0, 8.0])
+    assert np.all(
+        np.isfinite(
+            estimator.estimate(mov, ref, initial_transform=huge_initial_transform).matrix
+        )
+    )
 
 
-def test_ants_estimator_with_seed_still_recovers_translation():
+def test_ants_keeps_an_initial_transform_with_rotation_scale_and_shear():
+    # With no iterations ANTs returns its initial transform, so the result must be the
+    # initial transform itself: an initial transform with every linear part pins the
+    # direction and axis order at the ANTs boundary, which translation-only initial
+    # transforms cannot (a translation inverts to its negative).
+    rng = np.random.default_rng(12)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    angle = np.deg2rad(4)
+    linear = np.array(
+        [
+            [1.03, 0.0, 0.05],  # z scale and a z-x shear
+            [0.0, np.cos(angle), -np.sin(angle)],
+            [0.0, np.sin(angle), np.cos(angle)],
+        ]
+    ) @ np.diag([1.0, 0.97, 0.97])
+    matrix = np.eye(4)
+    matrix[:3, :3] = linear
+    matrix[:3, 3] = [1.5, -2.0, 3.0]
+    initial_transform = Transform(matrix)
+    estimator = AntsEstimator(
+        ants_kwargs={
+            "type_of_transform": "Affine",
+            "aff_iterations": (0, 0, 0),
+            "aff_shrink_factors": (4, 2, 1),
+            "aff_smoothing_sigmas": (2, 1, 0),
+        }
+    )
+    result = estimator.estimate(ref, ref, initial_transform=initial_transform)
+    np.testing.assert_allclose(result.matrix, initial_transform.matrix, atol=1e-5)
+
+
+def test_ants_estimator_with_initial_transform_still_recovers_translation():
     rng = np.random.default_rng(5)
     shape = (24, 48, 48)
     ref = _synthetic_blob_volume(rng, shape)
     applied_zyx = (2, -3, 4)
     mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant", cval=0.0)
 
-    close_seed = Transform.from_translation([-a for a in applied_zyx])
-    transform = AntsEstimator().estimate(mov, ref, seed=close_seed)
+    close_initial_transform = Transform.from_translation([-a for a in applied_zyx])
+    transform = AntsEstimator().estimate(mov, ref, initial_transform=close_initial_transform)
     np.testing.assert_allclose(transform.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
 
 
@@ -438,48 +508,47 @@ def test_ants_estimator_recovers_known_translation_and_warps_mov_onto_ref():
 
 def test_manual_estimator_satisfies_protocol():
     estimator = ManualEstimator(
-        source_channel_name="GFP",
-        target_channel_name="Phase3D",
-        source_channel_voxel_size=(1.0, 1.0, 1.0),
-        target_channel_voxel_size=(1.0, 1.0, 1.0),
+        moving_channel_name="GFP",
+        reference_channel_name="Phase3D",
+        moving_channel_voxel_size=(1.0, 1.0, 1.0),
+        reference_channel_voxel_size=(1.0, 1.0, 1.0),
     )
     assert isinstance(estimator, TransformEstimator)
 
 
-def test_manual_estimator_inverts_user_assisted_registrations_inverse_output(monkeypatch):
-    # user_assisted_registration returns a inverse (reference -> moving) matrix, per its own
-    # explicit internal .invert() before returning -- see estimators.py's docstring.
-    inverse_matrix = np.eye(4)
-    inverse_matrix[:3, 3] = [1.0, 2.0, 3.0]
+def test_manual_estimator_returns_the_forward_transform_the_annotation_built(monkeypatch):
+    # user_assisted_registration returns the forward (moving -> reference) Transform it
+    # fitted to the clicked points; the estimator passes it on as it is
+    clicked = Transform.from_translation([1.0, 2.0, 3.0])
     captured_kwargs = {}
 
     def fake_user_assisted_registration(**kwargs):
         captured_kwargs.update(kwargs)
-        return [inverse_matrix.tolist()]
+        return clicked
 
     monkeypatch.setattr(
-        "biahub.registration.methods.manual.user_assisted_registration",
+        "biahub.registration.methods.manual.manual.user_assisted_registration",
         fake_user_assisted_registration,
     )
 
     mov = np.zeros((5, 5, 5))
     ref = np.zeros((5, 5, 5))
     estimator = ManualEstimator(
-        source_channel_name="GFP",
-        target_channel_name="Phase3D",
-        source_channel_voxel_size=(1.0, 1.0, 1.0),
-        target_channel_voxel_size=(0.5, 0.5, 0.5),
+        moving_channel_name="GFP",
+        reference_channel_name="Phase3D",
+        moving_channel_voxel_size=(1.0, 1.0, 1.0),
+        reference_channel_voxel_size=(0.5, 0.5, 0.5),
         similarity=True,
     )
     transform = estimator.estimate(mov, ref)
 
-    np.testing.assert_allclose(transform.matrix, np.linalg.inv(inverse_matrix))
-    assert captured_kwargs["source_channel_name"] == "GFP"
-    assert captured_kwargs["target_channel_name"] == "Phase3D"
-    assert captured_kwargs["target_channel_voxel_size"] == (0.5, 0.5, 0.5)
+    assert transform is clicked
+    assert captured_kwargs["moving_channel_name"] == "GFP"
+    assert captured_kwargs["reference_channel_name"] == "Phase3D"
+    assert captured_kwargs["reference_channel_voxel_size"] == (0.5, 0.5, 0.5)
     assert captured_kwargs["similarity"] is True
-    np.testing.assert_array_equal(captured_kwargs["source_channel_volume"], mov)
-    np.testing.assert_array_equal(captured_kwargs["target_channel_volume"], ref)
+    np.testing.assert_array_equal(captured_kwargs["moving_channel_volume"], mov)
+    np.testing.assert_array_equal(captured_kwargs["reference_channel_volume"], ref)
 
 
 def _synthetic_blob_image(rng, shape, n_blobs=10, sigma=3.0, noise_std=5.0):
@@ -588,31 +657,42 @@ def _identity_pass_estimator(score_of, fail_from=()):
     return estimator
 
 
-def test_a_competitor_seed_wins_only_when_it_scores_strictly_higher():
-    seed, competitor = (
+def test_a_competitor_initial_transform_wins_only_when_it_scores_strictly_higher():
+    initial_transform, competitor = (
         Transform.from_translation([1, 0, 0]),
         Transform.from_translation([2, 0, 0]),
     )
     vol = np.zeros((4, 4, 4))
     better = _identity_pass_estimator(lambda t: t.translation[0] / 10)  # competitor 0.2 > 0.1
-    assert better.estimate(vol, vol, seed=seed, competitor=competitor) is competitor
+    assert (
+        better.estimate(vol, vol, initial_transform=initial_transform, competitor=competitor)
+        is competitor
+    )
     tie = _identity_pass_estimator(lambda t: 0.5)
-    assert tie.estimate(vol, vol, seed=seed, competitor=competitor) is seed
+    assert (
+        tie.estimate(vol, vol, initial_transform=initial_transform, competitor=competitor)
+        is initial_transform
+    )
 
 
-def test_a_competitor_seed_rescues_a_failed_first_pass():
-    seed, competitor = (
+def test_a_competitor_initial_transform_rescues_a_failed_first_pass():
+    initial_transform, competitor = (
         Transform.from_translation([1, 0, 0]),
         Transform.from_translation([2, 0, 0]),
     )
     vol = np.zeros((4, 4, 4))
-    estimator = _identity_pass_estimator(lambda t: 0.3, fail_from=(seed,))
-    assert estimator.estimate(vol, vol, seed=seed, competitor=competitor) is competitor
+    estimator = _identity_pass_estimator(lambda t: 0.3, fail_from=(initial_transform,))
+    assert (
+        estimator.estimate(
+            vol, vol, initial_transform=initial_transform, competitor=competitor
+        )
+        is competitor
+    )
     with pytest.raises(EstimationError):
-        estimator.estimate(vol, vol, seed=seed)
+        estimator.estimate(vol, vol, initial_transform=initial_transform)
 
 
-def test_a_competitor_seed_needs_a_score_fn():
+def test_a_competitor_initial_transform_needs_a_score_fn():
     estimator = _drifting_estimator(np.zeros(3), None, iterations=1)
     with pytest.raises(ValueError, match="competitor"):
         estimator.estimate(
@@ -632,14 +712,18 @@ def test_ants_estimates_are_repeatable():
     rng = np.random.default_rng(5)
     ref = _synthetic_blob_volume(rng, (24, 48, 48))
     mov = ndi_shift(ref, shift=(2, -3, 4), order=1, mode="constant", cval=0.0)
-    # with a seed, as the engine always calls it: the seed is applied (an ITK resample) first
-    seed = Transform.identity(3)
-    first, second = (AntsEstimator().estimate(mov, ref, seed=seed).matrix for _ in range(2))
+    # with an initial transform, as the engine always calls it: the initial transform is
+    # applied (an ITK resample) first
+    initial_transform = Transform.identity(3)
+    first, second = (
+        AntsEstimator().estimate(mov, ref, initial_transform=initial_transform).matrix
+        for _ in range(2)
+    )
     assert np.array_equal(first, second), np.abs(first - second).max()
 
 
 def test_ants_threads_follow_the_task_cpus_unless_set(monkeypatch):
-    from biahub.registration.methods.ants import _itk_threads
+    from biahub.registration.methods.intensity.ants import _itk_threads
 
     monkeypatch.delenv("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", raising=False)
     monkeypatch.setenv("SLURM_CPUS_PER_TASK", "8")
@@ -650,23 +734,14 @@ def test_ants_threads_follow_the_task_cpus_unless_set(monkeypatch):
     assert _itk_threads() == "3"  # set by the user: kept
 
 
-def test_ants_reference_mask_is_centred_on_a_non_square_volume():
-    # The circular reference mask must sit at the volume's centre (Y, X), whatever its
-    # aspect: a swapped centre puts it off the volume and leaves nothing to register.
-    from biahub.registration.methods.ants import preprocess_zyx
-
-    vol = np.ones((4, 40, 100), dtype=np.float32)
-    ref, _mov, offset = preprocess_zyx(vol, vol, crop=True, ref_mask_radius=0.5)
-    centre_y = offset[1] + ref.shape[1] / 2
-    centre_x = offset[2] + ref.shape[2] / 2
-    assert abs(centre_y - 20) <= 1 and abs(centre_x - 50) <= 1
-
-
 @pytest.mark.parametrize("padding", [False, True])
 def test_classic_pcc_normalization_stays_finite_where_the_spectrum_is_zero(padding):
     # A volume with zero-magnitude frequencies (here: constant) must not turn the
     # correlation into NaNs, as the 'magnitude' normalization already guards against.
-    from biahub.registration.methods.pcc import phase_cross_corr, phase_cross_corr_padding
+    from biahub.registration.methods.intensity.phase_cross_corr import (
+        phase_cross_corr,
+        phase_cross_corr_padding,
+    )
 
     vol = np.full((8, 16, 16), 3.0, dtype=np.float32)
     fn = phase_cross_corr_padding if padding else phase_cross_corr
@@ -677,7 +752,7 @@ def test_classic_pcc_normalization_stays_finite_where_the_spectrum_is_zero(paddi
 def test_pcc_center_crop_is_clamped_to_the_image():
     # A crop larger than an axis takes the whole axis; a negative start would wrap around
     # and keep only the far end.
-    from biahub.registration.methods.pcc import pcc_crop
+    from biahub.registration.methods.intensity.phase_cross_corr import pcc_crop
     from biahub.settings import PhaseCrossCorrSettings
 
     _, y, x = pcc_crop(PhaseCrossCorrSettings(center_crop_xy=[150, 150]), (10, 100, 80))
@@ -694,10 +769,10 @@ def _off_centre_blob(volume, centre=(4, 6, 6), brightness=20000.0, sigma=2.0):
     return volume + brightness * blob.astype(np.float32)
 
 
-def test_ants_starts_from_the_seed_not_the_centres_of_mass():
+def test_ants_starts_from_the_initial_transform_not_the_centres_of_mass():
     # A bright structure in one channel only moves its centre of mass. ANTs' default
-    # initialisation aligns the centres of mass, replacing the seed's translation; with
-    # near-zero iterations the result shows where it started.
+    # initialisation aligns the centres of mass, replacing the initial transform's
+    # translation; with near-zero iterations the result shows where it started.
     rng = np.random.default_rng(10)
     shape = (24, 48, 48)
     ref = _synthetic_blob_volume(rng, shape)
@@ -709,17 +784,86 @@ def test_ants_starts_from_the_seed_not_the_centres_of_mass():
         "aff_shrink_factors": (6, 3, 1),
         "aff_smoothing_sigmas": (2, 1, 0),
     }
-    true_seed = Transform.from_translation([-a for a in applied_zyx])
+    true_initial_transform = Transform.from_translation([-a for a in applied_zyx])
 
-    from_seed = AntsEstimator(ants_kwargs=few_iterations).estimate(mov, ref, seed=true_seed)
-    np.testing.assert_allclose(from_seed.matrix[:3, 3], true_seed.matrix[:3, 3], atol=1.0)
-
-    # ANTsPy's own default (no initial transform) is what used to replace the seed's shift
-    com_start = AntsEstimator(ants_kwargs={**few_iterations, "initial_transform": None})
-    moved = (
-        com_start.estimate(mov, ref, seed=true_seed).matrix[:3, 3] - true_seed.matrix[:3, 3]
+    from_initial_transform = AntsEstimator(ants_kwargs=few_iterations).estimate(
+        mov, ref, initial_transform=true_initial_transform
     )
-    assert np.abs(moved).max() > 1.0
+    np.testing.assert_allclose(
+        from_initial_transform.matrix[:3, 3], true_initial_transform.matrix[:3, 3], atol=1.0
+    )
+
+
+# --- ants.estimate: the wrapper around ants.registration --------------------------------
+
+_FEW_ITERATIONS = {
+    "type_of_transform": "Similarity",
+    "aff_iterations": (1, 1, 1),
+    "aff_shrink_factors": (6, 3, 1),
+    "aff_smoothing_sigmas": (2, 1, 0),
+}
+
+
+def test_ants_estimate_starts_from_initial_and_returns_the_full_forward_transform():
+    # With near-zero iterations the result is where ANTs started: `initial` itself (used
+    # once, not twice), even with a bright blob that moves the moving volume's centre of
+    # mass (ANTsPy's own default start).
+    from biahub.registration.methods.intensity.ants import estimate
+
+    rng = np.random.default_rng(10)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    applied_zyx = (2, -3, 4)
+    mov = _off_centre_blob(ndi_shift(ref, shift=applied_zyx, order=1, mode="constant"))
+    initial = Transform.from_translation([-a for a in applied_zyx])  # forward: mov -> ref
+
+    result = estimate(ref, mov, initial=initial, ants_kwargs=_FEW_ITERATIONS)
+    # one iteration per pyramid level still nudges it (~0.2 voxel); a centre-of-mass
+    # start would be off by more than a voxel
+    np.testing.assert_allclose(result.matrix[:3, 3], initial.matrix[:3, 3], atol=0.5)
+    np.testing.assert_allclose(result.matrix[:3, :3], initial.matrix[:3, :3], atol=0.02)
+
+
+def test_ants_estimate_returns_the_forward_direction():
+    from biahub.registration.methods.intensity.ants import estimate
+
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    applied_zyx = (2, -3, 4)
+    mov = ndi_shift(ref, shift=applied_zyx, order=1, mode="constant")
+
+    result = estimate(ref, mov, initial=Transform.identity(3))
+    # forward (mov -> ref) undoes the shift that made mov
+    np.testing.assert_allclose(result.matrix[:3, 3], [-a for a in applied_zyx], atol=0.5)
+
+
+def test_ants_estimate_passes_the_masks_to_ants(monkeypatch):
+    import ants
+
+    from biahub.registration.methods.intensity import ants as ants_method
+
+    seen = {}
+    real = ants.registration
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(ants_method.ants, "registration", recording)
+    rng = np.random.default_rng(5)
+    ref = _synthetic_blob_volume(rng, (24, 48, 48))
+    ref_mask = np.zeros(ref.shape, dtype=bool)
+    ref_mask[4:20, 8:40, 8:40] = True
+    mov_mask = np.ones(ref.shape, dtype=bool)
+    ants_method.estimate(
+        ref,
+        ref,
+        initial=Transform.identity(3),
+        ref_mask=ref_mask,
+        mov_mask=mov_mask,
+        ants_kwargs=_FEW_ITERATIONS,
+    )
+    np.testing.assert_array_equal(seen["mask"].numpy() > 0, ref_mask)
+    np.testing.assert_array_equal(seen["moving_mask"].numpy() > 0, mov_mask)
 
 
 @pytest.mark.parametrize("x", [24, 21])
@@ -727,7 +871,7 @@ def test_pcc_correlation_keeps_the_input_grid_on_odd_widths(x):
     # Without the spatial shape, irfftn returns 2 * (n // 2 + 1) - 2 samples on the last
     # axis: n - 1 for an odd n, so the correlation peak sits on the wrong grid. The padded
     # path pads to next_fast_len sizes, which can be odd too.
-    from biahub.registration.methods import pcc
+    from biahub.registration.methods.intensity import phase_cross_corr as pcc
 
     rng = np.random.default_rng(3)
     ref = rng.random((6, 20, x)).astype(np.float32)
@@ -741,7 +885,7 @@ def test_pcc_correlation_keeps_the_input_grid_on_odd_widths(x):
 def test_padded_pcc_measures_no_shift_from_unequal_shapes(mov_width):
     # Padding / cropping both volumes to one shape moves their origins by different amounts
     # when their shapes differ; that difference is not a shift of the content.
-    from biahub.registration.methods.pcc import phase_cross_corr_padding
+    from biahub.registration.methods.intensity.phase_cross_corr import phase_cross_corr_padding
 
     rng = np.random.default_rng(2)
     ref = _synthetic_blob_volume(rng, (24, 64, 72), n_blobs=40)
@@ -767,8 +911,8 @@ def test_padded_pcc_measures_no_shift_from_unequal_shapes(mov_width):
 @pytest.mark.parametrize("crop", [(3, 5), (1, 1), (6, 4), (800, 800)])
 def test_center_crops_keep_the_requested_size(crop):
     # An odd size lost a pixel at each crop (both bounds halved) and [1, 1] was empty.
-    from biahub.registration.methods.focus import center_crop_yx
-    from biahub.registration.methods.pcc import pcc_crop
+    from biahub.registration.methods.intensity.focus_finding import center_crop_yx
+    from biahub.registration.methods.intensity.phase_cross_corr import pcc_crop
     from biahub.settings import PhaseCrossCorrSettings
 
     shape = (4, 9, 7)  # odd Y and X
@@ -781,7 +925,7 @@ def test_center_crops_keep_the_requested_size(crop):
 
 def test_unpadded_pcc_refuses_unequal_shapes_with_guidance():
     # The unpadded correlation needs equal grids; unequal ones raised deep in numpy.
-    from biahub.registration.methods.pcc import PCCEstimator
+    from biahub.registration.methods.intensity.phase_cross_corr import PCCEstimator
 
     rng = np.random.default_rng(0)
     ref = rng.random((8, 32, 64)).astype(np.float32)
@@ -791,21 +935,23 @@ def test_unpadded_pcc_refuses_unequal_shapes_with_guidance():
     PCCEstimator(function_type="custom_padding").estimate(mov, ref)  # pads to one grid
 
 
-def test_competing_arms_report_a_non_finite_score():
+def test_competing_candidates_report_a_non_finite_score():
     from biahub.registration.estimators import CompetingEstimator
 
-    class Arm:
-        def estimate(self, mov, ref, seed=None):
+    class _Candidate(EstimatorBase):
+        def estimate(self, mov, ref, initial_transform=None):
             return Transform.identity(3)
 
-    competing = CompetingEstimator({"a": Arm(), "b": Arm()}, score_fn=lambda t, m, r: np.nan)
+    competing = CompetingEstimator(
+        {"a": _Candidate(), "b": _Candidate()}, score_fn=lambda t, m, r: np.nan
+    )
     with pytest.raises(EstimationError, match=r"a: .*nan.*b: .*nan"):
         competing.estimate(np.zeros((4, 4, 4)), np.zeros((4, 4, 4)))
 
 
 def test_itk_threads_fall_back_where_cpu_affinity_is_unavailable(monkeypatch):
     # macOS has no os.sched_getaffinity.
-    from biahub.registration.methods import ants as ants_method
+    from biahub.registration.methods.intensity import ants as ants_method
 
     monkeypatch.delenv("ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS", raising=False)
     monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
@@ -823,3 +969,114 @@ def test_focus_xy_translation_is_in_full_volume_coordinates_for_unequal_shapes()
     estimator._focus = lambda zyx: 12  # isolate the yx step
     result = estimator.estimate(mov, ref)
     np.testing.assert_allclose(result.matrix[1:3, 3], [0.0, 0.0], atol=0.5)
+
+
+def test_is_higher_needs_a_finite_strictly_greater_score():
+    from biahub.registration.estimators import is_higher
+
+    assert is_higher(0.6, 0.5) and not is_higher(0.5, 0.5)  # a tie keeps the incumbent
+    assert not is_higher(float("nan"), 0.5) and not is_higher(None, 0.5)  # NaN never wins
+    assert is_higher(0.1, float("nan")) and is_higher(
+        0.1, None
+    )  # a NaN incumbent can be beaten
+
+
+def test_select_best_keeps_the_incumbent_on_ties_and_never_a_nan():
+    from biahub.registration.estimators import (
+        CandidateUnavailableError,
+        EstimationError,
+        select_best,
+    )
+
+    a, b = Transform.from_translation([1.0, 0, 0]), Transform.from_translation([2.0, 0, 0])
+
+    def raises(error):
+        def attempt():
+            raise error
+
+        return attempt
+
+    chosen = select_best(
+        {
+            "tie": lambda: (b, 0.5),
+            "nan": lambda: (b, float("nan")),
+            "failed": raises(EstimationError("no beads")),
+            "not_ready": raises(CandidateUnavailableError("too few good timepoints")),
+        },
+        current=("current", a, 0.5),
+    )
+    assert (chosen.name, chosen.transform, chosen.score) == ("current", a, 0.5)
+    assert set(chosen.failures) == {"nan", "failed", "not_ready"}
+    assert chosen.scores["tie"] == 0.5
+    better = select_best({"first": lambda: (a, 0.7), "second": lambda: (b, 0.7)})
+    assert better.name == "first"  # a tie between candidates keeps the earlier
+    with pytest.raises(TypeError):
+        select_best({"bug": raises(TypeError("a bug"))})
+    # stop_at: once a candidate reaches it, later ones are not run
+    ran = []
+    select_best(
+        {
+            "good": lambda: ran.append("good") or (a, 0.9),
+            "late": lambda: ran.append("late") or (b, 1.0),
+        },
+        stop_at=0.8,
+    )
+    assert ran == ["good"]
+    assert select_best({"nan": lambda: (a, float("nan"))}).name is None  # nothing usable
+
+
+def test_propagation_does_not_return_a_transform_whose_score_is_nan():
+    # previous result vs initial transform: both NaN used to return the first, NaN and all
+    from biahub.registration.engine.series import _estimate_competing
+    from biahub.registration.estimators import EstimationError
+
+    class _Plain(EstimatorBase):
+        def estimate(self, mov, ref, initial_transform=None):
+            return initial_transform
+
+    with pytest.raises(EstimationError, match="from both"):
+        _estimate_competing(
+            _Plain(),
+            np.ones((2, 2, 2)),
+            np.ones((2, 2, 2)),
+            Transform.identity(3),
+            Transform.identity(3),
+            lambda transform, mov, ref: float("nan"),
+        )
+
+
+def test_every_estimator_declares_the_members_the_engine_reads():
+    from biahub.registration.estimators import (
+        ChainedEstimator,
+        CompetingEstimator,
+        TransformEstimator,
+    )
+    from biahub.registration.methods.landmark.bead_matching import (
+        NodeGraphEstimator,
+        VoteIcpEstimator,
+        VoteInitialTransformCorrection,
+    )
+    from biahub.registration.methods.manual.manual import ManualEstimator
+
+    classes = [
+        AntsEstimator, PCCEstimator, FocusEstimator, ManualEstimator, NodeGraphEstimator,
+        VoteIcpEstimator, VoteInitialTransformCorrection, ChainedEstimator, CompetingEstimator,
+    ]  # fmt: skip
+    assert all(issubclass(cls, EstimatorBase) for cls in classes)
+    defaults = EstimatorBase()
+    assert (
+        defaults.uses_initial_transform,
+        defaults.holds_xy_across_gaps,
+        defaults.accepts_competitor,
+    ) == (
+        True,
+        False,
+        False,
+    )
+    assert defaults.trace() == {"best_candidate": None, "blocks": None}
+    assert (PCCEstimator.uses_initial_transform, FocusEstimator.holds_xy_across_gaps) == (
+        False,
+        True,
+    )
+    assert NodeGraphEstimator.accepts_competitor
+    assert isinstance(ChainedEstimator([PCCEstimator()]), TransformEstimator)

@@ -5,7 +5,7 @@ moving_channels:
 - Retardance
 - Birefringence
 reference_channel: GFP
-method: beads
+method: bead_matching
 transforms:
 - matrix:
   - - 1.0

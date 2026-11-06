@@ -26,7 +26,7 @@ set -euo pipefail
 BIAHUB=/path/to/biahub                       # checkout on main
 MOVING=/path/to/deskew.zarr                  # plate with the moving channel (light-sheet)
 REFERENCE=/path/to/reconstruct.zarr          # plate with the reference (phase); empty to stabilize
-CONFIG=./estimate-transform-beads.yml        # estimate config; empty when TRANSFORMS is set
+CONFIG=./estimate-transform-bead_matching.yml        # estimate config; empty when TRANSFORMS is set
 ESTIMATE_POSITIONS='C/1/000000'              # beads well (one shared list) or '*/*/*' (one each)
 TRANSFORMS=""                                # apply this existing file instead of estimating
 APPLY=true                                   # apply after estimating
@@ -34,6 +34,7 @@ APPLY_POSITIONS='*/*/*'
 CROP_TO_OVERLAP=false                        # true: crop to the box every transform covers
 CHANNELS=""                                  # comma-separated moving channels; empty = all
 OUTPUT=.                                     # this run directory
+VENV=""                                      # empty: $BIAHUB/.venv; or another biahub venv
 # ---------------------------------------------------------------------------
 
 # Nextflow tasks run in their own work directory: pass absolute paths.
@@ -45,7 +46,8 @@ MOVING=$(realpath "${MOVING}")
 
 # The tasks call `biahub` bare; sbatch exports this shell's environment to them.
 # shellcheck disable=SC1091
-set +u; source "${BIAHUB}/.venv/bin/activate"; set -u
+set +u; source "${VENV:-${BIAHUB}/.venv}/bin/activate"; set -u
+export PYTHONPATH="${BIAHUB}${PYTHONPATH:+:${PYTHONPATH}}"   # run this checkout, whatever the venv
 command -v biahub >/dev/null || { echo "biahub not on PATH after activation" >&2; exit 1; }
 export PYTHONWARNINGS="ignore::FutureWarning"   # scikit-image deprecation noise per timepoint
 

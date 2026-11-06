@@ -6,11 +6,7 @@ import numpy as np
 from pathlib import Path
 from iohub import open_ome_zarr
 import napari
-from biahub.registration.utils import (
-    convert_transform_to_ants,
-    convert_transform_to_numpy,
-    find_overlapping_volume,
-)
+from biahub.core.transform import Transform
 from skimage import exposure, filters
 from biahub.utils.config import model_to_yaml, yaml_to_model
 # the retired stabilize schema (apply-transform and the stabilize alias convert it)
@@ -60,7 +56,7 @@ print("Transforming data")
 source_ants_0 = ants.from_numpy(data_source_0)
 target_ants = ants.from_numpy(data_target)
 
-tform_ants = convert_transform_to_ants(approx_tform)
+tform_ants = Transform(approx_tform).to_ants()
 source_pre_opt_ants_0 = tform_ants.apply_to_image(source_ants_0, reference=target_ants)
 source_pre_opt_0 = source_pre_opt_ants_0.numpy()
 
@@ -135,7 +131,7 @@ viewer.add_image(source_ch0_opt, name="nuclei", colormap="bop blue", blending="a
 # viewer.add_image(source_opt_ants, name="source edges", colormap="magenta", blending="additive")
 
 # %%
-tform_opt_np = convert_transform_to_numpy(tform_opt)
+tform_opt_np = Transform.from_ants(tform_opt).matrix
 composed_matrix = approx_tform @ tform_opt_np
 
 settings_path = registration_settings_path

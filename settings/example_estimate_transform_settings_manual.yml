@@ -9,39 +9,29 @@ manual:
   affine_fliplr: false
 transform:
   type: euclidean
-  seed:
-  - - 1
-    - 0
-    - 0
-    - 0
-  - - 0
-    - 0
-    - -1.288
-    - 1960
-  - - 0
-    - 1.288
-    - 0
-    - -460
-  - - 0.0
-    - 0.0
-    - 0.0
-    - 1.0
-  seed_direction: inverse
-  seed_from_shapes: false
+  initial:
+    from: matrix
+    matrix:
+    - - 1
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 0
+      - -1.288
+      - 1960
+    - - 0
+      - 1.288
+      - 0
+      - -460
+    - - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
+    direction: inverse
 time_indices: 0
 fallback:
   flag:
     k_mad: 2.0
-    floor: 0.8
-    hard_fail: 0.4
-  repair:
-    candidates:
-    - t-1
-    - t+1
-    - consensus
-    - seed
-    consensus_threshold: 0.75
-    consensus_min_good: 5
-    max_timepoints: null
-    polish_rounds: 3
+  repair: null  # the method ignores where it starts: repair would return the same answer
 verbose: true

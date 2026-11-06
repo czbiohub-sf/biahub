@@ -42,7 +42,8 @@ def _fake_focus(monkeypatch, planes):
     """Make find_focus return the given plane for each timepoint, in order."""
     it = iter(planes)
     monkeypatch.setattr(
-        "biahub.registration.methods.focus.find_focus", lambda *a, **k: next(it)
+        "biahub.registration.methods.intensity.focus_finding.find_focus",
+        lambda *a, **k: next(it),
     )
 
 

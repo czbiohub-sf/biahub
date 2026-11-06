@@ -5,13 +5,10 @@ import pytest
 from click.testing import CliRunner
 from iohub import open_ome_zarr
 
-from biahub.apply_transform import (
-    apply_transform,
-    apply_transform_cli,
-    canvas,
-    largest_box,
-    overlap_slices,
-)
+from biahub.apply_transform import apply_transform, apply_transform_cli
+from biahub.core.transform import Transform
+from biahub.estimate_crop import largest_box, overlap_slices, shared_crop
+from biahub.registration.utils import RunError
 from biahub.settings import TransformEntry, TransformSettings
 from biahub.utils.config import model_to_yaml
 
@@ -23,10 +20,10 @@ def _translation(dz, dy, dx):
 
 
 def test_overlap_slices_of_a_translation_is_the_shifted_box():
-    # inverse: reference voxel r reads moving voxel r + 3 along y, so the last 3 rows of the
-    # reference grid read outside the moving volume.
+    # forward: the moving content moves 3 voxels down in y (reference voxel r reads moving
+    # voxel r + 3), so the last 3 rows of the reference grid read outside the moving volume.
     z, y, x = overlap_slices(
-        (20, 40, 40), (20, 40, 40), np.array(_translation(0, 3, 0)), downsample=1
+        (20, 40, 40), (20, 40, 40), Transform.from_translation([0, -3, 0]), downsample=1
     )
     assert (z, y, x) == (slice(0, 20), slice(0, 37), slice(0, 40))
 
@@ -47,17 +44,24 @@ def test_largest_box_is_exact_on_a_sheared_mask():
         largest_box(np.zeros((2, 2, 2), dtype=bool))
 
 
-def test_canvas_intersects_over_timepoints_and_keep_overhang_keeps_the_grid():
+def test_shared_crop_intersects_over_timepoints_and_keep_overhang_keeps_the_grid():
     shape = (20, 40, 40)
-    matrices = [np.array(_translation(0, 3, 0)), np.array(_translation(0, -3, 5))]
-    z, y, x = canvas(shape, shape, matrices, keep_overhang=False, downsample=1)
+    transforms = [
+        Transform.from_translation([0, -3, 0]),
+        Transform.from_translation([0, 3, -5]),
+    ]
+    z, y, x = shared_crop(shape, shape, transforms, keep_overhang=False, downsample=1)
     assert (z, y, x) == (slice(0, 20), slice(3, 37), slice(0, 35))
-    assert canvas(shape, shape, matrices, keep_overhang=True) == tuple(
+    assert shared_crop(shape, shape, transforms, keep_overhang=True) == tuple(
         slice(0, s) for s in shape
     )
     with pytest.raises(Exception, match="no overlapping region"):
-        canvas(
-            shape, shape, [np.array(_translation(0, 45, 0))], keep_overhang=False, downsample=1
+        shared_crop(
+            shape,
+            shape,
+            [Transform.from_translation([0, -45, 0])],
+            keep_overhang=False,
+            downsample=1,
         )
 
 
@@ -105,7 +109,7 @@ def test_apply_transform_stabilizes_every_channel_with_per_timepoint_matrices(
         )
         result = np.asarray(out.data)
     assert result.shape[0] == 3 and result.shape[1] == 2
-    # Canvas: translations up to 4 along y remove 4 rows; z and x untouched.
+    # The shared crop: translations up to 4 along y remove 4 rows; z and x untouched.
     assert result.shape[2:] == (16, 28, 32)
     crop_y0 = 4 if _block_centre(result[0, 0])[1] < _block_centre(data[0, 0])[1] else 0
     for t, dy in enumerate((0, 2, 4)):
@@ -115,13 +119,13 @@ def test_apply_transform_stabilizes_every_channel_with_per_timepoint_matrices(
         )
 
 
-def test_apply_transform_registers_source_channels_onto_a_target_store(
+def test_apply_transform_registers_moving_channels_onto_a_reference_store(
     structured_plate, tmp_path
 ):
     position, data = structured_plate
-    target = tmp_path / "target.zarr"
+    reference = tmp_path / "reference.zarr"
     with open_ome_zarr(
-        target, layout="hcs", mode="w", channel_names=["Phase3D", "Retardance"]
+        reference, layout="hcs", mode="w", channel_names=["Phase3D", "Retardance"]
     ) as plate:
         plate.create_position("A", "1", "0")["0"] = data
     config = tmp_path / "transforms.yml"
@@ -140,7 +144,7 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
         [position],
         config,
         output,
-        reference_position_dirpaths=[target / "A" / "1" / "0"],
+        reference_position_dirpaths=[reference / "A" / "1" / "0"],
         keep_overhang=True,
         cluster="debug",
         channels=["GFP"],
@@ -152,10 +156,10 @@ def test_apply_transform_registers_source_channels_onto_a_target_store(
         )
         result = np.asarray(out.data)
     assert result.shape == data.shape[:1] + (3,) + data.shape[2:]
-    np.testing.assert_allclose(result[:, 0], data[:, 0], atol=1e-3)  # copied target channel
+    np.testing.assert_allclose(result[:, 0], data[:, 0], atol=1e-3)  # copied reference channel
     np.testing.assert_allclose(
         result[:, 2], data[:, 0], atol=1e-2
-    )  # identity-transformed source channel
+    )  # identity-transformed moving channel
 
 
 def test_apply_transform_writes_a_channel_both_copied_and_transformed_once(
@@ -298,8 +302,8 @@ def test_apply_transform_cli_takes_moving_and_reference_position_paths(
     structured_plate, tmp_path
 ):
     position, data = structured_plate
-    target = tmp_path / "target.zarr"
-    with open_ome_zarr(target, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
+    reference = tmp_path / "reference.zarr"
+    with open_ome_zarr(reference, layout="hcs", mode="w", channel_names=["Phase3D"]) as plate:
         plate.create_position("A", "1", "0")["0"] = data[:, :1]
     config = tmp_path / "transforms.yml"
     model_to_yaml(
@@ -319,13 +323,13 @@ def test_apply_transform_cli_takes_moving_and_reference_position_paths(
             "-m",
             str(position),
             "-r",
-            str(target / "A" / "1" / "0"),
+            str(reference / "A" / "1" / "0"),
             "-c",
             str(config),
             "-o",
             str(output),
             "--keep-overhang",
-            "--time-indices",
+            "--timepoints",
             "0,2",
             "--cluster",
             "debug",
@@ -335,7 +339,7 @@ def test_apply_transform_cli_takes_moving_and_reference_position_paths(
     assert result.exit_code == 0, result.output
     with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
         assert out.channel_names == ["Phase3D", "GFP"]
-        assert out.data.shape[0] == 2  # --time-indices 0,2
+        assert out.data.shape[0] == 2  # --timepoints 0,2
 
 
 def test_transform_settings_matrix_for_uses_own_entry_else_nearest_earlier():
@@ -531,8 +535,10 @@ def test_apply_transform_registers_every_moving_channel_by_default(structured_pl
     # The file was estimated on GFP, but the transform holds for every channel of the
     # moving store (shared optics and stage), so both are registered unless told otherwise.
     position, data = structured_plate
-    target = tmp_path / "target.zarr"
-    with open_ome_zarr(target, layout="hcs", mode="w", channel_names=["Retardance"]) as plate:
+    reference = tmp_path / "reference.zarr"
+    with open_ome_zarr(
+        reference, layout="hcs", mode="w", channel_names=["Retardance"]
+    ) as plate:
         plate.create_position("A", "1", "0")["0"] = data[:, :1]
     config = tmp_path / "transforms.yml"
     model_to_yaml(
@@ -549,7 +555,7 @@ def test_apply_transform_registers_every_moving_channel_by_default(structured_pl
         [position],
         config,
         tmp_path / "all.zarr",
-        reference_position_dirpaths=[target / "A" / "1" / "0"],
+        reference_position_dirpaths=[reference / "A" / "1" / "0"],
         keep_overhang=True,
         cluster="debug",
     )
@@ -561,7 +567,7 @@ def test_apply_transform_registers_every_moving_channel_by_default(structured_pl
             [position],
             config,
             tmp_path / "bad.zarr",
-            reference_position_dirpaths=[target / "A" / "1" / "0"],
+            reference_position_dirpaths=[reference / "A" / "1" / "0"],
             cluster="debug",
             channels=["DAPI"],
         )
@@ -670,7 +676,7 @@ def test_init_then_one_position_per_task_writes_what_one_call_writes(
 def test_the_canvas_does_not_depend_on_the_positions_applied(
     two_position_stabilization, tmp_path
 ):
-    # The canvas is the overlap of every transform in the file, so a task applying one
+    # The shared crop is the overlap of every transform in the file, so a task applying one
     # position writes into the same grid --init created for all of them.
     positions, config = two_position_stabilization
     apply_transform(
@@ -763,7 +769,7 @@ def test_applying_into_an_output_of_another_shape_says_so(
     two_position_stabilization, tmp_path
 ):
     # An existing output keeps its arrays (create_empty_plate does not resize them), so a
-    # different canvas, timepoints or channels cannot be written into it: say that plainly.
+    # different crop, timepoints or channels cannot be written into it: say that plainly.
     positions, config = two_position_stabilization
     output = tmp_path / "out.zarr"
     apply_transform(positions, config, output, cluster="debug")  # full grid
@@ -782,8 +788,8 @@ def test_apply_transform_records_what_it_did_like_the_other_steps(structured_pla
     import json
 
     position, data = structured_plate
-    with open_ome_zarr(position, mode="r+") as source:
-        source.zattrs["biahub-deskew"] = {"ls_angle_deg": 30.0}
+    with open_ome_zarr(position, mode="r+") as moving:
+        moving.zattrs["biahub-deskew"] = {"ls_angle_deg": 30.0}
     config = tmp_path / "transforms.yml"
     model_to_yaml(
         TransformSettings(
@@ -824,8 +830,8 @@ def test_apply_transform_writes_ome_zarr_0_5_by_default(structured_plate, tmp_pa
         config,
     )
     old = tmp_path / "v04.zarr"
-    with open_ome_zarr(position, mode="r") as source:
-        data = np.asarray(source.data)
+    with open_ome_zarr(position, mode="r") as moving:
+        data = np.asarray(moving.data)
     with open_ome_zarr(
         old, layout="hcs", mode="w", channel_names=["GFP", "Phase3D"], version="0.4"
     ) as plate:
@@ -910,7 +916,7 @@ def test_a_time_selection_outside_the_store_is_refused_up_front(
     # IndexError deep in a job.
     positions, config = two_position_stabilization
     output = tmp_path / "out.zarr"
-    with pytest.raises(click.UsageError, match=message):
+    with pytest.raises(RunError, match=message):
         apply_transform(positions, config, output, time_indices=time_indices, cluster="debug")
     assert not output.exists()
 
@@ -940,3 +946,157 @@ def test_copying_from_a_reference_with_fewer_timepoints_is_refused_up_front(
             cluster="debug",
         )
     assert not output.exists()
+
+
+def test_an_empty_input_position_is_named_and_recorded(tmp_path, capsys):
+    # A position never written upstream (no stored chunks) was copied out as zeros with no
+    # word; it is now named when applying and recorded in the output's metadata.
+    data = np.random.default_rng(2).random((1, 1, 8, 16, 16)).astype(np.float32)
+    path = tmp_path / "plate.zarr"
+    with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["GFP"]) as plate:
+        plate.create_position("A", "1", "0")["0"] = data
+        plate.create_position("A", "1", "1").create_zeros(
+            "0", shape=data.shape, dtype=data.dtype
+        )
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(matrix=_translation(0, 0, 0))],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+    positions = [path / "A" / "1" / fov for fov in ("0", "1")]
+
+    apply_transform(positions, config, output, keep_overhang=True, cluster="debug")
+
+    assert "A/1/1: the moving input is empty" in capsys.readouterr().out
+    for fov, empty in (("0", False), ("1", True)):
+        with open_ome_zarr(output / "A" / "1" / fov, mode="r") as out:
+            assert out.zattrs["biahub-apply-transform"]["input_empty"] is empty
+
+
+def _registered(structured_plate, tmp_path, shift=(0, 2, -3)):
+    position, data = structured_plate
+    reference_store = tmp_path / "reference.zarr"
+    with open_ome_zarr(
+        reference_store, layout="hcs", mode="w", channel_names=["Phase3D"]
+    ) as plate:
+        plate.create_position("A", "1", "0")["0"] = data[:, 1:]
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            reference_channel="Phase3D",
+            transforms=[TransformEntry(matrix=_translation(*shift))],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+    reference = reference_store / "A" / "1" / "0"
+    apply_transform(
+        [position],
+        config,
+        output,
+        reference_position_dirpaths=[reference],
+        keep_overhang=True,
+        cluster="debug",
+        channels=["GFP"],
+    )
+    return output / "A" / "1" / "0", position, config, reference
+
+
+def test_an_applied_output_matches_the_warp_and_copies_the_reference(
+    structured_plate, tmp_path
+):
+    # Agents checked written outputs by hand four times: the written moving channel against
+    # the warp evaluation uses (Transform.apply), and the reference copied unchanged.
+    from biahub.apply_transform import verify_apply_transform
+
+    out, moving, config, reference = _registered(structured_plate, tmp_path)
+    check = verify_apply_transform(out, moving, config, reference)
+    assert check["transformed"]["GFP"]["relative_error"] < 0.01
+    assert check["copied"] == {"Phase3D": True}
+    assert 0.8 < check["coverage"] <= 1.0 and check["input_empty"] is False
+
+
+def test_a_wrong_output_is_caught(structured_plate, tmp_path):
+    from biahub.apply_transform import verify_apply_transform
+
+    out, moving, config, reference = _registered(structured_plate, tmp_path)
+    with open_ome_zarr(out, mode="r+") as position:
+        gfp = position.channel_names.index("GFP")
+        position.data[0, gfp] = np.roll(np.asarray(position.data[0, gfp]), 5, axis=-1)
+    check = verify_apply_transform(out, moving, config, reference)
+    assert check["transformed"]["GFP"]["relative_error"] > 0.1
+
+
+def test_nearest_interpolation_writes_only_input_values(structured_plate, tmp_path):
+    # --interpolation nearest passed 'nearest' to ANTs, which only knows
+    # 'nearestneighbor', and every apply raised.
+    position, data = structured_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(matrix=_translation(0, 1.4, -2.3))],
+        ),
+        config,
+    )
+    output = tmp_path / "out.zarr"
+    apply_transform(
+        [position],
+        config,
+        output,
+        keep_overhang=True,
+        cluster="debug",
+        interpolation="nearest",
+    )
+    with open_ome_zarr(output / "A" / "1" / "0", mode="r") as out:
+        written = np.asarray(out.data)[0, out.channel_names.index("GFP")]
+    inside = written[2:-2, 4:-4, 4:-4]
+    assert np.isin(inside, data[0, 0]).all()  # no blend of neighbours: input values only
+
+
+def test_the_shared_crop_holds_only_voxels_every_warp_covers():
+    # the coarse mask tested each block at its first voxel, so the last block of an
+    # upper edge could be kept with up to downsample - 1 uncovered planes or columns
+    rng = np.random.default_rng(12)
+    for _ in range(25):
+        moving_shape, reference_shape = (24, 70, 90), (28, 64, 80)
+        transforms = []
+        for _ in range(2):
+            m = np.eye(4)
+            m[:3, :3] += 0.03 * rng.standard_normal((3, 3))
+            m[:3, 3] = rng.uniform(-6, 6, 3)
+            transforms.append(Transform(m))
+        z, y, x = shared_crop(
+            moving_shape, reference_shape, transforms, keep_overhang=False, downsample=4
+        )
+        for transform in transforms:
+            assert transform.coverage(moving_shape, reference_shape)[z, y, x].all()
+
+
+def test_timepoints_outside_the_files_range_are_named_with_the_entry_they_reuse(
+    structured_plate, tmp_path, capsys
+):
+    # the nearest-earlier rule (for sparse files) silently reused an end entry
+    position, _data = structured_plate
+    config = tmp_path / "transforms.yml"
+    model_to_yaml(
+        TransformSettings(
+            direction="forward",
+            moving_channels=["GFP"],
+            transforms=[TransformEntry(t=t, matrix=_translation(0, t, 0)) for t in (0, 1)],
+        ),
+        config,
+    )
+    apply_transform(
+        [position], config, tmp_path / "out.zarr", keep_overhang=True, cluster="debug"
+    )
+    out = capsys.readouterr().out
+    assert "outside the transforms file's timepoints (0-1): t=[2] use the entry of t=1" in out

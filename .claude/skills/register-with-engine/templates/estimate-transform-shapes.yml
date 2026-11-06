@@ -1,0 +1,19 @@
+# biahub estimate-transform -- the registration the two stores' metadata implies: the voxel-
+# size ratio, after the camera's quarter turns (rotate90) and flip (fliplr). No pixels are
+# read. The values shown are the mantis light-sheet's. Use it to check a setup's geometry,
+# as the first block of a stack before a fine method, or as transform.initial
+# ({from: shapes, rotate90, fliplr}), where it is also the stand-in and repair candidate.
+moving:
+  channel: GFP EX488 EM525-45
+reference:
+  frame: cross
+  channel: Phase3D
+method: shapes
+shapes:
+  rotate90: -1
+  fliplr: false
+transform:
+  type: affine
+time_indices: all
+fallback:
+  repair: null

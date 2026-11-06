@@ -133,6 +133,11 @@ def append_channels(input_data_path: Path, target_data_path: Path) -> None:
     appending_dataset.close()
 
 
+def is_unwritten(position) -> bool:
+    """Whether an open position's image array has no stored chunks (never written)."""
+    return position.data.native.nchunks_initialized == 0
+
+
 # Label chunks, TCZYX: a label image has the image's axes with one channel,
 # (T, 1, Z, Y, X). 16 x 1 x 1 x 128 x 128 uint32 is 1 MB, the DCA v0.2 SHOULD (512 KB
 # is the MUST) and its "2D+time" example; growing T keeps per-plane reads cheap.

@@ -1,10 +1,10 @@
 """Apply a transform series to positions: one matrix for every timepoint or one per timepoint.
 
-Replaces `register` (one transform, source onto a target store) and `stabilize` (one
-transform per timepoint, a store onto itself). The output canvas is decided once, before
+Replaces `register` (one transform, moving onto a reference store) and `stabilize` (one
+transform per timepoint, a store onto itself). The output crop is decided once, before
 the output store is allocated: by default the reference grid as is (`keep_overhang`), so
 one wrong transform cannot shrink every timepoint's field of view; or, cropped to the
-overlap, the largest box inside the overlap of the warped source and the reference,
+overlap, the largest box inside the overlap of the warped moving volume and the reference,
 intersected over every timepoint's transform.
 """
 
@@ -15,9 +15,7 @@ import json
 
 from pathlib import Path
 
-import ants
 import click
-import largestinteriorrectangle as lir
 import numpy as np
 import submitit
 
@@ -35,14 +33,14 @@ from biahub.cli.parsing import (
     pair_reference_positions,
     position_key,
     reference_position_dirpaths,
+    refusals_as_usage_errors,
     resume,
     sbatch_filepath,
     sbatch_to_submitit,
 )
+from biahub.core.transform import Transform
+from biahub.estimate_crop import shared_crop
 from biahub.registration.utils import (
-    apply_affine_transform,
-    convert_transform_to_ants,
-    rescale_voxel_size,
     resolve_time_indices,
 )
 from biahub.settings import TransformSettings, load_transform_settings
@@ -53,129 +51,7 @@ from biahub.utils.cluster import (
     estimate_resources,
     get_submitit_cluster,
 )
-from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, resolve_ome_zarr_version
-
-Slices = tuple[slice, slice, slice]
-
-
-def _coarse(shape_zyx: tuple[int, int, int], f: int) -> tuple[int, int, int]:
-    return tuple(max(1, int(np.ceil(s / f))) for s in shape_zyx)
-
-
-def overlap_mask(
-    source_shape_zyx: tuple[int, int, int],
-    target_shape_zyx: tuple[int, int, int],
-    inverse_matrix: np.ndarray,
-    downsample: int = 4,
-) -> np.ndarray:
-    """Target-grid voxels the warped source covers, on a `downsample`-times coarser grid.
-
-    The warp of an all-ones source is the same geometry at any resolution, so a
-    240-timepoint series stays cheap.
-    """
-    f = max(1, int(downsample))
-    scale = np.diag([1.0 / f, 1.0 / f, 1.0 / f, 1.0])
-    coarse = scale @ np.asarray(inverse_matrix, dtype=float) @ np.linalg.inv(scale)
-    ones_source = ants.from_numpy(np.ones(_coarse(source_shape_zyx, f), dtype=np.float32))
-    ones_target = ants.from_numpy(np.ones(_coarse(target_shape_zyx, f), dtype=np.float32))
-    warped = convert_transform_to_ants(coarse).apply_to_image(
-        ones_source, reference=ones_target
-    )
-    return warped.numpy() > 0
-
-
-def largest_box(mask: np.ndarray) -> Slices:
-    """Exact largest axis-aligned box of True voxels in a (Z, Y, X) mask.
-
-    For every z-range the slices are ANDed and the exact largest 2D rectangle found
-    (`largestinteriorrectangle`); the largest volume wins. `registration.utils.find_lir`
-    is a heuristic (rectangle at the middle slice, z clipped to where that rectangle
-    still fits) and on a sheared overlap gives up most of z; this is O(Z^2) 2D searches,
-    which on the canvas's coarse grid is a few seconds.
-    """
-    mask = np.asarray(mask, dtype=bool)
-    best, best_volume = None, 0
-    for z0 in range(mask.shape[0]):
-        combined = mask[z0].copy()
-        for z1 in range(z0, mask.shape[0]):
-            combined &= mask[z1]
-            if not combined.any():
-                break
-            depth = z1 - z0 + 1
-            if depth * combined.sum() <= best_volume:
-                continue  # even the full remaining area cannot beat the best box
-            x, y, width, height = map(int, lir.lir(combined))
-            volume = depth * width * height
-            if volume > best_volume:
-                best, best_volume = (
-                    (slice(z0, z1 + 1), slice(y, y + height), slice(x, x + width)),
-                    volume,
-                )
-    if best is None:
-        raise ValueError("empty mask")
-    return best
-
-
-def _mask_box(
-    mask: np.ndarray, target_shape_zyx: tuple[int, int, int], downsample: int
-) -> Slices:
-    """Largest box inside a coarse mask, rounded inward onto the full-resolution grid."""
-    f = max(1, int(downsample))
-    if not mask.any():
-        raise click.UsageError(
-            "the transform leaves no overlapping region between source and target; "
-            "drop --crop-to-overlap or check the transform"
-        )
-    z, y, x = largest_box(mask)
-    return tuple(
-        slice(min(int(np.ceil(s.start * f)), dim), min(int(np.floor(s.stop * f)), dim))
-        for s, dim in zip((z, y, x), target_shape_zyx, strict=True)
-    )
-
-
-def overlap_slices(
-    source_shape_zyx: tuple[int, int, int],
-    target_shape_zyx: tuple[int, int, int],
-    inverse_matrix: np.ndarray,
-    downsample: int = 4,
-) -> Slices:
-    """Largest box inside the overlap of the warped source and the target grid."""
-    mask = overlap_mask(source_shape_zyx, target_shape_zyx, inverse_matrix, downsample)
-    return _mask_box(mask, target_shape_zyx, downsample)
-
-
-def canvas(
-    source_shape_zyx: tuple[int, int, int],
-    target_shape_zyx: tuple[int, int, int],
-    inverse_matrices: list[np.ndarray],
-    keep_overhang: bool,
-    downsample: int = 4,
-) -> Slices:
-    """Find the one crop every timepoint shares: the LIR of the intersected overlap masks.
-
-    The masks are intersected first and the exact largest box found once
-    (`largest_box`). Finding a box per transform and intersecting the boxes is much
-    smaller: on a rotated overlap each timepoint's box trades the axes differently.
-
-    With `keep_overhang` the full target grid is kept (content the transform pushes
-    outside it is lost, content it pulls in from outside is blank).
-    """
-    if keep_overhang:
-        return tuple(slice(0, dim) for dim in target_shape_zyx)
-    unique = {
-        np.asarray(m, dtype=float).round(9).tobytes(): np.asarray(m, dtype=float)
-        for m in inverse_matrices
-    }
-    mask = None
-    for matrix in unique.values():
-        current = overlap_mask(source_shape_zyx, target_shape_zyx, matrix, downsample)
-        mask = current if mask is None else mask & current
-    if mask is None or not mask.any():
-        raise click.UsageError(
-            "the transforms share no overlapping region across timepoints; "
-            "drop --crop-to-overlap or check the transforms"
-        )
-    return _mask_box(mask, target_shape_zyx, downsample)
+from biahub.utils.ngff import PROVENANCE_METADATA_KEYS, is_unwritten, resolve_ome_zarr_version
 
 
 def _apply_transform_czyx(
@@ -187,14 +63,22 @@ def _apply_transform_czyx(
     interpolation: str,
 ) -> np.ndarray:
     """Warp one (C, Z, Y, X) block with its timepoint's matrix (or the single matrix)."""
-    matrix = np.asarray(matrices[input_time_index if len(matrices) > 1 else 0], dtype=float)
-    return apply_affine_transform(
-        czyx_data,
-        matrix,
-        output_shape_zyx,
-        interpolation=interpolation,
-        crop_output_slicing=crop_output_slicing,
-    )
+    # the file's forward (moving -> reference) transform for this timepoint
+    transform = Transform(matrices[input_time_index if len(matrices) > 1 else 0])
+    canvas = np.zeros(tuple(output_shape_zyx), dtype=np.float32)  # the grid to warp onto
+    warped = np.stack(
+        [
+            transform.apply(
+                np.nan_to_num(zyx, nan=0).astype(np.float32),
+                reference=canvas,
+                interpolation=interpolation,
+            )
+            for zyx in czyx_data
+        ]
+    ).astype(np.float32)
+    if crop_output_slicing is not None:
+        warped = warped[(slice(None), *crop_output_slicing)]
+    return warped
 
 
 def parse_time_indices(value: str) -> int | list[int] | str:
@@ -215,7 +99,7 @@ def _check_existing_output(
     """Refuse an existing output position this apply cannot write into.
 
     `create_empty_plate` keeps an existing position's array as it is, so a different
-    canvas, timepoints or channels (e.g. `--crop-to-overlap` after a full-grid run) cannot
+    crop, timepoints or channels (e.g. `--crop-to-overlap` after a full-grid run) cannot
     be written into it.
     """
     for key in position_keys:
@@ -231,8 +115,28 @@ def _check_existing_output(
             raise click.UsageError(
                 f"{output_dirpath} already holds {key} with shape {have_shape} and channels "
                 f"{have_channels}; this apply writes shape {tuple(shape)} and channels "
-                f"{list(channel_names)} (another canvas, timepoints or channels). Write to a "
+                f"{list(channel_names)} (another crop, timepoints or channels). Write to a "
                 "new output, or remove that one."
+            )
+
+
+def _say_which_timepoints_reuse_an_end_entry(settings, key, time_indices) -> None:
+    """Name the timepoints past either end of the file's entries, and the entry they use.
+
+    A timepoint without its own entry takes the nearest earlier one (a sparsely
+    estimated series); past the last (or before the first) that reuses an end entry.
+    """
+    entries = settings.entries_for(key if settings.per_position else None)
+    if entries[0].t is None:  # one entry for the whole series
+        return
+    first, last = entries[0].t, entries[-1].t
+    where = f"{key}: " if settings.per_position else ""
+    for outside, end in (([t for t in time_indices if t > last], last),
+                         ([t for t in time_indices if t < first], first)):  # fmt: skip
+        if outside:
+            click.echo(
+                f"{where}outside the transforms file's timepoints ({first}-{last}): "
+                f"t={outside} use the entry of t={end}"
             )
 
 
@@ -264,7 +168,7 @@ def apply_transform(
     reference channels copied plus the transformed moving channels (registration). Without:
     the moving channels are transformed onto their own grid (stabilization). Each timepoint
     takes its own entry's matrix (`TransformSettings.matrix_for`); a series-wide entry
-    applies to all. The canvas is the full reference grid (`keep_overhang`, the default),
+    applies to all. The crop is the full reference grid (`keep_overhang`, the default),
     or else the largest box inside the overlap shared by every transform in the file at the
     chosen timepoints -- all positions, not only the ones applied, so each position can be
     written by its own task.
@@ -296,10 +200,11 @@ def apply_transform(
                 f"the transforms file has no list for positions {missing}; it has "
                 f"{sorted(settings.positions)}"
             )
-    inverses = {
-        key: {t: settings.matrix_for(t, "inverse", key) for t in time_indices}
-        for key in position_keys
+    transforms = {
+        key: {t: settings.transform_for(t, key) for t in time_indices} for key in position_keys
     }
+    for key in position_keys if settings.per_position else position_keys[:1]:
+        _say_which_timepoints_reuse_an_end_entry(settings, key, time_indices)
     reference_for = pair_reference_positions(position_keys, reference_position_dirpaths)
     # Timepoints written with a transform that is not `accepted`, per position.
     not_accepted = {}
@@ -315,8 +220,18 @@ def apply_transform(
                 f"{key}: written with transforms that are not accepted -- "
                 + "; ".join(f"{s} t={ts}" for s, ts in by_status.items())
             )
+    # Moving positions never written upstream (no stored chunks): they would be written
+    # as zeros with nothing said but a line in each job's log. Metadata only, no reads.
+    empty_inputs = set()
+    for key, moving_path in zip(position_keys, moving_position_dirpaths, strict=True):
+        with open_ome_zarr(moving_path, mode="r") as moving:
+            if is_unwritten(moving):
+                empty_inputs.add(key)
+                click.echo(
+                    f"{key}: the moving input is empty (never written): written as zeros"
+                )
     file_first_key = next(iter(settings.positions)) if settings.per_position else None
-    applied_first = settings.matrix_for(time_indices[0], "inverse", file_first_key)
+    applied_first = settings.transform_for(time_indices[0], file_first_key)
 
     if reference_position_dirpaths:
         with open_ome_zarr(reference_position_dirpaths[0], mode="r") as reference:
@@ -364,21 +279,17 @@ def apply_transform(
         output_voxel_size = (
             tuple(settings.voxel_size[-3:])
             if settings.voxel_size
-            else tuple(
-                # the file's first transform, whichever positions are applied
-                rescale_voxel_size(applied_first[:3, :3], moving_voxel_size)
-            )
+            # the file's first transform, whichever positions are applied
+            else applied_first.output_voxel_size(moving_voxel_size)
         )
 
     # Every transform in the file at these timepoints, whichever positions are applied.
     file_keys = list(settings.positions) if settings.per_position else [position_keys[0]]
-    applied = [
-        settings.matrix_for(t, "inverse", key) for key in file_keys for t in time_indices
-    ]
-    crop = canvas(tuple(moving_shape), reference_shape, applied, keep_overhang)
+    applied = [settings.transform_for(t, key) for key in file_keys for t in time_indices]
+    crop = shared_crop(tuple(moving_shape), reference_shape, applied, keep_overhang)
     cropped_shape = tuple(s.stop - s.start for s in crop)
     click.echo(
-        f"Output canvas {cropped_shape} (reference grid {reference_shape}, "
+        f"Output crop {cropped_shape} (reference grid {reference_shape}, "
         f"{'kept overhang' if keep_overhang else 'overlap shared by the applied transforms'})"
     )
 
@@ -417,6 +328,7 @@ def apply_transform(
                 "biahub-apply-transform": {
                     **record,
                     "timepoints_not_accepted": not_accepted.get(key, {}),
+                    "input_empty": key in empty_inputs,
                 }
             },
         )
@@ -476,8 +388,8 @@ def apply_transform(
             ).hexdigest()[:16]
             # Jobs look a matrix up by input timepoint: a T-long list, filled for the selected t.
             matrices_for_jobs = [None] * T
-            for t, matrix in inverses[key].items():
-                matrices_for_jobs[t] = matrix.tolist()
+            for t, transform in transforms[key].items():
+                matrices_for_jobs[t] = transform.to_list()
             for channel_name in transformed:
                 jobs.append(
                     executor.submit(
@@ -539,10 +451,13 @@ def apply_transform(
 @click.command("apply-transform")
 @moving_position_dirpaths()
 @reference_position_dirpaths(required=False)
-@config_filepath()
+@config_filepath(
+    help="The transforms file (estimate-transform's output, or one written by hand)."
+)
 @output_dirpath()
 @click.option(
-    "--time-indices",
+    "--timepoints",
+    "time_indices",
     default="all",
     show_default=True,
     help="Timepoints to write: 'all', one index, or a comma-separated list (e.g. 0,82,239).",
@@ -579,6 +494,7 @@ def apply_transform(
 @monitor(short=False)
 @init_only()
 @resume()
+@refusals_as_usage_errors
 def apply_transform_cli(
     moving_position_dirpaths: list[Path],
     reference_position_dirpaths: list[Path],
@@ -598,7 +514,7 @@ def apply_transform_cli(
     """Apply a transform series to positions -- one matrix for all timepoints or one per timepoint.
 
     Takes the `TransformSettings` file written by `estimate-transform`. How it is applied
-    is decided here, not in the file: which timepoints, the canvas (the full reference
+    is decided here, not in the file: which timepoints, the crop (the full reference
     grid, or `--crop-to-overlap` for the box every transform covers), the
     interpolation, the output OME-Zarr version, and which moving channels are
     transformed (`--channels`; default all of them, except that a channel the reference
@@ -634,6 +550,63 @@ def apply_transform_cli(
         init_only=init_only,
         resume=resume,
     )
+
+
+def verify_apply_transform(
+    output_position,
+    moving_position,
+    transforms_filepath,
+    reference_position=None,
+    t: int = 0,
+) -> dict:
+    """Check what apply-transform wrote for one position at timepoint `t`.
+
+    Each transformed channel is compared with the moving channel warped by
+    `Transform.apply` (the resampler estimation and evaluation use), inside the area the
+    warp covers: `relative_error` is the RMS difference over the RMS signal (a misplaced
+    structure dominates it). Copied channels are compared with the reference's
+    (`copied`). Also the output's `coverage` (non-zero share of the first transformed
+    channel) and `input_empty`, as recorded. A cropped output (`--crop-to-overlap`) is not
+    warp-compared.
+    """
+    settings = load_transform_settings(transforms_filepath)
+    key = position_key(moving_position)
+    transform = settings.transform_for(t, key if settings.per_position else None)
+    with open_ome_zarr(output_position, mode="r") as out:
+        record = dict(out.zattrs["biahub-apply-transform"])
+        times = record["time_indices"]
+        t_out = times.index(t) if isinstance(times, list) else t
+        written = {
+            c: np.asarray(out.data[t_out, out.channel_names.index(c)], dtype=np.float32)
+            for c in record["channels_transformed"] + record["channels_copied"]
+        }
+    result = {"transformed": {}, "copied": {}, "input_empty": record.get("input_empty")}
+    with open_ome_zarr(moving_position, mode="r") as moving:
+        for c in record["channels_transformed"]:
+            if not record["keep_overhang"]:
+                result["transformed"][c] = {"relative_error": None, "note": "cropped output"}
+                continue
+            volume = np.asarray(moving.data[t, moving.channel_names.index(c)], np.float32)
+            expected = transform.apply(volume, reference=written[c])
+            inside = transform.coverage(volume.shape, written[c].shape)
+            gap = (written[c] - expected)[inside]
+            signal = np.sqrt(np.mean(expected[inside] ** 2)) if inside.any() else 0.0
+            result["transformed"][c] = {
+                "relative_error": float(np.sqrt(np.mean(gap**2)) / signal) if signal else None
+            }
+    if record["channels_copied"] and reference_position is not None:
+        with open_ome_zarr(reference_position, mode="r") as reference:
+            for c in record["channels_copied"]:
+                original = np.asarray(
+                    reference.data[t, reference.channel_names.index(c)], np.float32
+                )
+                result["copied"][c] = bool(
+                    original.shape == written[c].shape
+                    and np.allclose(written[c], original, rtol=1e-5, atol=1e-5)
+                )
+    first = record["channels_transformed"][0] if record["channels_transformed"] else None
+    result["coverage"] = float((written[first] != 0).mean()) if first else None
+    return result
 
 
 if __name__ == "__main__":

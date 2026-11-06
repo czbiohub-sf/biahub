@@ -11,22 +11,23 @@
 
 `inverse = forward^-1` (ANTs calls them the forward and inverse transforms). Every file
 declares its direction and the code converts on demand, so mixing files is safe. To compare
-matrices by hand, bring both to the same direction first. `transform.seed_direction`
-(default `inverse`) says how the seed in an estimate config is written. Files written with
+matrices by hand, bring both to the same direction first. `transform.initial.direction`
+says how an initial matrix in an estimate config is written. Files written with
 the old name `pull` load as `inverse`.
 
 ## Layout
 
 ```yaml
 direction: forward
-method: beads
+method: bead_matching
 moving_channels: [mCherry EX561 EM600-37]   # the estimation channel
 reference_channel: Phase3D                   # null for stabilization
-reference_frame: cross                       # cross | first | previous (previous: chained
-                                             # onto the first frame; cannot take substitutes)
+reference_frame: cross                       # cross | first | previous | neighbours
+                                             # (previous: chained onto the first frame;
+                                             # cannot take substitutes)
 transforms:                                  # one list shared by every position ...
   - {t: 0, matrix: [...], score: 0.71, status: accepted}
-  - {t: 1, matrix: [...], score: null, status: unreliable, filled_from: seed,
+  - {t: 1, matrix: [...], score: null, status: unreliable, filled_from: initial,
      note: "EstimationError: too few matches ..."}
 # positions:                                 # ... or a list per position (stabilization)
 #   C/2/000000: [ {t: 0, ...}, ... ]
@@ -35,11 +36,20 @@ transforms:                                  # one list shared by every position
 - Within a list, entries with `t` are per timepoint; a single entry without `t` applies to
   every timepoint (`estimated_at` says where it came from).
 - `status`: `accepted`, or `unreliable` (no good transform: the pipeline's best result, or a
-  stand-in when `filled_from` is set -- `seed` = the approximate transform, `identity` = a
+  stand-in when `filled_from` is set -- `initial` = the initial transform, `file` = its
+  transform in the `transform.initial` file, `t=81` = a neighbour's, `identity` = a
   missing step of a `previous` chain), or `rejected` (decided by a person). A timepoint is
   never dropped; `apply-transform` writes every one and records the non-accepted ones in
   the output metadata.
 - `repaired_from`: which repair candidate won (e.g. `consensus_full+polish1`).
+- `initialized_from` (with `transform.initial` from a file): `file` (the file's transform,
+  kept as it is: the estimate from it did not score better) or `file+refined` (the
+  estimate from it, which did).
+- `report`: the config's `score.report` metrics for this transform, on the raw warped pair,
+  and the unregistered pair's (identity) next to them: each metric as `unregistered_<name>`
+  and the score as `unregistered_score`, e.g. `{correlation: 0.72, unregistered_correlation:
+  0.31, unregistered_score: 0.40}`. A metric with no value (no overlap, no beads) is `null`;
+  no report for a stand-in.
 - `method` on an entry: set when it came from another method's run
   (`substitute-transforms`).
 
