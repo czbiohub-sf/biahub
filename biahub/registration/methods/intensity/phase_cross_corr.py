@@ -70,6 +70,21 @@ def plot_cross_correlation(
     plt.close(fig)  # This prevents overlap in future plots
 
 
+def _cross_power(F_ref: np.ndarray, F_mov: np.ndarray, normalization) -> np.ndarray:
+    """Return F_ref * conj(F_mov), normalised as asked.
+
+    "magnitude": by its own magnitude (phase only); "classic": by |F_ref| |F_mov|; None:
+    as it is. Zero magnitudes are guarded (they would give NaNs).
+    """
+    product = F_ref * F_mov.conj()
+    eps = np.finfo(product.real.dtype).eps
+    if normalization == "magnitude":
+        product /= np.fmax(np.abs(product), eps)
+    elif normalization == "classic":
+        product /= np.fmax(np.abs(F_ref) * np.abs(F_mov), eps)
+    return product
+
+
 def phase_cross_corr_padding(
     ref_img: ArrayLike,
     mov_img: ArrayLike,
@@ -117,22 +132,12 @@ def phase_cross_corr_padding(
     )
     ref_img = match_shape(ref_img, shape)
     mov_img = match_shape(mov_img, shape)
-    Fimg1 = np.fft.rfftn(ref_img)
-    Fimg2 = np.fft.rfftn(mov_img)
-    eps = np.finfo(Fimg1.dtype).eps
+    prod = _cross_power(np.fft.rfftn(ref_img), np.fft.rfftn(mov_img), normalization)
     del ref_img, mov_img
-
-    prod = Fimg1 * Fimg2.conj()
-
-    if normalization == "magnitude":
-        prod /= np.fmax(np.abs(prod), eps)
-    elif normalization == "classic":
-        # guarded as 'magnitude' is: zero-magnitude frequencies would give NaNs
-        prod /= np.fmax(np.abs(Fimg1) * np.abs(Fimg2), eps)
 
     # the spatial shape: without it an odd last axis comes back one sample short
     corr = np.fft.irfftn(prod, s=shape, axes=tuple(range(len(shape))))
-    del prod, Fimg1, Fimg2
+    del prod
 
     corr = np.fft.fftshift(np.abs(corr))
 
@@ -186,21 +191,10 @@ def phase_cross_corr(
         The shift of the moved image relative to the reference (whole pixels, or
         sub-pixel with `upsample_factor` > 1), and the correlation volume.
     """
-    Fimg1 = np.fft.rfftn(ref_img)
-    Fimg2 = np.fft.rfftn(mov_img)
-    eps = np.finfo(Fimg1.dtype).eps
-
-    prod = Fimg1 * Fimg2.conj()
-
-    if normalization == "magnitude":
-        norm = np.fmax(np.abs(prod), eps)
-    elif normalization == "classic":
-        norm = np.fmax(np.abs(Fimg1) * np.abs(Fimg2), eps)
-    else:
-        norm = 1.0
+    prod = _cross_power(np.fft.rfftn(ref_img), np.fft.rfftn(mov_img), normalization)
 
     # the spatial shape: without it an odd last axis comes back one sample short
-    corr = np.fft.irfftn(prod / norm, s=np.shape(ref_img), axes=tuple(range(np.ndim(ref_img))))
+    corr = np.fft.irfftn(prod, s=np.shape(ref_img), axes=tuple(range(np.ndim(ref_img))))
     corr_shifted = np.fft.fftshift(np.abs(corr))
     if output_path:
         plot_cross_correlation(
@@ -210,7 +204,7 @@ def phase_cross_corr(
     midpoint = np.array([np.fix(axis_size / 2) for axis_size in corr.shape])
 
     float_dtype = prod.real.dtype
-    del Fimg1, Fimg2, prod, norm
+    del prod
 
     shift = np.stack(maxima).astype(float_dtype, copy=False)
     shift[shift > midpoint] -= np.array(corr.shape)[shift > midpoint]
@@ -232,13 +226,8 @@ def _upsampled_dft(data, region_size: int, upsample_factor: int, offsets) -> np.
 
 def _refine_shift(ref_img, mov_img, shift, normalization, upsample_factor: int) -> np.ndarray:
     """Return `shift` refined to 1/upsample_factor pixel around the correlation peak."""
-    product = np.fft.fftn(ref_img) * np.fft.fftn(mov_img).conj()
-    eps = np.finfo(product.real.dtype).eps
-    if normalization == "magnitude":
-        product = product / np.fmax(np.abs(product), eps)
-    elif normalization == "classic":
-        norm = np.abs(np.fft.fftn(ref_img)) * np.abs(np.fft.fftn(mov_img))
-        product = product / np.fmax(norm, eps)
+    # the full (not real) spectrum: the upsampled DFT reads every frequency
+    product = _cross_power(np.fft.fftn(ref_img), np.fft.fftn(mov_img), normalization)
     shift = np.round(np.asarray(shift, dtype=float) * upsample_factor) / upsample_factor
     region = int(np.ceil(upsample_factor * 1.5))
     centre = np.fix(region / 2.0)
