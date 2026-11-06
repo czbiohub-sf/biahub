@@ -236,14 +236,14 @@ class Transform:
         return cls(matrix, transform_type="euclidean")
 
     @classmethod
-    def from_flip_x(cls, start_shape: tuple, end_shape: tuple | None = None) -> Transform:
-        """Flip x (left-right) about the end grid's x centre (3D, forward; default: start)."""
-        _, _, _, cx_end = cls._yx_centres(start_shape, end_shape)
+    def from_flip_x(cls, shape: tuple) -> Transform:
+        """Flip x (left-right) within a grid, about its own x centre (3D, forward)."""
+        _, cx = np.array(shape)[-2:] / 2
         matrix = np.array(
             [
                 [1, 0, 0, 0],
                 [0, 1, 0, 0],
-                [0, 0, -1, 2 * cx_end],
+                [0, 0, -1, 2 * cx],
                 [0, 0, 0, 1],
             ]
         )

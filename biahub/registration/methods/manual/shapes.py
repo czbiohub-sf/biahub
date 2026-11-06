@@ -63,7 +63,7 @@ class ShapesEstimator(EstimatorBase):
             (scale_z, scale_yx, scale_yx), ref_shape, ref_shape
         ) @ Transform.from_rotation_yx(90 * self.rotate90, mov_shape, ref_shape)
         if self.fliplr:  # the flip happens first
-            forward = forward @ Transform.from_flip_x(mov_shape, ref_shape)
+            forward = forward @ Transform.from_flip_x(mov_shape)
         return Transform(forward.matrix, transform_type=self.transform_type)
 
     def estimate(

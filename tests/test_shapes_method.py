@@ -38,7 +38,7 @@ def test_the_shapes_method_reads_only_the_shapes_and_the_voxel_sizes():
     forward = (
         Transform.from_scaling((0.5 / 0.6, 0.2 / 0.15, 0.2 / 0.15), ref_s, ref_s).matrix
         @ Transform.from_rotation_yx(-90, mov_s, ref_s).matrix
-        @ Transform.from_flip_x(mov_s, ref_s).matrix
+        @ Transform.from_flip_x(mov_s).matrix
     )  # flip first, then rotate, then rescale (moving -> reference)
     transform = estimator.estimate(mov, ref)
     np.testing.assert_allclose(transform.matrix, forward, atol=1e-12)
@@ -137,3 +137,19 @@ def test_shapes_reads_no_pixels_so_preprocess_blocks_are_refused():
         _settings(
             [{"shapes": {**shapes, "preprocess": [{"sobel": {}}]}}, {"phase_cross_corr": {}}]
         )
+
+
+def test_the_flip_happens_on_the_moving_grid_when_the_widths_differ():
+    # The flip comes first, on moving coordinates: it pivots on the moving grid's centre.
+    # Pivoting on the reference grid's sent moving x=0 to x=250 of a 200-wide grid.
+    from biahub.registration.methods.manual.shapes import ShapesEstimator
+
+    mov_shape, ref_shape = (5, 100, 100), (5, 100, 200)
+    flipped = ShapesEstimator((1, 1, 1), (1, 1, 1), rotate90=0, fliplr=True).transform_for(
+        mov_shape, ref_shape
+    )
+    points = np.array([[2.0, 50.0, 50.0], [2.0, 50.0, 0.0], [2.0, 50.0, 100.0]])
+    np.testing.assert_allclose(
+        flipped.apply_points(points),
+        [[2.0, 50.0, 100.0], [2.0, 50.0, 150.0], [2.0, 50.0, 50.0]],
+    )

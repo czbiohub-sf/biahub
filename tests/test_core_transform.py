@@ -171,8 +171,9 @@ def test_the_output_voxel_size_is_one_output_step_in_the_input_um():
 
 
 def test_scaling_rotation_and_flip_constructors_keep_the_centre_where_it_belongs():
-    # from_scaling / from_rotation_yx / from_flip_x (forward, start grid -> end grid): the
-    # start grid's yx centre lands on the end grid's yx centre; z is scaled about plane 0
+    # from_scaling / from_rotation_yx (forward, start grid -> end grid): the start grid's
+    # yx centre lands on the end grid's yx centre; z is scaled about plane 0. from_flip_x
+    # flips within one grid, about its own x centre
     start, end = (10, 40, 60), (20, 80, 100)
     centre = lambda shape: np.array([0.0, shape[1] / 2, shape[2] / 2])  # noqa: E731
     scaled = Transform.from_scaling((2.0, 0.5, 0.5), start, end)

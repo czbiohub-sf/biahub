@@ -111,7 +111,7 @@ def test_a_shapes_initial_transform_is_the_same_for_every_t_and_composes_flip_ro
     forward = (
         Transform.from_scaling((0.5 / 0.6, 0.2 / 0.15, 0.2 / 0.15), ref, ref).matrix
         @ Transform.from_rotation_yx(-90, mov, ref).matrix
-        @ Transform.from_flip_x(mov, ref).matrix
+        @ Transform.from_flip_x(mov).matrix
     )  # flip first, then rotate, then scale (moving -> reference)
     for t in (0, 7):
         np.testing.assert_allclose(policy.initial_for(t).matrix, forward, atol=1e-12)
